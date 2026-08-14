@@ -80,12 +80,20 @@
   .mapcell.c-amber{background:var(--amber-soft);}
   .mapcell.c-teal{background:var(--teal-soft);}
   .mapcell.c-coral{background:var(--coral-soft);}
+  .mapcell .cellNameRow{display:flex;align-items:center;gap:2px;padding-right:16px;}
   .mapcell .cellname{
     font-size:12.5px;color:var(--text);border:none;background:transparent;
-    padding:1px 2px;border-radius:2px;width:100%;
+    padding:1px 2px;border-radius:2px;width:100%;flex:1;min-width:0;cursor:pointer;
     font-family:var(--map-font-family);font-weight:var(--map-font-weight);
   }
+  .mapcell .cellname:read-only{cursor:pointer;}
+  .mapcell .cellname:not(:read-only){cursor:text;}
   .mapcell .cellname:focus{outline:1px solid var(--accent);background:#fff;}
+  .cellNameEditBtn{
+    flex-shrink:0;border:none;background:transparent;color:var(--text-faint);cursor:pointer;
+    font-size:10px;padding:2px 3px;border-radius:2px;line-height:1;
+  }
+  .cellNameEditBtn:hover{background:rgba(0,0,0,.06);color:var(--text-dim);}
   .mapcell .cellbody{flex:1;cursor:pointer;display:flex;flex-direction:column;gap:4px;min-height:0;border-radius:0;}
   .mapcell .cellbody:hover{background:rgba(0,0,0,.03);}
   .mapcell .itemtags{display:flex;flex-wrap:wrap;gap:3px;align-content:flex-start;}
@@ -164,6 +172,7 @@
   .badge.farm{background:var(--success-soft);color:var(--success);}
   .badge.key{background:#fde8e8;color:#c0392b;}
   .badge.typecode{background:var(--bg);color:var(--text-dim);border:1px solid var(--border-strong);font-family:var(--mono);}
+  .badge.note{background:#fff3cd;color:#8a6d1a;font-weight:800;cursor:default;}
   .badge.note{background:#fff3cd;color:#8a6d1a;font-weight:800;cursor:default;}
   .currentCard .ccScript{font-size:13px;color:var(--text-dim);white-space:pre-wrap;line-height:1.6;}
   .currentCard .ccEditBtn{
@@ -1057,7 +1066,13 @@ function renderMapScreen(main, crumb){
     var nameInput = document.createElement('input');
     nameInput.className='cellname'; nameInput.type='text';
     nameInput.value = regionName(topId);
-    nameInput.addEventListener('click', function(e){ e.stopPropagation(); });
+    nameInput.readOnly = true;
+    nameInput.title = '클릭하면 지역으로 들어가요 — 이름을 바꾸려면 옆의 ✎를 누르세요';
+    nameInput.addEventListener('click', function(e){
+      if(nameInput.readOnly){ go({view:'region', regionId:topId}); }
+    });
+    nameInput.addEventListener('blur', function(){ nameInput.readOnly = true; });
+    nameInput.addEventListener('keydown', function(e){ if(e.key==='Enter') nameInput.blur(); });
     nameInput.addEventListener('input', function(){
       var r = regionHeaderRow(topId);
       var oldName = r[C['지역명']];
@@ -1072,7 +1087,19 @@ function renderMapScreen(main, crumb){
       }
       markDirty();
     });
-    cell.appendChild(nameInput);
+    var nameEditBtn = document.createElement('button'); nameEditBtn.className='cellNameEditBtn'; nameEditBtn.textContent='✎';
+    nameEditBtn.title = '이름 수정';
+    nameEditBtn.addEventListener('click', function(e){
+      e.stopPropagation();
+      nameInput.readOnly = false;
+      nameInput.focus();
+      nameInput.select();
+    });
+
+    var nameRow = document.createElement('div'); nameRow.className='cellNameRow';
+    nameRow.appendChild(nameInput);
+    nameRow.appendChild(nameEditBtn);
+    cell.appendChild(nameRow);
 
     var body = document.createElement('div'); body.className='cellbody';
     // clicking the body navigates ONLY when the click lands on blank space (body itself or the spacer),
@@ -1444,6 +1471,11 @@ function renderClusterScreen(main, crumb){
     if(currentRow[C['파밍 아이템 ID']]){ var b2=document.createElement('span'); b2.className='badge farm'; b2.textContent='획득'; ccMeta.appendChild(b2); }
     if(currentRow[C['키아이템 필요 여부']]==='Y'||currentRow[C['키아이템 필요 여부']]==='y'){ var b3=document.createElement('span'); b3.className='badge key'; b3.textContent='열쇠 필요'; ccMeta.appendChild(b3); }
     var b4=document.createElement('span'); b4.className='badge typecode'; b4.textContent=currentRow[C['종류 코드']]||''; ccMeta.appendChild(b4);
+    if(currentRow[C['비고']] && currentRow[C['비고']].trim()){
+      var b5=document.createElement('span'); b5.className='badge note'; b5.textContent='!';
+      attachTooltip(b5, function(){ return '<div class="tt-row"><b>비고</b></div><div class="tt-row">'+escapeHtml(currentRow[C['비고']])+'</div>'; });
+      ccMeta.appendChild(b5);
+    }
     if(currentRow[C['비고']] && String(currentRow[C['비고']]).trim()){
       var b5=document.createElement('span'); b5.className='badge note'; b5.textContent='!'; b5.title='비고 있음';
       attachTooltip(b5, function(){ return '<div class="tt-row"><b>비고</b></div><div class="tt-row">'+escapeHtml(currentRow[C['비고']])+'</div>'; });
