@@ -80,7 +80,7 @@
   .mapcell.c-amber{background:var(--amber-soft);}
   .mapcell.c-teal{background:var(--teal-soft);}
   .mapcell.c-coral{background:var(--coral-soft);}
-  .mapcell .cellNameRow{display:flex;align-items:center;gap:2px;padding-right:16px;}
+  .mapcell .cellNameRow{display:flex;align-items:center;gap:2px;}
   .mapcell .cellname{
     font-size:12.5px;color:var(--text);border:none;background:transparent;
     padding:1px 2px;border-radius:2px;width:100%;flex:1;min-width:0;cursor:pointer;
@@ -113,8 +113,8 @@
   .sqbadge.dragging{opacity:.35;}
   .mapcell.dropTarget{outline:2px dashed var(--accent);outline-offset:2px;}
   .cellColorPicker{
-    position:absolute;top:6px;right:6px;width:16px;height:16px;border:1px solid rgba(0,0,0,.15);
-    border-radius:4px;padding:0;cursor:pointer;background:none;
+    position:absolute;bottom:4px;left:4px;width:14px;height:14px;border:1px solid rgba(0,0,0,.15);
+    border-radius:4px;padding:0;cursor:pointer;background:none;z-index:5;
   }
   .cellColorPicker::-webkit-color-swatch-wrapper{padding:0;}
   .cellColorPicker::-webkit-color-swatch{border:none;border-radius:3px;}
@@ -1068,9 +1068,6 @@ function renderMapScreen(main, crumb){
     nameInput.value = regionName(topId);
     nameInput.readOnly = true;
     nameInput.title = '클릭하면 지역으로 들어가요 — 이름을 바꾸려면 옆의 ✎를 누르세요';
-    nameInput.addEventListener('click', function(e){
-      if(nameInput.readOnly){ go({view:'region', regionId:topId}); }
-    });
     nameInput.addEventListener('blur', function(){ nameInput.readOnly = true; });
     nameInput.addEventListener('keydown', function(e){ if(e.key==='Enter') nameInput.blur(); });
     nameInput.addEventListener('input', function(){
@@ -1097,15 +1094,22 @@ function renderMapScreen(main, crumb){
     });
 
     var nameRow = document.createElement('div'); nameRow.className='cellNameRow';
+    // the WHOLE row responds to a click (not just the narrower input), so there's no dead zone
+    // next to the edit button; a click on the edit button itself never reaches here (stopPropagation above)
+    nameRow.addEventListener('click', function(){
+      if(nameInput.readOnly){ go({view:'region', regionId:topId}); }
+    });
     nameRow.appendChild(nameInput);
     nameRow.appendChild(nameEditBtn);
     cell.appendChild(nameRow);
 
     var body = document.createElement('div'); body.className='cellbody';
-    // clicking the body navigates ONLY when the click lands on blank space (body itself or the spacer),
-    // never when it lands on a tag/badge (those have their own drag behavior)
+    // clicking anywhere in the body navigates, EXCEPT when the click actually landed on a
+    // tag/badge (those have their own click-to-edit / drag behavior) - checking "not a tag"
+    // rather than "exactly body or spacer" avoids dead zones in the tagsWrap's own blank space
     body.addEventListener('click', function(e){
-      if(e.target===body || e.target.classList.contains('cellspacer')){
+      var onTag = e.target.closest && e.target.closest('.itemtag, .sqbadge');
+      if(!onTag){
         go({view:'region', regionId:topId});
       }
     });
