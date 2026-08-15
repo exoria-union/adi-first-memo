@@ -1421,6 +1421,7 @@ async function saveCurrentProjectToCloud(){
     cloudBaseData=JSON.parse(JSON.stringify(result.data.data));
     PROJECTS[PROJECT_ID]={id:PROJECT_ID,name:result.data.name,data:JSON.parse(JSON.stringify(DATA)),updatedAt:Date.now(),version:cloudVersion};
     localStorage.setItem(PROJECTS_KEY, JSON.stringify(PROJECTS));
+    publishProjectListUpdate('UPDATE',{id:PROJECT_ID,name:result.data.name,data:result.data.data,updated_at:result.data.updated_at,version:result.data.version});
     setCloudStatus('저장됨 · 실시간 연결');
   }catch(e){
     console.error(e);
@@ -1487,18 +1488,23 @@ titleInput.value = DATA.toolTitle || '빛의왕국 탐사맵 편집기';
 document.title = titleInput.value;
 var projectNameSaveTimer = null;
 async function persistProjectNameToCloud(){
-  if(!cloudReady || !cloudProjectId || !cloudUser || !supabase) return;
+  if(!cloudProjectId || !cloudUser || !supabase) return;
   var name = (DATA.toolTitle || '새 프로젝트').trim() || '새 프로젝트';
   try{
-    PROJECTS[PROJECT_ID] = PROJECTS[PROJECT_ID] || {id:PROJECT_ID};
+    PROJECTS[PROJECT_ID] = PROJECTS[PROJECT_ID] || {id:PROJECT_ID,data:DATA};
     PROJECTS[PROJECT_ID].name = name;
     PROJECTS[PROJECT_ID].updatedAt = Date.now();
-    localStorage.setItem(PROJECTS_KEY, JSON.stringify(PROJECTS));
+    try{ localStorage.setItem(PROJECTS_KEY, JSON.stringify(PROJECTS)); }catch(e){}
+    // Keep the project-index column authoritative even when Yjs is active.
     var res = await supabase.from('projects')
       .update({name:name,updated_at:new Date().toISOString()})
       .eq('id', cloudProjectId);
     if(res.error) throw res.error;
-  }catch(e){ console.error('프로젝트 이름 저장 실패', e); }
+    publishProjectListUpdate('UPDATE', {id:cloudProjectId,name:name,updated_at:new Date().toISOString()});
+  }catch(e){
+    console.error('프로젝트 이름 저장 실패', e);
+    setCloudStatus('프로젝트 이름 저장 재시도 필요');
+  }
 }
 titleInput.addEventListener('input', function(){
   DATA.toolTitle = titleInput.value;
@@ -3476,6 +3482,7 @@ async function createNewProject(){
       PROJECT_ID=newId; DATA=d; cloudBaseData=JSON.parse(JSON.stringify(d)); cloudProjectId=newId; cloudVersion=ins.data.version;
       PROJECTS[newId]={id:newId,name:d.toolTitle,data:JSON.parse(JSON.stringify(d)),updatedAt:Date.now()};
       localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS)); localStorage.setItem(ACTIVE_PROJECT_KEY,newId);
+      publishProjectListUpdate('INSERT',{id:newId,name:d.toolTitle,data:d,updated_at:new Date().toISOString(),version:ins.data.version,owner_id:cloudUser.id});
       rebuildProjectView();
       if(window.CollabEngine){ await startCollab(newId); } else { setCloudStatus('저장됨 · 실시간 연결'); }
       toast('새 프로젝트를 만들었습니다. 기존 프로젝트는 보존되었습니다.');
@@ -3759,19 +3766,54 @@ function unsubscribeCloud(){
   if(cloudChannel){ try{supabase.removeChannel(cloudChannel);}catch(e){} cloudChannel=null; }
   if(projectListChannel){ try{supabase.removeChannel(projectListChannel);}catch(e){} projectListChannel=null; }
 }
+async function publishProjectListUpdate(eventType, row){
+  if(!supabase || !cloudUser) return;
+  try{
+    if(!projectListChannel){
+      projectListChannel = supabase.channel('project-list-global');
+      await new Promise(function(resolve){
+        var finished=false;
+        var finish=function(){ if(finished) return; finished=true; resolve(); };
+        projectListChannel.subscribe(function(status){
+          if(status==='SUBSCRIBED' || status==='CHANNEL_ERROR' || status==='TIMED_OUT') finish();
+        });
+        setTimeout(finish,2500);
+      });
+    }
+    await projectListChannel.send({type:'broadcast',event:'project-index-update',payload:{eventType:eventType,row:row}});
+  }catch(e){ console.warn('프로젝트 목록 broadcast 실패', e); }
+}
 async function subscribeToProjectList(){
   if(!supabase || !cloudUser) return;
   if(projectListChannel){ try{supabase.removeChannel(projectListChannel);}catch(e){} projectListChannel=null; }
-  projectListChannel=supabase.channel('project-list-'+cloudUser.id)
-    .on('postgres_changes',{event:'*',schema:'public',table:'projects'},function(payload){
-      var row=payload.new || payload.old; if(!row || !row.id) return;
-      if(payload.eventType==='DELETE'){ delete PROJECTS[row.id]; }
-      else { PROJECTS[row.id]={id:row.id,name:row.name,data:row.data,updatedAt:row.updated_at?new Date(row.updated_at).getTime():Date.now(),version:row.version,owner_id:row.owner_id}; }
-      try{ localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS)); }catch(e){}
-      if(document.getElementById('projectModal').classList.contains('open')) openProjectList();
-    })
-    .subscribe();
+  var ch=supabase.channel('project-list-global');
+  projectListChannel=ch;
+  ch.on('broadcast',{event:'project-index-update'},function(message){
+    var payload=message && message.payload ? message.payload : {};
+    var row=payload.row; if(!row || !row.id) return;
+    if(payload.eventType==='DELETE'){ delete PROJECTS[row.id]; }
+    else {
+      var prev=PROJECTS[row.id]||{};
+      PROJECTS[row.id]={id:row.id,name:row.name!=null?row.name:(prev.name||'이름 없음'),data:row.data!==undefined?row.data:prev.data,updatedAt:row.updated_at?new Date(row.updated_at).getTime():Date.now(),version:row.version!=null?row.version:prev.version,owner_id:row.owner_id||prev.owner_id};
+    }
+    try{ localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS)); }catch(e){}
+    if(document.getElementById('projectModal').classList.contains('open')) openProjectList();
+  });
+  ch.on('postgres_changes',{event:'*',schema:'public',table:'projects'},function(payload){
+    var row=payload.new || payload.old; if(!row || !row.id) return;
+    if(payload.eventType==='DELETE'){ delete PROJECTS[row.id]; }
+    else { PROJECTS[row.id]={id:row.id,name:row.name,data:row.data,updatedAt:row.updated_at?new Date(row.updated_at).getTime():Date.now(),version:row.version,owner_id:row.owner_id}; }
+    try{ localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS)); }catch(e){}
+    if(document.getElementById('projectModal').classList.contains('open')) openProjectList();
+  });
+  await new Promise(function(resolve){
+    var done=false;
+    var finish=function(){ if(done) return; done=true; resolve(); };
+    ch.subscribe(function(status){ if(status==='SUBSCRIBED' || status==='CHANNEL_ERROR' || status==='TIMED_OUT') finish(); });
+    setTimeout(finish,2500);
+  });
 }
+
 async function waitForCollabEngine(timeoutMs){
   if(window.CollabEngine) return true;
   var start=Date.now();
