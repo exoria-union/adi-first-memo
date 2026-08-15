@@ -552,6 +552,7 @@ var cloudSaveTimer = null;
 var cloudVersion = 0;
 var cloudProjectId = null;
 var cloudIgnoreRealtimeUntil = 0;
+var cloudBaseData = null;       // 원본에서 선언 누락됐던 변수("use strict" ReferenceError 방지)
 var COLLAB = null;              // 활성 Yjs 협업 세션(null이면 기존 방식으로 폴백)
 var __collabPendingRender = false;
 var __collabPanelUnbinds = [];  // 열린 노드 패널의 협업 바인딩 해제 함수들
