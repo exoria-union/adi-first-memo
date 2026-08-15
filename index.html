@@ -25,6 +25,9 @@
     --map-font-weight: 700;
     --tag-font-family: var(--sans);
     --tag-font-weight: 400;
+    --node-font-family: var(--sans);
+    --node-font-weight: 600;
+    --node-font-size: 12px;
   }
   *{box-sizing:border-box;}
   html,body{height:100%;}
@@ -363,6 +366,8 @@
   .typeTag.warn{background:#fff3cd;color:#8a6d1a;}
   .typeTag.firstExplore{background:#eaefff;color:#3457d5;}
   .typeTag.race{background:#fbeae5;color:#c65b3f;}
+  .regionConditionTags{display:flex;flex-wrap:wrap;gap:3px;margin-top:3px;}
+  .regionConditionTags .typeTag{font-size:8.8px;padding:1px 6px;border-radius:999px;font-weight:700;}
   .requiredMark{color:#c0392b;font-weight:800;margin-left:2px;}
 
   .requiredMark{color:#c0392b;font-weight:800;margin-left:2px;}
@@ -380,7 +385,7 @@
   .canvasNode.orphanNode{border-color:#d99a1f;border-style:dashed;background:#fdf6e8;}
   .canvasNode.orphanNode .cnType{color:#a5730f;}
   .orphanSectionLabel{position:absolute;font-size:11px;font-weight:700;color:#a5730f;white-space:nowrap;}
-  .canvasNode .cnName{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:62px;}
+  .canvasNode .cnName{font-family:var(--node-font-family);font-weight:var(--node-font-weight);font-size:var(--node-font-size);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:62px;}
   .cnToolbar{position:absolute;top:4px;right:4px;display:flex;gap:2px;}
   .cnIconBtn{
     min-width:16px;height:16px;border:1px solid var(--border-strong);background:var(--surface);border-radius:2px;
@@ -461,7 +466,7 @@
   <div id="collabEditing"></div>
   <div class="spacer"></div>
   <div id="tagColorWrap">
-    <button class="ghost" id="btnTagColor">태그 색상 ▾</button>
+    <button class="ghost" id="btnTagColor" title="현재 프로젝트의 모든 협업자에게 공유됩니다">태그 색상 ▾</button>
     <div id="tagColorMenu">
       <div class="tcRow">서브퀘스트 <input type="color" id="tcSubquest"></div>
       <div class="tcRow">레시피 <input type="color" id="tcRecipe"></div>
@@ -475,7 +480,7 @@
     </div>
   </div>
   <div id="fontMenuWrap">
-    <button class="ghost" id="btnFontMenu">글꼴 ▾</button>
+    <button class="ghost" id="btnFontMenu" title="현재 프로젝트의 모든 협업자에게 공유됩니다">글꼴 ▾</button>
     <div id="fontMenu">
       <div class="fmSection">
         <div class="fmLabel">지도 지역명</div>
@@ -488,9 +493,13 @@
         <label class="fmBoldRow"><input type="checkbox" id="fmTagBold"> 굵게</label>
       </div>
       <div class="fmSection">
-        <div class="fmLabel">글꼴 파일 추가 (.woff/.woff2)</div>
-        <input type="text" id="fmNewFontName" placeholder="글꼴 이름 (예: 내글꼴)">
-        <input type="file" id="fmNewFontFile" accept=".woff,.woff2">
+        <div class="fmLabel">그래프 노드</div>
+        <select id="fmNodeFont"></select>
+        <label class="fmBoldRow"><input type="checkbox" id="fmNodeBold"> 굵게</label>
+        <label class="fmBoldRow" style="display:flex;flex-direction:column;align-items:stretch;gap:4px;cursor:default;">
+          <span style="font-size:11px;color:var(--text-faint);">노드 글자 크기 <b id="fmNodeSizeVal"></b></span>
+          <input id="fmNodeSize" type="range" min="10" max="18" step="0.5" value="12">
+        </label>
       </div>
     </div>
   </div>
@@ -556,6 +565,7 @@ var SUPABASE_CONFIG = {
 var supabase = null;
 var cloudUser = null;
 var cloudChannel = null;
+var projectListChannel = null;
 var cloudReady = false;
 var cloudSaving = false;
 var cloudSaveTimer = null;
@@ -630,23 +640,32 @@ function extractUserPrefs(source){
     tagColors: source.tagColors ? JSON.parse(JSON.stringify(source.tagColors)) : {},
     tagOpacity: source.tagOpacity != null ? source.tagOpacity : 90,
     fontSettings: source.fontSettings ? JSON.parse(JSON.stringify(source.fontSettings)) : null,
-    customFonts: source.customFonts ? JSON.parse(JSON.stringify(source.customFonts)) : {},
-    exportNames: source.exportNames ? JSON.parse(JSON.stringify(source.exportNames)) : {}
+    exportNames: source.exportNames ? JSON.parse(JSON.stringify(source.exportNames)) : {},
+    cellColors: source.cellColors ? JSON.parse(JSON.stringify(source.cellColors)) : {}
   };
 }
 if(!USER_PREFS){
-  USER_PREFS = extractUserPrefs(savedParsed) || {tagColors:{}, tagOpacity:90, customFonts:{}, exportNames:{}, fontSettings:null};
+  USER_PREFS = extractUserPrefs(savedParsed) || {tagColors:{}, tagOpacity:90, exportNames:{}, fontSettings:null, cellColors:{}};
   try{ localStorage.setItem(PREFS_KEY, JSON.stringify(USER_PREFS)); }catch(e){}
 }
 function applyUserPrefs(target){
   if(!target || !USER_PREFS) return;
-  if(USER_PREFS.tagColors) target.tagColors = JSON.parse(JSON.stringify(USER_PREFS.tagColors));
-  if(USER_PREFS.tagOpacity != null) target.tagOpacity = USER_PREFS.tagOpacity;
-  if(USER_PREFS.fontSettings) target.fontSettings = JSON.parse(JSON.stringify(USER_PREFS.fontSettings));
-  if(USER_PREFS.customFonts) target.customFonts = JSON.parse(JSON.stringify(USER_PREFS.customFonts));
-  if(USER_PREFS.exportNames) target.exportNames = JSON.parse(JSON.stringify(USER_PREFS.exportNames));
+  // Project-saved UI settings are authoritative for collaboration. Local prefs are only
+  // a migration/fallback source when the loaded project has no corresponding setting yet.
+  if(target.tagColors == null && USER_PREFS.tagColors) target.tagColors = JSON.parse(JSON.stringify(USER_PREFS.tagColors));
+  if(target.tagOpacity == null && USER_PREFS.tagOpacity != null) target.tagOpacity = USER_PREFS.tagOpacity;
+  if(target.fontSettings == null && USER_PREFS.fontSettings) target.fontSettings = JSON.parse(JSON.stringify(USER_PREFS.fontSettings));
+  if(target.exportNames == null && USER_PREFS.exportNames) target.exportNames = JSON.parse(JSON.stringify(USER_PREFS.exportNames));
+  if(target.cellColors == null && USER_PREFS.cellColors) target.cellColors = JSON.parse(JSON.stringify(USER_PREFS.cellColors));
 }
 applyUserPrefs(DATA);
+function cacheSharedUiPrefs(){
+  try{
+    USER_PREFS = extractUserPrefs(DATA) || USER_PREFS;
+    localStorage.setItem(PREFS_KEY, JSON.stringify(USER_PREFS));
+  }catch(e){}
+}
+
 
 var H1 = DATA.sheet1.headers;
 var C = {}; H1.forEach(function(h,i){ C[h]=i; });
@@ -869,7 +888,7 @@ function initTagColorMenu(){
     inp.addEventListener('input', function(){
       if(!DATA.tagColors) DATA.tagColors = {};
       DATA.tagColors[map[id]] = inp.value;
-      USER_PREFS.tagColors = DATA.tagColors;
+      cacheSharedUiPrefs();
       markDirty();
       render();
     });
@@ -881,7 +900,7 @@ function initTagColorMenu(){
   opacityVal.textContent = startPct + '%';
   opacityInput.addEventListener('input', function(){
     DATA.tagOpacity = parseInt(opacityInput.value,10);
-    USER_PREFS.tagOpacity = DATA.tagOpacity;
+    cacheSharedUiPrefs();
     opacityVal.textContent = opacityInput.value + '%';
     markDirty();
     render();
@@ -896,102 +915,68 @@ function initTagColorMenu(){
 
 /* ---------------- font customization ---------------- */
 var FONT_PRESETS = [
-  {id:'default', label:'기본', family:'-apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif'},
-  {id:'gothic', label:'고딕체', family:'"Malgun Gothic", "Apple SD Gothic Neo", sans-serif'},
-  {id:'serif', label:'명조체', family:'"Batang", "Nanum Myeongjo", Georgia, serif'},
-  {id:'rounded', label:'둥근고딕', family:'"Nanum Gothic", "Apple SD Gothic Neo", sans-serif'},
-  {id:'mono', label:'모노스페이스', family:'"SF Mono", Consolas, monospace'},
-  {id:'cursive', label:'필기체(장식용)', family:'cursive'}
+  {id:'default', label:'기본', family:'-apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif'}
 ];
 function ensureFontSettings(){
-  if(!DATA.fontSettings) DATA.fontSettings = {mapFont:'default', mapBold:true, tagFont:'default', tagBold:false};
-  if(!DATA.customFonts) DATA.customFonts = {};
+  if(!DATA.fontSettings) DATA.fontSettings = {mapFont:'default', mapBold:true, tagFont:'default', tagBold:false, nodeFont:'default', nodeBold:true, nodeSize:12};
+  if(DATA.fontSettings.nodeFont==null) DATA.fontSettings.nodeFont='default';
+  if(DATA.fontSettings.nodeBold==null) DATA.fontSettings.nodeBold=true;
+  if(DATA.fontSettings.nodeSize==null) DATA.fontSettings.nodeSize=12;
+  // Old custom-font data is intentionally discarded: only the built-in default font is supported now.
+  DATA.fontSettings.mapFont = 'default';
+  DATA.fontSettings.tagFont = 'default';
+  delete DATA.customFonts;
 }
-function allFontOptions(){
-  ensureFontSettings();
-  var opts = FONT_PRESETS.map(function(f){ return {id:f.id, label:f.label, family:f.family}; });
-  Object.keys(DATA.customFonts).forEach(function(name){
-    opts.push({id:'custom:'+name, label:name+' (업로드됨)', family:'"'+name+'", '+FONT_PRESETS[0].family});
-  });
-  return opts;
-}
-function fontFamilyFor(fontId){
-  var opt = allFontOptions().find(function(o){ return o.id===fontId; });
-  return opt ? opt.family : FONT_PRESETS[0].family;
-}
+function allFontOptions(){ return FONT_PRESETS.slice(); }
+function fontFamilyFor(){ return FONT_PRESETS[0].family; }
 function applyFontSettings(){
   ensureFontSettings();
   var root = document.documentElement.style;
-  root.setProperty('--map-font-family', fontFamilyFor(DATA.fontSettings.mapFont));
+  root.setProperty('--map-font-family', FONT_PRESETS[0].family);
   root.setProperty('--map-font-weight', DATA.fontSettings.mapBold ? '700' : '400');
-  root.setProperty('--tag-font-family', fontFamilyFor(DATA.fontSettings.tagFont));
+  root.setProperty('--tag-font-family', FONT_PRESETS[0].family);
   root.setProperty('--tag-font-weight', DATA.fontSettings.tagBold ? '700' : '400');
-  // register any uploaded fonts as @font-face rules
-  var styleEl = document.getElementById('customFontFaces');
-  if(!styleEl){
-    styleEl = document.createElement('style'); styleEl.id = 'customFontFaces';
-    document.head.appendChild(styleEl);
-  }
-  styleEl.textContent = Object.keys(DATA.customFonts).map(function(name){
-    return '@font-face{font-family:"'+name+'";src:url("'+DATA.customFonts[name]+'");}';
-  }).join('\n');
+  root.setProperty('--node-font-family', FONT_PRESETS[0].family);
+  root.setProperty('--node-font-weight', DATA.fontSettings.nodeBold ? '700' : '600');
+  root.setProperty('--node-font-size', (Number(DATA.fontSettings.nodeSize)||12) + 'px');
+  var styleEl=document.getElementById('customFontFaces');
+  if(styleEl) styleEl.textContent='';
 }
 function populateFontSelect(sel, currentId){
-  sel.innerHTML = '';
-  allFontOptions().forEach(function(o){
-    var opt = document.createElement('option'); opt.value = o.id; opt.textContent = o.label;
-    if(o.id === currentId) opt.selected = true;
-    sel.appendChild(opt);
-  });
+  sel.innerHTML='';
+  var opt=document.createElement('option'); opt.value='default'; opt.textContent='기본'; opt.selected=true;
+  sel.appendChild(opt);
 }
 function initFontMenu(){
   ensureFontSettings();
-  var menu = document.getElementById('fontMenu');
-  var mapSel = document.getElementById('fmMapFont');
-  var tagSel = document.getElementById('fmTagFont');
-  var mapBold = document.getElementById('fmMapBold');
-  var tagBold = document.getElementById('fmTagBold');
-
+  var menu=document.getElementById('fontMenu');
+  var mapSel=document.getElementById('fmMapFont');
+  var tagSel=document.getElementById('fmTagFont');
+  var nodeSel=document.getElementById('fmNodeFont');
+  var mapBold=document.getElementById('fmMapBold');
+  var tagBold=document.getElementById('fmTagBold');
+  var nodeBold=document.getElementById('fmNodeBold');
+  var nodeSize=document.getElementById('fmNodeSize');
+  var nodeSizeVal=document.getElementById('fmNodeSizeVal');
   function refreshSelects(){
-    populateFontSelect(mapSel, DATA.fontSettings.mapFont);
-    populateFontSelect(tagSel, DATA.fontSettings.tagFont);
-    mapBold.checked = !!DATA.fontSettings.mapBold;
-    tagBold.checked = !!DATA.fontSettings.tagBold;
+    populateFontSelect(mapSel,'default');
+    populateFontSelect(tagSel,'default');
+    populateFontSelect(nodeSel,'default');
+    mapBold.checked=!!DATA.fontSettings.mapBold;
+    tagBold.checked=!!DATA.fontSettings.tagBold;
+    nodeBold.checked=!!DATA.fontSettings.nodeBold;
+    nodeSize.value=String(Number(DATA.fontSettings.nodeSize)||12);
+    nodeSizeVal.textContent=nodeSize.value+'px';
   }
-  refreshSelects();
-  applyFontSettings();
-
-  mapSel.addEventListener('change', function(){ DATA.fontSettings.mapFont = mapSel.value; USER_PREFS.fontSettings = DATA.fontSettings; applyFontSettings(); markDirty(); });
-  tagSel.addEventListener('change', function(){ DATA.fontSettings.tagFont = tagSel.value; USER_PREFS.fontSettings = DATA.fontSettings; applyFontSettings(); markDirty(); });
-  mapBold.addEventListener('change', function(){ DATA.fontSettings.mapBold = mapBold.checked; USER_PREFS.fontSettings = DATA.fontSettings; applyFontSettings(); markDirty(); });
-  tagBold.addEventListener('change', function(){ DATA.fontSettings.tagBold = tagBold.checked; USER_PREFS.fontSettings = DATA.fontSettings; applyFontSettings(); markDirty(); });
-
-  document.getElementById('fmNewFontFile').addEventListener('change', function(){
-    var f = this.files[0];
-    if(!f) return;
-    var nameInput = document.getElementById('fmNewFontName');
-    var name = (nameInput.value || f.name.replace(/\.(woff2?|ttf|otf)$/i,'')).trim();
-    if(!name){ alert('글꼴 이름을 입력해주세요.'); return; }
-    var reader = new FileReader();
-    reader.onload = function(){
-      DATA.customFonts[name] = reader.result;
-      USER_PREFS.customFonts = DATA.customFonts;
-      applyFontSettings();
-      refreshSelects();
-      markDirty();
-      toast('"'+name+'" 글꼴을 추가했어요. 위 드롭다운에서 선택해보세요.');
-      nameInput.value = '';
-      document.getElementById('fmNewFontFile').value = '';
-    };
-    reader.readAsDataURL(f);
-  });
-
-  document.getElementById('btnFontMenu').addEventListener('click', function(e){
-    menu.classList.toggle('open');
-    e.stopPropagation();
-  });
-  document.addEventListener('click', function(){ menu.classList.remove('open'); });
-  menu.addEventListener('click', function(e){ e.stopPropagation(); });
+  refreshSelects(); applyFontSettings();
+  mapSel.disabled=true; tagSel.disabled=true; nodeSel.disabled=true;
+  mapBold.addEventListener('change',function(){ DATA.fontSettings.mapBold=mapBold.checked; cacheSharedUiPrefs(); applyFontSettings(); markDirty(); });
+  tagBold.addEventListener('change',function(){ DATA.fontSettings.tagBold=tagBold.checked; cacheSharedUiPrefs(); applyFontSettings(); markDirty(); });
+  nodeBold.addEventListener('change',function(){ DATA.fontSettings.nodeBold=nodeBold.checked; cacheSharedUiPrefs(); applyFontSettings(); markDirty(); });
+  nodeSize.addEventListener('input',function(){ DATA.fontSettings.nodeSize=Number(nodeSize.value)||12; nodeSizeVal.textContent=nodeSize.value+'px'; cacheSharedUiPrefs(); applyFontSettings(); markDirty(); });
+  document.getElementById('btnFontMenu').addEventListener('click',function(e){ menu.classList.toggle('open'); e.stopPropagation(); });
+  document.addEventListener('click',function(){ menu.classList.remove('open'); });
+  menu.addEventListener('click',function(e){ e.stopPropagation(); });
 }
 
 /* ---------------- HP/SP recovery stats for 완제 items ---------------- */
@@ -1321,8 +1306,7 @@ function persist(){
     localStorage.setItem(PROJECTS_KEY, JSON.stringify(PROJECTS));
     localStorage.setItem(ACTIVE_PROJECT_KEY, PROJECT_ID);
     localStorage.setItem(LS_KEY, JSON.stringify(DATA));
-    USER_PREFS = extractUserPrefs(DATA) || USER_PREFS;
-    localStorage.setItem(PREFS_KEY, JSON.stringify(USER_PREFS));
+    cacheSharedUiPrefs();
     saveState(false);
     scheduleCloudSave();
   }catch(e){ toast('로컬 저장 실패: ' + e.message); }
@@ -1443,9 +1427,30 @@ function toast(msg){
 var titleInput = document.getElementById('toolTitleInput');
 titleInput.value = DATA.toolTitle || '빛의왕국 탐사맵 편집기';
 document.title = titleInput.value;
+var projectNameSaveTimer = null;
+async function persistProjectNameToCloud(){
+  if(!cloudReady || !cloudProjectId || !cloudUser || !supabase) return;
+  var name = (DATA.toolTitle || '새 프로젝트').trim() || '새 프로젝트';
+  try{
+    PROJECTS[PROJECT_ID] = PROJECTS[PROJECT_ID] || {id:PROJECT_ID};
+    PROJECTS[PROJECT_ID].name = name;
+    PROJECTS[PROJECT_ID].updatedAt = Date.now();
+    localStorage.setItem(PROJECTS_KEY, JSON.stringify(PROJECTS));
+    var res = await supabase.from('projects')
+      .update({name:name,updated_at:new Date().toISOString()})
+      .eq('id', cloudProjectId);
+    if(res.error) throw res.error;
+  }catch(e){ console.error('프로젝트 이름 저장 실패', e); }
+}
 titleInput.addEventListener('input', function(){
   DATA.toolTitle = titleInput.value;
   document.title = titleInput.value || '빛의왕국 탐사맵 편집기';
+  PROJECTS[PROJECT_ID] = PROJECTS[PROJECT_ID] || {id:PROJECT_ID,data:DATA};
+  PROJECTS[PROJECT_ID].name = titleInput.value || '새 프로젝트';
+  PROJECTS[PROJECT_ID].updatedAt = Date.now();
+  try{ localStorage.setItem(PROJECTS_KEY, JSON.stringify(PROJECTS)); }catch(e){}
+  clearTimeout(projectNameSaveTimer);
+  projectNameSaveTimer = setTimeout(persistProjectNameToCloud, 350);
   markDirty();
 });
 
@@ -1591,6 +1596,7 @@ function renderMapScreen(main, crumb){
       if(!DATA.cellColors) DATA.cellColors = {};
       DATA.cellColors[topId] = colorPicker.value;
       cell.style.background = colorPicker.value;
+      cacheSharedUiPrefs();
       markDirty();
     });
     cell.appendChild(colorPicker);
@@ -1689,6 +1695,18 @@ function renderMapScreen(main, crumb){
       if(el) tagsWrap.appendChild(el);
     });
     body.appendChild(tagsWrap);
+
+    // Region header-level condition tags: surface the same node conditions on the map card.
+    var headerRowForTags = regionHeaderRow(topId);
+    var regionTags = typeTagsForRow(headerRowForTags);
+    if(regionTags.length){
+      var regionTagWrap=document.createElement('div'); regionTagWrap.className='regionConditionTags';
+      regionTags.forEach(function(t){
+        var rt=document.createElement('span'); rt.className='typeTag '+t.cls; rt.textContent=t.text; if(t.title) rt.title=t.title;
+        regionTagWrap.appendChild(rt);
+      });
+      body.appendChild(regionTagWrap);
+    }
 
     var spacer = document.createElement('div'); spacer.className='cellspacer';
     body.appendChild(spacer);
@@ -2669,16 +2687,27 @@ function is04IGGI(raw){ var a=typeCodesArray(raw); return a.indexOf('INCUNTR_04_
 function is04II(raw){ return typeCodesArray(raw).indexOf('INCUNTR_04_II')!==-1; }
 function isFirstExploration(row){ return String(row[C['최초 탐사 여부']]||'').trim().toUpperCase()==='Y'; }
 function raceCode(row){ return String(row[C['종족 전용']]||'').trim(); }
+function itemExistsById(id){
+  var v=String(id||'').trim(); if(!v) return false;
+  var rows=(DATA.items.rows||[]).concat(DATA.keyItems.rows||[]);
+  return rows.some(function(r){ return String(r[0]||'').trim()===v; });
+}
 function nodeValidation(row){
   var code=String(row[C['종류 코드']]||''), missing=[];
   if(isDiceType(code)&&!String(row[C['주사위 목표치']]||'').trim())missing.push('주사위 목표치');
   if(is04IGGI(code)){
-    if(!String(row[C['지역거래 시, 교단원이 낼 아이템ID']]||'').trim())missing.push('교단원이 낼 아이템');
+    var tradeItem=String(row[C['지역거래 시, 교단원이 낼 아이템ID']]||'').trim();
+    if(!tradeItem) missing.push('교단원이 낼 아이템');
+    else if(!itemExistsById(tradeItem)) missing.push('존재하지 않는 교단원 거래 아이템');
     if(!String(row[C['지역거래 시, 교단원이 낼 골드 상한가']]||'').trim())missing.push('교단원이 낼 골드 상한가');
   }
   if(is04II(code)){
-    if(!String(row[C['파밍 아이템 ID']]||'').trim())missing.push('파밍 아이템');
-    if(!String(row[C['지역거래 시, 교단원이 낼 아이템ID']]||'').trim())missing.push('교단원이 낼 아이템');
+    var farmItem=String(row[C['파밍 아이템 ID']]||'').trim();
+    if(!farmItem) missing.push('파밍 아이템');
+    else if(!itemExistsById(farmItem)) missing.push('존재하지 않는 파밍 아이템');
+    var tradeItem2=String(row[C['지역거래 시, 교단원이 낼 아이템ID']]||'').trim();
+    if(!tradeItem2) missing.push('교단원이 낼 아이템');
+    else if(!itemExistsById(tradeItem2)) missing.push('존재하지 않는 교단원 거래 아이템');
   }
   if(isFirstExploration(row)&&!String(row[C['최초 탐사가 아닐 시 실패 스크립트']]||'').trim())missing.push('최초 탐사가 아닐 시 실패 스크립트');
   if(raceCode(row)&&!String(row[C['종족이 아닐 때 스크립트']]||'').trim())missing.push('종족이 아닐 때 스크립트');
@@ -2973,7 +3002,10 @@ function renderItemsScreen(main, crumb){
   itemExportBtn.addEventListener('click', function(){ exportItemsXlsx(); });
   var itemImportBtn = document.createElement('button'); itemImportBtn.className='ghost'; itemImportBtn.textContent='아이템 XLSX 불러오기';
   itemImportBtn.addEventListener('click', function(){ openSingleXlsxImport('itemsKey'); });
-  toolbar.appendChild(itemExportBtn); toolbar.appendChild(itemImportBtn);
+  var imageBulkBtn = document.createElement('button'); imageBulkBtn.className='ghost'; imageBulkBtn.textContent='ID 이미지 일괄 업로드';
+  imageBulkBtn.title='파일명을 아이템 ID와 같게 지정하세요. 예: 2016.png';
+  imageBulkBtn.addEventListener('click', function(){ openBulkItemImageImport(); });
+  toolbar.appendChild(itemExportBtn); toolbar.appendChild(itemImportBtn); toolbar.appendChild(imageBulkBtn);
   var addBtn = document.createElement('button'); addBtn.className='primary'; addBtn.textContent='+ 새 아이템';
   addBtn.addEventListener('click', function(){ addNewItem(false); });
   var addKeyBtn = document.createElement('button'); addKeyBtn.textContent='+ 새 키아이템';
@@ -3051,6 +3083,45 @@ function renderItemsScreen(main, crumb){
     wrap.appendChild(grid);
   }
   main.appendChild(wrap);
+}
+
+function openBulkItemImageImport(){
+  var input=document.createElement('input');
+  input.type='file'; input.accept='image/*'; input.multiple=true; input.style.display='none';
+  document.body.appendChild(input);
+  input.addEventListener('change',function(){
+    var files=Array.prototype.slice.call(input.files||[]); input.remove();
+    if(!files.length) return;
+    importBulkItemImages(files);
+  });
+  input.click();
+}
+function importBulkItemImages(files){
+  if(!DATA.itemImages) DATA.itemImages={};
+  var idTargets={};
+  DATA.items.rows.concat(DATA.keyItems.rows).forEach(function(r){
+    var id=String(r[0]);
+    if(!idTargets[id]) idTargets[id]=[];
+    idTargets[id].push(r);
+  });
+  var matched=0, skipped=0, overwritten=0, pending=files.length;
+  files.forEach(function(file){
+    var stem=String(file.name||'').replace(/\\.[^.]+$/,'').trim();
+    if(!stem || !idTargets[stem]){ skipped++; pending--; if(pending===0) finish(); return; }
+    var reader=new FileReader();
+    reader.onload=function(){
+      var existed=Object.prototype.hasOwnProperty.call(DATA.itemImages,stem);
+      DATA.itemImages[stem]=reader.result;
+      if(existed) overwritten++; else matched++;
+      pending--; if(pending===0) finish();
+    };
+    reader.onerror=function(){ skipped++; pending--; if(pending===0) finish(); };
+    reader.readAsDataURL(file);
+  });
+  function finish(){
+    if(matched||overwritten){ markDirty(); render(); }
+    toast('이미지 업로드 완료 · 신규 '+matched+'장 · 교체 '+overwritten+'장 · 매칭 실패 '+skipped+'장');
+  }
 }
 
 function renderItemDetail(main, crumb){
@@ -3297,8 +3368,9 @@ function refreshFontMenuValues(){
 }
 
 /* ---------------- project management ---------------- */
-function persistProjectNow(){
-  PROJECTS[PROJECT_ID] = {id:PROJECT_ID,name:DATA.toolTitle||'새 프로젝트',data:JSON.parse(JSON.stringify(DATA)),updatedAt:Date.now()};
+function persistProjectNow(explicitName){
+  var currentName = (explicitName!=null ? explicitName : ((PROJECTS[PROJECT_ID]&&PROJECTS[PROJECT_ID].name) || DATA.toolTitle || '새 프로젝트'));
+  PROJECTS[PROJECT_ID] = {id:PROJECT_ID,name:currentName,data:JSON.parse(JSON.stringify(DATA)),updatedAt:Date.now()};
   localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS));
   localStorage.setItem(ACTIVE_PROJECT_KEY,PROJECT_ID);
 }
@@ -3307,10 +3379,27 @@ function makeBlankProject(){
   var d={sheet1:blankTable(RAW.sheet1),items:blankTable(RAW.items),keyItems:blankTable(RAW.keyItems),subquests:blankTable(RAW.subquests),regionList:blankTable(RAW.regionList),gridPositions:{},cellColors:{},nodeCanvasPos:{},itemImages:{},regionsTree:{},toolTitle:'새 프로젝트',__buildStamp:RAW.__buildStamp};
   applyUserPrefs(d); return d;
 }
-function rebuildProjectView(){
+function rebuildProjectView(opts){
+  opts = opts || {};
+  var previousNav = nav ? JSON.parse(JSON.stringify(nav)) : null;
   H1=DATA.sheet1.headers; C={}; H1.forEach(function(h,i){C[h]=i;});
   rebuildRegionsTreeFromSheet1(); rebuildIndexes(); rebuildItemIndex(); rebuildSqIndex(); rebuildAllCrossRefs();
-  focusPath={}; nav={main:'map',view:'map',regionId:null,clusterIdx:null,itemCat:null,itemId:null,sqId:null,itemView:'grid',sqView:'list'};
+  var preserveView = opts.preserveView !== false && previousNav && previousNav.main==='map';
+  if(preserveView && previousNav.view==='canvas'){
+    var pt=DATA.regionsTree && previousNav.regionId ? DATA.regionsTree[previousNav.regionId] : null;
+    if(!pt || !pt.clusters || !pt.clusters[previousNav.clusterIdx]) preserveView=false;
+  } else if(preserveView && previousNav.view==='cluster'){
+    var pt2=DATA.regionsTree && previousNav.regionId ? DATA.regionsTree[previousNav.regionId] : null;
+    if(!pt2 || !pt2.clusters || !pt2.clusters[previousNav.clusterIdx]) preserveView=false;
+  } else if(preserveView && previousNav.view==='region'){
+    if(!DATA.regionsTree || !DATA.regionsTree[previousNav.regionId]) preserveView=false;
+  }
+  if(!preserveView){
+    nav={main:'map',view:'map',regionId:null,clusterIdx:null,itemCat:null,itemId:null,sqId:null,itemView:'grid',sqView:'list'};
+    focusPath={};
+  }else{
+    nav=previousNav;
+  }
   titleInput.value=DATA.toolTitle||'새 프로젝트'; document.title=titleInput.value;
   applyFontSettings(); refreshFontMenuValues(); initTagColorMenuValues(); initExportSettingsValues(); render();
 }
@@ -3365,12 +3454,23 @@ async function switchProject(targetId){
     if(cloudReady){
       var res=await supabase.from('projects').select('id,name,data,version,updated_at').eq('id',targetId).single();
       if(res.error) throw res.error;
-      DATA=JSON.parse(JSON.stringify(res.data.data)); cloudBaseData=JSON.parse(JSON.stringify(DATA)); PROJECT_ID=res.data.id; cloudProjectId=res.data.id; cloudVersion=res.data.version;
-      PROJECTS[targetId]={id:PROJECT_ID,name:res.data.name,data:JSON.parse(JSON.stringify(DATA)),updatedAt:new Date(res.data.updated_at).getTime(),version:res.data.version};
+      DATA=JSON.parse(JSON.stringify(res.data.data));
+      if(res.data.name) DATA.toolTitle=res.data.name;
+      cloudBaseData=JSON.parse(JSON.stringify(DATA)); PROJECT_ID=res.data.id; cloudProjectId=res.data.id; cloudVersion=res.data.version;
+      PROJECTS[targetId]={id:PROJECT_ID,name:res.data.name||DATA.toolTitle,data:JSON.parse(JSON.stringify(DATA)),updatedAt:new Date(res.data.updated_at).getTime(),version:res.data.version};
     }else{
-      persistProjectNow(); DATA=JSON.parse(JSON.stringify(PROJECTS[targetId].data)); PROJECT_ID=targetId;
+      persistProjectNow();
+      DATA=JSON.parse(JSON.stringify(PROJECTS[targetId].data));
+      PROJECT_ID=targetId;
     }
-    ACTIVE_PROJECT_ID=targetId; localStorage.setItem(ACTIVE_PROJECT_KEY,targetId); persistProjectNow(); rebuildProjectView(); document.getElementById('projectModal').classList.remove('open'); saveState(false); await subscribeToProject(targetId); toast('프로젝트를 전환했습니다.');
+    ACTIVE_PROJECT_ID=targetId; localStorage.setItem(ACTIVE_PROJECT_KEY,targetId);
+    var preservedName=(PROJECTS[targetId]&&PROJECTS[targetId].name)||DATA.toolTitle||'새 프로젝트';
+    persistProjectNow(preservedName);
+    rebuildProjectView({preserveView:false});
+    document.getElementById('projectModal').classList.remove('open'); saveState(false);
+    await subscribeToProject(targetId);
+    await subscribeToProjectList();
+    toast('프로젝트를 전환했습니다.');
   }catch(e){ console.error(e); toast('프로젝트 전환 실패: '+(e.message||e)); }
 }
 document.getElementById('btnNewProject').addEventListener('click',function(){ if(confirm('현재 프로젝트는 저장하고 새 프로젝트를 추가합니다. 기존 프로젝트는 삭제되지 않습니다. 계속할까요?')) createNewProject(); });
@@ -3418,18 +3518,22 @@ function isTextTarget(t){
 }
 // 원격 변경 -> 앱 DATA 반영. 입력 중이면 커서 보호를 위해 전체 재렌더를 보류.
 function applyRemoteData(incoming){
-  if(!incoming) return;
+  if(!incoming || !incoming.sheet1 || !incoming.sheet1.headers) return;
   var editing = isTextTarget(document.activeElement);
-  DATA = incoming;
+  DATA = JSON.parse(JSON.stringify(incoming));
   applyUserPrefs(DATA);
   H1 = DATA.sheet1.headers; C={}; H1.forEach(function(h,i){ C[h]=i; });
   try{
-    PROJECTS[PROJECT_ID] = {id:PROJECT_ID, name:DATA.toolTitle||'프로젝트', data:JSON.parse(JSON.stringify(DATA)), updatedAt:Date.now()};
+    rebuildRegionsTreeFromSheet1(); rebuildIndexes(); rebuildItemIndex(); rebuildSqIndex(); rebuildAllCrossRefs();
+    PROJECTS[PROJECT_ID] = PROJECTS[PROJECT_ID] || {id:PROJECT_ID};
+    PROJECTS[PROJECT_ID].name = DATA.toolTitle||PROJECTS[PROJECT_ID].name||'프로젝트';
+    PROJECTS[PROJECT_ID].data = JSON.parse(JSON.stringify(DATA));
+    PROJECTS[PROJECT_ID].updatedAt = Date.now();
     localStorage.setItem(PROJECTS_KEY, JSON.stringify(PROJECTS));
     localStorage.setItem(LS_KEY, JSON.stringify(DATA));
-  }catch(e){}
+  }catch(e){ console.error('원격 데이터 인덱스 재구성 실패', e); }
   if(editing){ __collabPendingRender = true; return; }
-  collabRefreshViews();
+  rebuildProjectView({preserveView:true});
 }
 function renderCollabPresence(states, selfId){
   var box = document.getElementById('collabPresence');
@@ -3574,21 +3678,49 @@ async function onCloudSignedIn(user){
     var cloud=await supabase.from('projects').select('id,name,data,version,updated_at').eq('id',target).single();
     if(cloud.error) throw cloud.error;
     DATA=JSON.parse(JSON.stringify(cloud.data.data));
+    if(cloud.data.name) DATA.toolTitle=cloud.data.name;
     cloudBaseData=JSON.parse(JSON.stringify(DATA));
     PROJECT_ID=cloud.data.id; cloudProjectId=cloud.data.id; cloudVersion=cloud.data.version; ACTIVE_PROJECT_ID=PROJECT_ID;
     PROJECTS[PROJECT_ID]={id:PROJECT_ID,name:cloud.data.name,data:JSON.parse(JSON.stringify(DATA)),updatedAt:new Date(cloud.data.updated_at).getTime(),version:cloud.data.version};
     localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS)); localStorage.setItem(ACTIVE_PROJECT_KEY,PROJECT_ID);
-    applyUserPrefs(DATA); H1=DATA.sheet1.headers; C={}; H1.forEach(function(h,i){C[h]=i;}); rebuildProjectView();
-    await subscribeToProject(PROJECT_ID); cloudReady=true; setCloudStatus('저장됨 · 실시간 연결');
+    applyUserPrefs(DATA); H1=DATA.sheet1.headers; C={}; H1.forEach(function(h,i){C[h]=i;}); rebuildProjectView({preserveView:true});
+    await subscribeToProject(PROJECT_ID);
+    await subscribeToProjectList();
+    cloudReady=true; setCloudStatus('저장됨 · 실시간 연결');
   }catch(e){
     console.error(e);
     cloudUser=null; cloudReady=false; document.getElementById('authOverlay').style.display='flex';
     document.getElementById('authMsg').textContent='클라우드 초기화 실패: '+(e.message||e); setCloudStatus('연결 실패');
   }
 }
-function unsubscribeCloud(){ if(cloudChannel){ try{supabase.removeChannel(cloudChannel);}catch(e){} cloudChannel=null; } }
+function unsubscribeCloud(){
+  if(cloudChannel){ try{supabase.removeChannel(cloudChannel);}catch(e){} cloudChannel=null; }
+  if(projectListChannel){ try{supabase.removeChannel(projectListChannel);}catch(e){} projectListChannel=null; }
+}
+async function subscribeToProjectList(){
+  if(!supabase || !cloudUser) return;
+  if(projectListChannel){ try{supabase.removeChannel(projectListChannel);}catch(e){} projectListChannel=null; }
+  projectListChannel=supabase.channel('project-list-'+cloudUser.id)
+    .on('postgres_changes',{event:'*',schema:'public',table:'projects'},function(payload){
+      var row=payload.new || payload.old; if(!row || !row.id) return;
+      if(payload.eventType==='DELETE'){ delete PROJECTS[row.id]; }
+      else { PROJECTS[row.id]={id:row.id,name:row.name,data:row.data,updatedAt:row.updated_at?new Date(row.updated_at).getTime():Date.now(),version:row.version,owner_id:row.owner_id}; }
+      try{ localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS)); }catch(e){}
+      if(document.getElementById('projectModal').classList.contains('open')) openProjectList();
+    })
+    .subscribe();
+}
+async function waitForCollabEngine(timeoutMs){
+  if(window.CollabEngine) return true;
+  var start=Date.now();
+  while(Date.now()-start < (timeoutMs||5000)){
+    await new Promise(function(resolve){ setTimeout(resolve,80); });
+    if(window.CollabEngine) return true;
+  }
+  return false;
+}
 async function subscribeToProject(projectId){
-  if(window.CollabEngine){ return startCollab(projectId); } // Yjs 협업 경로
+  if(await waitForCollabEngine(5000)){ return startCollab(projectId); } // Yjs 협업 경로
   unsubscribeCloud(); if(!supabase) return;
   cloudChannel=supabase.channel('project-'+projectId)
     .on('postgres_changes',{event:'UPDATE',schema:'public',table:'projects',filter:'id=eq.'+projectId},async function(payload){
@@ -3617,7 +3749,7 @@ async function reloadCurrentProjectFromCloud(){
   if(!cloudProjectId) return;
   var res=await supabase.from('projects').select('id,name,data,version,updated_at').eq('id',cloudProjectId).single();
   if(res.error) throw res.error;
-  DATA=JSON.parse(JSON.stringify(res.data.data)); cloudBaseData=JSON.parse(JSON.stringify(DATA)); cloudVersion=res.data.version; applyUserPrefs(DATA); rebuildProjectView(); saveState(false);
+  DATA=JSON.parse(JSON.stringify(res.data.data)); applyUserPrefs(DATA); applyFontSettings(); initTagColorMenuValues(); initExportSettingsValues(); cloudBaseData=JSON.parse(JSON.stringify(DATA)); cloudVersion=res.data.version; applyUserPrefs(DATA); rebuildProjectView(); saveState(false);
 }
 
 /* =========================================================
@@ -3733,7 +3865,7 @@ function initExportSettingsMenu(){
     inp.addEventListener('input', function(){
       if(!DATA.exportNames) DATA.exportNames = {};
       DATA.exportNames[map[id]] = inp.value;
-      USER_PREFS.exportNames = DATA.exportNames;
+      cacheSharedUiPrefs();
       markDirty();
     });
   });
