@@ -2883,6 +2883,9 @@ var FIELD_HINTS = {
   '종족이 아닐 때 스크립트': '해당 종족이 아닐 때 보여줄 글 · 길이 제한 없음 (race_fail_cn)',
   '비고': '운영진용 메모 · 게임에는 안 보임 (area_comment)',
   '개방 조건': '숫자(정수)만 · 개방에 필요한 조건값 · 예: 3 (open_target · INT)',
+  '최초 유일 지급 여부': '최초 탐사 1인에게만 유일 아이템을 줄지 (first_drop_yn)',
+  '유일 아이템 소진 스크립트': '이미 최초 1인이 유일 아이템을 가져간 뒤, 후발 주자가 볼 글 (drop_fail_cn)',
+  '갈림길 그룹': '배타적 갈림길 그룹 키 · 같은 값끼리 회차당 택1 · 최대 64자 · 비우면 미적용 (branch_group)',
   '본문 스크립트': '이 지역의 스크립트 · 길이 제한 없음 · ⚠ 이모지 등 4바이트 문자는 DB(utf8)에 저장되지 않아요 (area_cn)',
   '성공 스크립트': '조사·전투 성공 시 스크립트 (succ_cn)',
   '실패 스크립트': '조사·전투 실패 시 스크립트 (fail_cn)'
@@ -3101,6 +3104,7 @@ function scriptFieldEditor(label, topId, row, colName){
 function renderNodePanel(topId, rowId){
   var panel = document.getElementById('nodePanel');
   panel.innerHTML='';
+  ensureBotAreaColumns();
   collabClearPanelBindings(); __collabPanel = {topId:topId, rowId:rowId};
   var idx = rowById[rowId];
   var r = DATA.sheet1.rows[idx];
@@ -3166,6 +3170,12 @@ function renderNodePanel(topId, rowId){
   keyRow.appendChild(fieldInput('키아이템 ID', r[C['키아이템 ID']], function(v){ r[C['키아이템 ID']]=v; }));
   body.appendChild(keyRow);
   body.appendChild(fieldInput('개방 조건', r[C['개방 조건']], function(v){ r[C['개방 조건']]=v; }));
+
+  var uniqueRow = document.createElement('div'); uniqueRow.className='fieldRow';
+  uniqueRow.appendChild(ynSelectField('최초 유일 지급 여부', r[C['최초 유일 지급 여부']], function(v){ r[C['최초 유일 지급 여부']]=v; refreshNodeEditorTags(r); }, 'N — 일반 지급', 'Y — 최초 1인만 지급'));
+  uniqueRow.appendChild(fieldInput('갈림길 그룹', r[C['갈림길 그룹']], function(v){ r[C['갈림길 그룹']]=v; }));
+  body.appendChild(uniqueRow);
+  body.appendChild(fieldTextarea('유일 아이템 소진 스크립트'+(String(r[C['최초 유일 지급 여부']]||'').trim().toUpperCase()==='Y'?' *':''), r[C['유일 아이템 소진 스크립트']], function(v){ r[C['유일 아이템 소진 스크립트']]=v; }, 3));
 
   var bigoField = fieldTextarea('비고', r[C['비고']], function(v){ r[C['비고']]=v; }, 2);
   body.appendChild(bigoField);
@@ -3629,8 +3639,18 @@ function makeBlankProject(){
   var d={sheet1:blankTable(RAW.sheet1),items:blankTable(RAW.items),keyItems:blankTable(RAW.keyItems),subquests:blankTable(RAW.subquests),regionList:blankTable(RAW.regionList),gridPositions:{},cellColors:{},nodeCanvasPos:{},itemImages:{},regionsTree:{},toolTitle:'새 프로젝트',__buildStamp:RAW.__buildStamp};
   applyUserPrefs(d); return d;
 }
+// bot_area 설계 컬럼(사용자 선택분)을 시트에 보강. 없을 때만 헤더 추가하고 C를 재구성한다.
+// 행은 미리 채우지 않고 편집 시 자동 확장(sparse) — 기존 프로젝트에 안전하게 적용된다.
+function ensureBotAreaColumns(){
+  var need=['최초 유일 지급 여부','유일 아이템 소진 스크립트','갈림길 그룹'];
+  if(!DATA||!DATA.sheet1||!DATA.sheet1.headers) return;
+  var h=DATA.sheet1.headers, added=false;
+  need.forEach(function(n){ if(h.indexOf(n)===-1){ h.push(n); added=true; } });
+  if(added){ H1=h; C={}; h.forEach(function(x,i){C[x]=i;}); }
+}
 function rebuildProjectView(opts){
   ensureGraphDataShape();
+  ensureBotAreaColumns();
   opts = opts || {};
   var previousNav = nav ? JSON.parse(JSON.stringify(nav)) : null;
   H1=DATA.sheet1.headers; C={}; H1.forEach(function(h,i){C[h]=i;});
@@ -4367,7 +4387,7 @@ function sqlEscape(s){
 }
 // utf8(=utf8mb3, 3바이트) 테이블은 4바이트 문자(이모지 등)를 저장하면 오류가 난다
 function sqlHasAstral(s){ return /[\u{10000}-\u{10FFFF}]/u.test(String(s)); }
-var BOT_AREA_COLS = ['up_area_id','start_point','parent_area_id','area_id','area_name','adjacent_id','incounter_cd','area_cn','target_roll','succ_cn','fail_cn','open_race','race_fail_cn','key_yn','key_id','item_id','item_drop','gold_drop','area_exp','deal_item_id','deal_gold','first_check_yn','check_fail_cn','open_target','area_comment'];
+var BOT_AREA_COLS = ['up_area_id','start_point','parent_area_id','area_id','area_name','adjacent_id','incounter_cd','area_cn','target_roll','succ_cn','fail_cn','open_race','race_fail_cn','key_yn','key_id','item_id','item_drop','gold_drop','area_exp','deal_item_id','deal_gold','first_check_yn','check_fail_cn','open_target','area_comment','first_drop_yn','drop_fail_cn','branch_group'];
 
 function sqlDeriveUpAreaId(){
   var H=DATA.sheet1.headers, ai=H.indexOf('지역ID'), ids=[];
@@ -4389,7 +4409,7 @@ function buildBotAreaSql(opts){
   var H=DATA.sheet1.headers, rows=DATA.sheet1.rows;
   var idx={}; H.forEach(function(h,i){ idx[h]=i; });
   function col(row,name){ var i=idx[name]; return (i==null)?null:row[i]; }
-  var LIMIT={parent_area_id:100,area_id:100,area_name:100,adjacent_id:100,key_id:100,item_id:100,deal_item_id:100,incounter_cd:35,open_race:5,item_drop:10};
+  var LIMIT={parent_area_id:100,area_id:100,area_name:100,adjacent_id:100,key_id:100,item_id:100,deal_item_id:100,incounter_cd:35,open_race:5,item_drop:10,branch_group:64};
   var errors=[],warnings=[],valueRows=[],seen={},skipped=0,moveSkipped=0;
   var upAreaId=(opts.upAreaId||'').trim(), startId=(opts.startPoint||'').trim();
 
@@ -4439,6 +4459,9 @@ function buildBotAreaSql(opts){
     pTxt('check_fail_cn','최초 탐사가 아닐 시 실패 스크립트');
     pInt('open_target','개방 조건');
     pTxt('area_comment','비고');
+    pYN('first_drop_yn','최초 유일 지급 여부');
+    pTxt('drop_fail_cn','유일 아이템 소진 스크립트');
+    pStr('branch_group','갈림길 그룹');
 
     if(e.length){ errors.push(label+': '+e.join(', ')); continue; }
     valueRows.push(vals);
@@ -4464,6 +4487,7 @@ function buildBotAreaSql(opts){
   var btn=document.getElementById('btnExportSql');
   if(btn) btn.addEventListener('click', function(){
     if(!DATA||!DATA.sheet1){ toast('지역 데이터가 없습니다.'); return; }
+    ensureBotAreaColumns();
     var up=document.getElementById('sqlUpAreaId'); if(!up.value) up.value=sqlDeriveUpAreaId();
     var st=document.getElementById('sqlStartPoint'); if(!st.value) st.value=sqlSuggestStart();
     document.getElementById('sqlReport').innerHTML='';
