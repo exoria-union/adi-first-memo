@@ -1356,7 +1356,12 @@ var saveTimer=null;
 function markDirty(){
   saveState(true);
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(persist, 700);
+  saveTimer = setTimeout(function(){
+    persist();
+    // Project-list metadata is independent from Yjs body persistence.
+    // Update it from the common dirty path so graph/UI edits also refresh updated_at.
+    try{ scheduleProjectMetaSave(); }catch(e){ console.error('project metadata schedule failed', e); }
+  }, 700);
 }
 function persist(){
   try{
@@ -1367,13 +1372,26 @@ function persist(){
     cacheSharedUiPrefs();
     saveState(false);
     scheduleCloudSave();
+    try{ scheduleProjectMetaSave(); }catch(e){ console.error('project metadata schedule failed', e); }
   }catch(e){ toast('로컬 저장 실패: ' + e.message); }
 }
 function scheduleCloudSave(){
-  if(COLLAB){ try{ COLLAB.push(DATA); }catch(e){ console.error(e); } return; }
+  // CRDT/Yjs owns the project body, but project-list metadata (name/updated_at)
+  // still lives in the Supabase projects row and must be updated separately.
+  if(COLLAB){
+    try{ COLLAB.push(DATA); }catch(e){ console.error(e); }
+    scheduleProjectMetaSave();
+    return;
+  }
   if(!cloudReady || !cloudProjectId) return;
   clearTimeout(cloudSaveTimer);
   cloudSaveTimer = setTimeout(saveCurrentProjectToCloud, 450);
+}
+var projectMetaSaveTimer = null;
+function scheduleProjectMetaSave(){
+  if(!cloudProjectId || !cloudUser || !supabase) return;
+  clearTimeout(projectMetaSaveTimer);
+  projectMetaSaveTimer = setTimeout(function(){ persistProjectNameToCloud(true); }, 650);
 }
 async function saveCurrentProjectToCloud(){
   if(COLLAB) return; // Yjs 협업 활성 시 저장은 협업 엔진이 담당
@@ -1497,29 +1515,37 @@ function syncBranding(name){
   document.title = name;
   if(authBrandTitle) authBrandTitle.textContent = name;
 }
-function updateProjectIndexLocal(name){
+function updateProjectIndexLocal(name, updatedAt){
   name = String(name || '새 프로젝트').trim() || '새 프로젝트';
   if(!PROJECTS[PROJECT_ID]) PROJECTS[PROJECT_ID] = {id:PROJECT_ID,data:DATA};
   PROJECTS[PROJECT_ID].name = name;
-  PROJECTS[PROJECT_ID].updatedAt = Date.now();
+  PROJECTS[PROJECT_ID].updatedAt = updatedAt ? new Date(updatedAt).getTime() : Date.now();
   try{ localStorage.setItem(PROJECTS_KEY, JSON.stringify(PROJECTS)); }catch(e){}
 }
-async function persistProjectNameToCloud(){
+async function persistProjectNameToCloud(fromActivity){
   var name = (DATA.toolTitle || '새 프로젝트').trim() || '새 프로젝트';
   updateProjectIndexLocal(name);
   syncBranding(name);
-  if(!cloudProjectId || !cloudUser || !supabase) return;
+  if(!cloudProjectId || !cloudUser || !supabase) return false;
   try{
-    // Project name is authoritative metadata, independent from Yjs DATA payload.
+    // Project metadata is authoritative for the project list. It is updated both
+    // on title edits and on ordinary project activity so 'last saved' stays current.
     var now = new Date().toISOString();
     var res = await supabase.from('projects')
-      .update({name:name,updated_at:now})
-      .eq('id', cloudProjectId);
+      .update({name:name,updated_at:now,updated_by:cloudUser.id})
+      .eq('id', cloudProjectId)
+      .select('id,name,updated_at,version,owner_id')
+      .maybeSingle();
     if(res.error) throw res.error;
-    await publishProjectListUpdate('UPDATE', {id:cloudProjectId,name:name,updated_at:now});
+    if(!res.data){ throw new Error('프로젝트 메타데이터 UPDATE 대상이 없거나 권한이 없습니다.'); }
+    var savedAt = res.data.updated_at || now;
+    updateProjectIndexLocal(res.data.name || name, savedAt);
+    await publishProjectListUpdate('UPDATE', {id:cloudProjectId,name:res.data.name || name,updated_at:savedAt,version:res.data.version,owner_id:res.data.owner_id});
+    return true;
   }catch(e){
-    console.error('프로젝트 이름 저장 실패', e);
-    setCloudStatus('프로젝트 이름 저장 재시도 필요');
+    console.error('프로젝트 메타데이터 저장 실패', e);
+    setCloudStatus(fromActivity ? '프로젝트 목록 저장 실패' : '프로젝트 이름 저장 실패');
+    return false;
   }
 }
 // Use the most recently known project name immediately, even before cloud initialization.
@@ -1532,7 +1558,7 @@ titleInput.addEventListener('input', function(){
   // Push title through the CRDT immediately so an older remote DATA snapshot cannot restore the old title.
   if(COLLAB){ try{ COLLAB.push(DATA); }catch(e){ console.error(e); } }
   clearTimeout(projectNameSaveTimer);
-  projectNameSaveTimer = setTimeout(persistProjectNameToCloud, 250);
+  projectNameSaveTimer = setTimeout(function(){ persistProjectNameToCloud(false); }, 250);
   markDirty();
 });
 
