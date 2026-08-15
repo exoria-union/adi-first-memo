@@ -3813,6 +3813,9 @@ function unsubscribeCloud(){
 }
 async function publishProjectListUpdate(eventType, row){
   if(!supabase || !cloudUser) return;
+  // 목록 동기화 broadcast에는 무거운 data를 싣지 않는다(broadcast 256KB 한도 방지;
+  // 문서 내용 동기화는 Yjs가 담당하고, 목록엔 id/name/updated_at만 필요).
+  if(row && row.data!==undefined){ row=Object.assign({},row); delete row.data; }
   try{
     if(!projectListChannel){
       projectListChannel = supabase.channel('project-list-global');
@@ -3831,18 +3834,24 @@ async function publishProjectListUpdate(eventType, row){
 async function subscribeToProjectList(){
   if(!supabase || !cloudUser) return;
   if(projectListChannel){ try{supabase.removeChannel(projectListChannel);}catch(e){} projectListChannel=null; }
-  var ch=supabase.channel('project-list-global');
+  var ch=supabase.channel('project-list-global',{config:{broadcast:{self:false}}});
   projectListChannel=ch;
   ch.on('broadcast',{event:'project-index-update'},function(message){
     var payload=message && message.payload ? message.payload : {};
     var row=payload.row; if(!row || !row.id) return;
-    if(payload.eventType==='DELETE'){ delete PROJECTS[row.id]; }
+    var ev=payload.eventType;
+    if(ev==='DELETE'){ delete PROJECTS[row.id]; }
     else {
       var prev=PROJECTS[row.id]||{};
       PROJECTS[row.id]={id:row.id,name:row.name!=null?row.name:(prev.name||'이름 없음'),data:row.data!==undefined?row.data:prev.data,updatedAt:row.updated_at?new Date(row.updated_at).getTime():Date.now(),version:row.version!=null?row.version:prev.version,owner_id:row.owner_id||prev.owner_id};
+      if(row.id===PROJECT_ID && row.name && document.activeElement!==titleInput) syncBranding(row.name);
     }
     try{ localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS)); }catch(e){}
     if(document.getElementById('projectModal').classList.contains('open')) openProjectList();
+    // 목록을 닫아둬도 실시간 반영을 알 수 있게 토스트(broadcast는 self 제외라 남의 변경만 도착)
+    if(ev==='INSERT') toast('다른 사용자가 새 프로젝트를 추가했어요: '+(row.name||''));
+    else if(ev==='UPDATE') toast('프로젝트 이름이 바뀌었어요: '+(row.name||''));
+    else if(ev==='DELETE') toast('다른 사용자가 프로젝트를 삭제했어요.');
   });
   ch.on('postgres_changes',{event:'*',schema:'public',table:'projects'},function(payload){
     var row=payload.new || payload.old; if(!row || !row.id) return;
