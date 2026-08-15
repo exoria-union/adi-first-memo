@@ -1358,9 +1358,6 @@ function markDirty(){
   clearTimeout(saveTimer);
   saveTimer = setTimeout(function(){
     persist();
-    // Project-list metadata is independent from Yjs body persistence.
-    // Update it from the common dirty path so graph/UI edits also refresh updated_at.
-    try{ scheduleProjectMetaSave(); }catch(e){ console.error('project metadata schedule failed', e); }
   }, 700);
 }
 function persist(){
@@ -1372,26 +1369,13 @@ function persist(){
     cacheSharedUiPrefs();
     saveState(false);
     scheduleCloudSave();
-    try{ scheduleProjectMetaSave(); }catch(e){ console.error('project metadata schedule failed', e); }
   }catch(e){ toast('로컬 저장 실패: ' + e.message); }
 }
 function scheduleCloudSave(){
-  // CRDT/Yjs owns the project body, but project-list metadata (name/updated_at)
-  // still lives in the Supabase projects row and must be updated separately.
-  if(COLLAB){
-    try{ COLLAB.push(DATA); }catch(e){ console.error(e); }
-    scheduleProjectMetaSave();
-    return;
-  }
+  if(COLLAB){ try{ COLLAB.push(DATA); }catch(e){ console.error(e); } return; }
   if(!cloudReady || !cloudProjectId) return;
   clearTimeout(cloudSaveTimer);
   cloudSaveTimer = setTimeout(saveCurrentProjectToCloud, 450);
-}
-var projectMetaSaveTimer = null;
-function scheduleProjectMetaSave(){
-  if(!cloudProjectId || !cloudUser || !supabase) return;
-  clearTimeout(projectMetaSaveTimer);
-  projectMetaSaveTimer = setTimeout(function(){ persistProjectNameToCloud(true); }, 650);
 }
 async function saveCurrentProjectToCloud(){
   if(COLLAB) return; // Yjs 협업 활성 시 저장은 협업 엔진이 담당
@@ -1503,7 +1487,6 @@ function toast(msg){
 /* ---------------- shared project title / branding ---------------- */
 var titleInput = document.getElementById('toolTitleInput');
 var authBrandTitle = document.getElementById('authBrandTitle');
-var projectNameSaveTimer = null;
 function currentProjectName(){
   var name = (DATA && DATA.toolTitle) ? String(DATA.toolTitle).trim() : '';
   if(!name && PROJECT_ID && PROJECTS[PROJECT_ID] && PROJECTS[PROJECT_ID].name) name = String(PROJECTS[PROJECT_ID].name).trim();
@@ -1515,50 +1498,13 @@ function syncBranding(name){
   document.title = name;
   if(authBrandTitle) authBrandTitle.textContent = name;
 }
-function updateProjectIndexLocal(name, updatedAt){
-  name = String(name || '새 프로젝트').trim() || '새 프로젝트';
-  if(!PROJECTS[PROJECT_ID]) PROJECTS[PROJECT_ID] = {id:PROJECT_ID,data:DATA};
-  PROJECTS[PROJECT_ID].name = name;
-  PROJECTS[PROJECT_ID].updatedAt = updatedAt ? new Date(updatedAt).getTime() : Date.now();
-  try{ localStorage.setItem(PROJECTS_KEY, JSON.stringify(PROJECTS)); }catch(e){}
-}
-async function persistProjectNameToCloud(fromActivity){
-  var name = (DATA.toolTitle || '새 프로젝트').trim() || '새 프로젝트';
-  updateProjectIndexLocal(name);
-  syncBranding(name);
-  if(!cloudProjectId || !cloudUser || !supabase) return false;
-  try{
-    // Project metadata is authoritative for the project list. It is updated both
-    // on title edits and on ordinary project activity so 'last saved' stays current.
-    var now = new Date().toISOString();
-    var res = await supabase.from('projects')
-      .update({name:name,updated_at:now,updated_by:cloudUser.id})
-      .eq('id', cloudProjectId)
-      .select('id,name,updated_at,version,owner_id')
-      .maybeSingle();
-    if(res.error) throw res.error;
-    if(!res.data){ throw new Error('프로젝트 메타데이터 UPDATE 대상이 없거나 권한이 없습니다.'); }
-    var savedAt = res.data.updated_at || now;
-    updateProjectIndexLocal(res.data.name || name, savedAt);
-    await publishProjectListUpdate('UPDATE', {id:cloudProjectId,name:res.data.name || name,updated_at:savedAt,version:res.data.version,owner_id:res.data.owner_id});
-    return true;
-  }catch(e){
-    console.error('프로젝트 메타데이터 저장 실패', e);
-    setCloudStatus(fromActivity ? '프로젝트 목록 저장 실패' : '프로젝트 이름 저장 실패');
-    return false;
-  }
-}
 // Use the most recently known project name immediately, even before cloud initialization.
 syncBranding(currentProjectName());
 titleInput.addEventListener('input', function(){
   var name = String(titleInput.value || '').trim() || '새 프로젝트';
   DATA.toolTitle = name;
   syncBranding(name);
-  updateProjectIndexLocal(name);
-  // Push title through the CRDT immediately so an older remote DATA snapshot cannot restore the old title.
   if(COLLAB){ try{ COLLAB.push(DATA); }catch(e){ console.error(e); } }
-  clearTimeout(projectNameSaveTimer);
-  projectNameSaveTimer = setTimeout(function(){ persistProjectNameToCloud(false); }, 250);
   markDirty();
 });
 
@@ -3580,11 +3526,6 @@ async function createNewProject(){
   toast('새 프로젝트를 만들었습니다. 기존 프로젝트는 보존되었습니다.');
 }
 async function openProjectList(){
-  if(projectNameSaveTimer){
-    clearTimeout(projectNameSaveTimer);
-    projectNameSaveTimer = null;
-    await persistProjectNameToCloud();
-  }
   if(cloudReady){ await refreshCloudProjectList(); }
   var modal=document.getElementById('projectModal'), listEl=document.getElementById('projectList');
   listEl.innerHTML='';
