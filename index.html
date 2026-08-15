@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>빛의왕국 탐사맵 편집기</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.1/dist/umd/supabase.min.js"></script>
 <style>
   :root{
     --bg:#f6f6f7; --surface:#ffffff; --border:#e1e1e4; --border-strong:#c9c9ce;
@@ -43,6 +44,24 @@
   #toolTitleInput:hover{border-color:var(--border-strong);}
   #toolTitleInput:focus{outline:none;border-color:var(--accent);background:var(--accent-soft);}
   #topbar .sep{width:1px;height:20px;background:var(--border);}
+  #cloudStatus{font-size:11px;color:var(--text-faint);white-space:nowrap;}
+  #authOverlay{position:fixed;inset:0;background:rgba(246,246,247,.96);z-index:1200;display:flex;align-items:center;justify-content:center;}
+  #authCard{width:390px;max-width:92vw;background:#fff;border:1px solid var(--border-strong);border-radius:4px;box-shadow:0 10px 40px rgba(0,0,0,.12);padding:24px;}
+  #authCard h2{margin:0 0 6px;font-size:18px;}
+  #authCard p{margin:0 0 18px;color:var(--text-dim);font-size:12px;line-height:1.6;}
+  #authCard input{width:100%;border:1px solid var(--border-strong);border-radius:2px;padding:9px 10px;margin-bottom:8px;font-size:13px;box-sizing:border-box;}
+  #authActions{display:flex;gap:8px;margin-top:10px;}
+  #authMsg{min-height:18px;color:#c0392b;font-size:11.5px;margin-top:10px;white-space:pre-wrap;}
+  #projectModal{position:fixed;inset:0;background:rgba(0,0,0,.28);z-index:1100;display:none;align-items:center;justify-content:center;}
+  #projectModal.open{display:flex;}
+  #projectCard{width:520px;max-width:92vw;background:#fff;border:1px solid var(--border-strong);border-radius:4px;box-shadow:0 12px 40px rgba(0,0,0,.2);padding:18px;}
+  #projectList{display:flex;flex-direction:column;gap:6px;max-height:48vh;overflow:auto;margin:12px 0;}
+  .projectRow{display:flex;align-items:center;gap:10px;border:1px solid var(--border);padding:10px 12px;border-radius:3px;cursor:pointer;}
+  .projectRow:hover{border-color:var(--accent);background:var(--accent-soft);}
+  .projectRow.current{border-color:var(--accent);background:var(--accent-soft);}
+  .projectRow .prBody{flex:1;min-width:0;}
+  .projectRow .prName{font-weight:600;}
+  .projectRow .prMeta{font-size:10px;color:var(--text-faint);margin-top:2px;}
   #savestate{font-size:12px;color:var(--text-faint);display:flex;align-items:center;gap:5px;white-space:nowrap;}
   #savestate .dot{width:6px;height:6px;border-radius:50%;background:var(--text-faint);}
   #savestate.saved .dot{background:var(--success);}
@@ -387,10 +406,43 @@
 </head>
 <body>
 
+<div id="authOverlay">
+  <div id="authCard">
+    <h2>빛의왕국 탐사맵 협업 로그인</h2>
+    <p>개인 계정으로 로그인하면 프로젝트와 편집 내용이 Supabase에 저장되고, 같은 프로젝트의 변경사항이 실시간으로 공유됩니다.</p>
+    <div id="authActions">
+      <label style="display:block;font-size:11px;font-weight:600;color:var(--text-faint);margin:0 0 4px;">아이디(이메일)</label>
+      <input id="authEmail" type="email" autocomplete="username" placeholder="example@email.com" style="width:100%;box-sizing:border-box;border:1px solid var(--border-strong);border-radius:2px;padding:8px 9px;font-size:12.5px;background:var(--bg);margin-bottom:8px;">
+      <label style="display:block;font-size:11px;font-weight:600;color:var(--text-faint);margin:0 0 4px;">비밀번호</label>
+      <input id="authPassword" type="password" autocomplete="current-password" placeholder="6자 이상" style="width:100%;box-sizing:border-box;border:1px solid var(--border-strong);border-radius:2px;padding:8px 9px;font-size:12.5px;background:var(--bg);margin-bottom:10px;">
+      <div style="display:flex;gap:8px;">
+        <button class="primary" id="btnAuthSignIn" style="flex:1;">로그인</button>
+        <button id="btnAuthSignUp" style="flex:1;">회원가입</button>
+      </div>
+      <div style="font-size:10.5px;color:var(--text-faint);text-align:center;margin-top:8px;">아이디는 이메일 주소를 사용합니다.</div>
+    </div>
+    <button class="ghost" id="btnAuthSignOut" style="display:none;margin-top:10px;">로그아웃</button>
+    <div id="authMsg"></div>
+  </div>
+</div>
+<div id="projectModal">
+  <div id="projectCard">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+      <div style="font-size:16px;font-weight:700;">프로젝트</div>
+      <button class="ghost" id="btnProjectClose">닫기</button>
+    </div>
+    <div style="font-size:11.5px;color:var(--text-faint);margin-top:4px;">프로젝트를 선택하면 현재 작업 중인 사용자들과 같은 데이터로 전환됩니다.</div>
+    <div id="projectList"></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;">
+      <button id="btnProjectModalNew" class="primary">+ 새 프로젝트</button>
+    </div>
+  </div>
+</div>
 <div id="topbar">
   <input id="toolTitleInput" type="text" value="빛의왕국 탐사맵 편집기">
   <div class="sep"></div>
   <div id="savestate"><span class="dot"></span><span id="savestate-text">저장 안 됨</span></div>
+  <div id="cloudStatus">연결 중…</div>
   <div class="spacer"></div>
   <div id="tagColorWrap">
     <button class="ghost" id="btnTagColor">태그 색상 ▾</button>
@@ -439,6 +491,9 @@
   </div>
   <button class="primary" id="btnExportXlsx">엑셀로 내보내기</button>
   <button class="ghost" id="btnImportXlsx">엑셀 불러오기</button>
+  <button class="ghost" id="btnNewProject">새 프로젝트</button>
+  <button class="ghost" id="btnProjectList">프로젝트 목록</button>
+  <button class="ghost" id="btnCloudSignOut">로그아웃</button>
   <input type="file" id="importFileInput" accept=".xlsx,.xls" style="display:none;">
 </div>
 
@@ -478,23 +533,87 @@
 <script>
 (function(){
 "use strict";
+var SUPABASE_CONFIG = {
+  url: "YOUR_SUPABASE_PROJECT_URL",
+  anonKey: "YOUR_SUPABASE_PUBLISHABLE_OR_ANON_KEY"
+};
+var supabase = null;
+var cloudUser = null;
+var cloudChannel = null;
+var cloudReady = false;
+var cloudSaving = false;
+var cloudSaveTimer = null;
+var cloudVersion = 0;
+var cloudProjectId = null;
+var cloudIgnoreRealtimeUntil = 0;
 var RAW = JSON.parse(document.getElementById('app-data').textContent);
 var LS_KEY = 'lumkingdom_map_editor_v1';
+var PREFS_KEY = 'lumkingdom_map_editor_prefs_v1';
+var PROJECTS_KEY = 'lumkingdom_map_editor_projects_v1';
+var ACTIVE_PROJECT_KEY = 'lumkingdom_map_editor_active_project_v1';
 var DATA;
+var PROJECT_ID = null;
+var PROJECTS = {};
+var ACTIVE_PROJECT_ID = null;
+var savedParsed = null;
+var USER_PREFS = null;
 try{
   var saved = localStorage.getItem(LS_KEY);
-  var savedParsed = saved ? JSON.parse(saved) : null;
-  // the embedded RAW data carries a build stamp that changes every time this file is rebuilt
-  // with fresh content. if the browser's saved copy is from an OLDER build, it must NOT win -
-  // otherwise every content update gets silently masked by whatever was saved before, forever.
-  // only a saved copy matching the CURRENT build (i.e. genuinely made in this same session /
-  // this same shipped file) is trusted over the fresh embedded data.
-  if(savedParsed && savedParsed.__buildStamp === RAW.__buildStamp){
-    DATA = savedParsed;
-  } else {
-    DATA = JSON.parse(JSON.stringify(RAW));
-  }
-}catch(e){ DATA = JSON.parse(JSON.stringify(RAW)); }
+  savedParsed = saved ? JSON.parse(saved) : null;
+  var projectsRaw = localStorage.getItem(PROJECTS_KEY);
+  PROJECTS = projectsRaw ? JSON.parse(projectsRaw) : {};
+  ACTIVE_PROJECT_ID = localStorage.getItem(ACTIVE_PROJECT_KEY);
+  var savedPrefs = localStorage.getItem(PREFS_KEY);
+  USER_PREFS = savedPrefs ? JSON.parse(savedPrefs) : null;
+}catch(e){ PROJECTS = {}; ACTIVE_PROJECT_ID = null; }
+
+function makeProjectId(){ return 'proj_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8); }
+if(!Object.keys(PROJECTS).length && savedParsed){
+  var migratedId = 'proj_default';
+  PROJECTS[migratedId] = {id:migratedId,name:savedParsed.toolTitle||'빛의왕국 탐사맵',data:savedParsed,updatedAt:Date.now()};
+  ACTIVE_PROJECT_ID = migratedId;
+  try{ localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS)); localStorage.setItem(ACTIVE_PROJECT_KEY,ACTIVE_PROJECT_ID); }catch(e){}
+}
+
+// Project data is versioned with the shipped HTML build. Personal UI preferences are NOT: \n// they live in a separate localStorage record so updating the GitHub Pages HTML does not reset
+// fonts, tag colors, or Excel sheet names. Existing saved DATA is still used when its build matches.
+if(ACTIVE_PROJECT_ID && PROJECTS[ACTIVE_PROJECT_ID] && PROJECTS[ACTIVE_PROJECT_ID].data){
+  PROJECT_ID = ACTIVE_PROJECT_ID;
+  DATA = PROJECTS[ACTIVE_PROJECT_ID].data;
+} else if(savedParsed && savedParsed.__buildStamp === RAW.__buildStamp){
+  PROJECT_ID = 'proj_default';
+  DATA = savedParsed;
+  PROJECTS[PROJECT_ID] = {id:PROJECT_ID,name:DATA.toolTitle||'빛의왕국 탐사맵',data:DATA,updatedAt:Date.now()};
+} else {
+  PROJECT_ID = 'proj_default';
+  DATA = JSON.parse(JSON.stringify(RAW));
+  PROJECTS[PROJECT_ID] = {id:PROJECT_ID,name:DATA.toolTitle||'빛의왕국 탐사맵',data:DATA,updatedAt:Date.now()};
+}
+ACTIVE_PROJECT_ID = PROJECT_ID;
+
+function extractUserPrefs(source){
+  if(!source) return null;
+  return {
+    tagColors: source.tagColors ? JSON.parse(JSON.stringify(source.tagColors)) : {},
+    tagOpacity: source.tagOpacity != null ? source.tagOpacity : 90,
+    fontSettings: source.fontSettings ? JSON.parse(JSON.stringify(source.fontSettings)) : null,
+    customFonts: source.customFonts ? JSON.parse(JSON.stringify(source.customFonts)) : {},
+    exportNames: source.exportNames ? JSON.parse(JSON.stringify(source.exportNames)) : {}
+  };
+}
+if(!USER_PREFS){
+  USER_PREFS = extractUserPrefs(savedParsed) || {tagColors:{}, tagOpacity:90, customFonts:{}, exportNames:{}, fontSettings:null};
+  try{ localStorage.setItem(PREFS_KEY, JSON.stringify(USER_PREFS)); }catch(e){}
+}
+function applyUserPrefs(target){
+  if(!target || !USER_PREFS) return;
+  if(USER_PREFS.tagColors) target.tagColors = JSON.parse(JSON.stringify(USER_PREFS.tagColors));
+  if(USER_PREFS.tagOpacity != null) target.tagOpacity = USER_PREFS.tagOpacity;
+  if(USER_PREFS.fontSettings) target.fontSettings = JSON.parse(JSON.stringify(USER_PREFS.fontSettings));
+  if(USER_PREFS.customFonts) target.customFonts = JSON.parse(JSON.stringify(USER_PREFS.customFonts));
+  if(USER_PREFS.exportNames) target.exportNames = JSON.parse(JSON.stringify(USER_PREFS.exportNames));
+}
+applyUserPrefs(DATA);
 
 var H1 = DATA.sheet1.headers;
 var C = {}; H1.forEach(function(h,i){ C[h]=i; });
@@ -717,6 +836,7 @@ function initTagColorMenu(){
     inp.addEventListener('input', function(){
       if(!DATA.tagColors) DATA.tagColors = {};
       DATA.tagColors[map[id]] = inp.value;
+      USER_PREFS.tagColors = DATA.tagColors;
       markDirty();
       render();
     });
@@ -728,6 +848,7 @@ function initTagColorMenu(){
   opacityVal.textContent = startPct + '%';
   opacityInput.addEventListener('input', function(){
     DATA.tagOpacity = parseInt(opacityInput.value,10);
+    USER_PREFS.tagOpacity = DATA.tagOpacity;
     opacityVal.textContent = opacityInput.value + '%';
     markDirty();
     render();
@@ -807,10 +928,10 @@ function initFontMenu(){
   refreshSelects();
   applyFontSettings();
 
-  mapSel.addEventListener('change', function(){ DATA.fontSettings.mapFont = mapSel.value; applyFontSettings(); markDirty(); });
-  tagSel.addEventListener('change', function(){ DATA.fontSettings.tagFont = tagSel.value; applyFontSettings(); markDirty(); });
-  mapBold.addEventListener('change', function(){ DATA.fontSettings.mapBold = mapBold.checked; applyFontSettings(); markDirty(); });
-  tagBold.addEventListener('change', function(){ DATA.fontSettings.tagBold = tagBold.checked; applyFontSettings(); markDirty(); });
+  mapSel.addEventListener('change', function(){ DATA.fontSettings.mapFont = mapSel.value; USER_PREFS.fontSettings = DATA.fontSettings; applyFontSettings(); markDirty(); });
+  tagSel.addEventListener('change', function(){ DATA.fontSettings.tagFont = tagSel.value; USER_PREFS.fontSettings = DATA.fontSettings; applyFontSettings(); markDirty(); });
+  mapBold.addEventListener('change', function(){ DATA.fontSettings.mapBold = mapBold.checked; USER_PREFS.fontSettings = DATA.fontSettings; applyFontSettings(); markDirty(); });
+  tagBold.addEventListener('change', function(){ DATA.fontSettings.tagBold = tagBold.checked; USER_PREFS.fontSettings = DATA.fontSettings; applyFontSettings(); markDirty(); });
 
   document.getElementById('fmNewFontFile').addEventListener('change', function(){
     var f = this.files[0];
@@ -821,6 +942,7 @@ function initFontMenu(){
     var reader = new FileReader();
     reader.onload = function(){
       DATA.customFonts[name] = reader.result;
+      USER_PREFS.customFonts = DATA.customFonts;
       applyFontSettings();
       refreshSelects();
       markDirty();
@@ -1084,7 +1206,9 @@ function findClusterOfNode(topId, rowId){
   }
   return null;
 }
-// removes a node and cleans up any "▶[지역/X]" references to it within the same region
+// Disconnects a node without destroying its row or its descendants.
+// The disconnected node remains in its cluster and is rendered as an orphan, so no
+// downstream content disappears when an upstream node is removed.
 function deleteNode(topId, rowId){
   var row = DATA.sheet1.rows[rowById[rowId]];
   if(!row) return false;
@@ -1092,49 +1216,56 @@ function deleteNode(topId, rowId){
   var tree = DATA.regionsTree[topId];
   if(rowId===tree.headerRowId){ alert('지역 시작 노드는 삭제할 수 없어요.'); return false; }
   if(rowId===tree.moveRowId){ alert('이동한다 노드는 삭제할 수 없어요.'); return false; }
-  if(!confirm('"'+name+'" 노드를 삭제할까요? 이 노드를 가리키는 다른 선택지들도 함께 정리돼요.')) return false;
+
+  var ownerCluster = findClusterOfNode(topId, rowId);
+  if(ownerCluster && ownerCluster.root === name){
+    return deleteCluster(topId, tree.clusters.indexOf(ownerCluster));
+  }
+  if(!confirm('"'+name+'" 노드를 삭제할까요? 연결만 해제하고 노드와 하위 선택지는 고아 노드로 보존됩니다.')) return false;
+
   DATA.sheet1.rows.forEach(function(r){
     var top = r[C['상위지역ID(부모ID)']] || r[C['지역ID']];
     if(top!==topId) return;
     ['스크립트(내용)','성공 스크립트','실패 스크립트'].forEach(function(col){
       var v = r[C[col]];
-      if(v && (v.indexOf('▶[지역/'+name+']')!==-1 || v.indexOf('▶[진입/'+name+']')!==-1)){
-        r[C[col]] = v.split('\n').filter(function(line){
+      if(!v) return;
+      var before = v;
+      if(v.indexOf('▶[지역/'+name+']')!==-1 || v.indexOf('▶[진입/'+name+']')!==-1){
+        v = v.split('\n').filter(function(line){
           var t = line.trim();
           return t !== '▶[지역/'+name+']' && t !== '▶[진입/'+name+']';
         }).join('\n');
       }
+      if(v!==before) r[C[col]] = v;
     });
   });
-  var idx = DATA.sheet1.rows.findIndex(function(r){ return r[C['지역ID']]===rowId; });
-  if(idx!==-1) DATA.sheet1.rows.splice(idx,1);
-  var ownerCluster = findClusterOfNode(topId, rowId);
-  if(ownerCluster){
-    var ni = ownerCluster.nodeIds.indexOf(rowId);
-    if(ni!==-1) ownerCluster.nodeIds.splice(ni,1);
-  }
+
+  // Keep the row and its cluster membership. It becomes unreachable from the root,
+  // and is therefore surfaced as an orphan instead of disappearing from the graph.
   rebuildIndexes();
   markDirty();
-  toast('삭제했어요');
+  toast('연결을 해제했어요 · 노드와 하위 선택지를 고아 노드로 보존했습니다');
   return true;
 }
-// removes an entire cluster: its root choice from the header, plus every node exclusively in it
+// Removes a cluster entry from the region header, but preserves every node row.
+// The preserved nodes become region-level orphans and remain visible/editable.
 function deleteCluster(topId, clusterIdx){
   var tree = DATA.regionsTree[topId];
   var cl = tree.clusters[clusterIdx];
   if(!cl) return false;
   if(tree.clusters.length<=1){ alert('지역에는 최소 1개의 세부지역이 있어야 해요.'); return false; }
-  if(!confirm('세부지역 "'+cl.root+'" 전체(노드 '+cl.nodeIds.length+'개)를 삭제할까요? 되돌릴 수 없어요.')) return false;
+  if(!confirm('세부지역 "'+cl.root+'" 전체(노드 '+cl.nodeIds.length+'개)를 삭제할까요? 노드 데이터는 삭제하지 않고 고아 노드로 보존됩니다.')) return false;
   var headerRow = regionHeaderRow(topId);
   var parsed = splitScript(headerRow[C['스크립트(내용)']]);
   parsed.choices = parsed.choices.filter(function(c){ return c !== cl.root; });
   headerRow[C['스크립트(내용)']] = joinScript(parsed.narrative, parsed.choices, '진입');
-  var idSet = {}; cl.nodeIds.forEach(function(id){ idSet[id]=true; });
-  DATA.sheet1.rows = DATA.sheet1.rows.filter(function(r){ return !idSet[r[C['지역ID']]]; });
+
+  // Do NOT delete rows. Removing the cluster membership is enough to make these
+  // nodes region-level orphans; their internal child links are untouched.
   tree.clusters.splice(clusterIdx, 1);
   rebuildIndexes();
   markDirty();
-  toast('세부지역을 삭제했어요');
+  toast('세부지역을 삭제했어요 · 노드 데이터는 고아 노드로 보존했습니다');
   return true;
 }
 
@@ -1152,9 +1283,119 @@ function markDirty(){
   saveTimer = setTimeout(persist, 700);
 }
 function persist(){
-  try{ localStorage.setItem(LS_KEY, JSON.stringify(DATA)); saveState(false); }
-  catch(e){ toast('저장 실패 - 브라우저 저장공간을 확인하세요'); }
+  try{
+    PROJECTS[PROJECT_ID] = {id:PROJECT_ID,name:DATA.toolTitle||'새 프로젝트',data:JSON.parse(JSON.stringify(DATA)),updatedAt:Date.now()};
+    localStorage.setItem(PROJECTS_KEY, JSON.stringify(PROJECTS));
+    localStorage.setItem(ACTIVE_PROJECT_KEY, PROJECT_ID);
+    localStorage.setItem(LS_KEY, JSON.stringify(DATA));
+    USER_PREFS = extractUserPrefs(DATA) || USER_PREFS;
+    localStorage.setItem(PREFS_KEY, JSON.stringify(USER_PREFS));
+    saveState(false);
+    scheduleCloudSave();
+  }catch(e){ toast('로컬 저장 실패: ' + e.message); }
 }
+function scheduleCloudSave(){
+  if(!cloudReady || !cloudProjectId) return;
+  clearTimeout(cloudSaveTimer);
+  cloudSaveTimer = setTimeout(saveCurrentProjectToCloud, 450);
+}
+async function saveCurrentProjectToCloud(){
+  if(!cloudReady || !cloudProjectId || cloudSaving) return;
+  cloudSaving = true;
+  setCloudStatus('저장 중…');
+  try{
+    var localData = JSON.parse(JSON.stringify(DATA));
+    var baseData = JSON.parse(JSON.stringify(cloudBaseData || {}));
+    var expectedVersion = Number(cloudVersion||0);
+    var payload = {name:localData.toolTitle||'새 프로젝트',data:localData};
+
+    var result = await supabase.from('projects')
+      .update({name:payload.name,data:payload.data,version:expectedVersion+1,updated_by:cloudUser.id,updated_at:new Date().toISOString()})
+      .eq('id',cloudProjectId).eq('version',expectedVersion)
+      .select('id,name,data,version,updated_at').single();
+
+    if(result.error){
+      // A version mismatch is handled below by fetching the latest server copy.
+      if(result.code && result.code!=='PGRST116') throw result.error;
+    }
+
+    if(!result.data){
+      var latest=await supabase.from('projects').select('id,name,data,version,updated_at').eq('id',cloudProjectId).single();
+      if(latest.error) throw latest.error;
+      var merged=mergeProjectData(baseData, localData, latest.data.data);
+      DATA=merged.data;
+      var retry=await supabase.from('projects')
+        .update({name:DATA.toolTitle||latest.data.name,data:JSON.parse(JSON.stringify(DATA)),version:Number(latest.data.version)+1,updated_by:cloudUser.id,updated_at:new Date().toISOString()})
+        .eq('id',cloudProjectId).eq('version',latest.data.version)
+        .select('id,name,data,version,updated_at').single();
+      if(retry.error) throw retry.error;
+      cloudVersion=retry.data.version;
+      cloudBaseData=JSON.parse(JSON.stringify(retry.data.data));
+      PROJECTS[PROJECT_ID]={id:PROJECT_ID,name:retry.data.name,data:JSON.parse(JSON.stringify(DATA)),updatedAt:Date.now(),version:cloudVersion};
+      localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS));
+      rebuildProjectView();
+      if(merged.conflicts.length) toast('변경사항을 자동 병합했습니다 · '+merged.conflicts.length+'개 동일 항목은 내 변경을 우선했습니다.');
+      else toast('다른 사용자의 변경사항과 자동 병합했습니다.');
+      setCloudStatus('저장됨 · 자동 병합');
+      return;
+    }
+
+    cloudVersion=result.data.version;
+    cloudBaseData=JSON.parse(JSON.stringify(result.data.data));
+    PROJECTS[PROJECT_ID]={id:PROJECT_ID,name:result.data.name,data:JSON.parse(JSON.stringify(DATA)),updatedAt:Date.now(),version:cloudVersion};
+    localStorage.setItem(PROJECTS_KEY, JSON.stringify(PROJECTS));
+    setCloudStatus('저장됨 · 실시간 연결');
+  }catch(e){
+    console.error(e);
+    setCloudStatus('저장 실패');
+    toast('클라우드 저장 실패: ' + (e.message||e));
+  }finally{ cloudSaving=false; }
+}
+
+function deepEqual(a,b){
+  try{return JSON.stringify(a)===JSON.stringify(b);}catch(e){return a===b;}
+}
+function mergeArrayByIdentity(base, local, remote, path, conflicts){
+  var idMap={};
+  function keyFor(v,i){
+    if(Array.isArray(v) && v.length && (typeof v[0]==='string'||typeof v[0]==='number')) return String(v[0]);
+    return '__idx_'+i;
+  }
+  var keys=[];
+  [base||[],local||[],remote||[]].forEach(function(arr){ (arr||[]).forEach(function(v,i){var k=keyFor(v,i); if(!idMap[k]){idMap[k]={b:undefined,l:undefined,r:undefined,bi:i,li:i,ri:i}; keys.push(k);} }); });
+  return keys.map(function(k){
+    var x=idMap[k];
+    x.b=(base||[])[x.bi]; x.l=(local||[])[x.li]; x.r=(remote||[])[x.ri];
+    return mergeNode(x.b,x.l,x.r,path+'['+k+']',conflicts);
+  }).filter(function(v){return v!==undefined;});
+}
+function mergeNode(base, local, remote, path, conflicts){
+  if(deepEqual(local,base)) return JSON.parse(JSON.stringify(remote));
+  if(deepEqual(remote,base)) return JSON.parse(JSON.stringify(local));
+  if(deepEqual(local,remote)) return JSON.parse(JSON.stringify(local));
+  if(Array.isArray(base)||Array.isArray(local)||Array.isArray(remote)){
+    if((Array.isArray(local)&&Array.isArray(remote))){ return mergeArrayByIdentity(Array.isArray(base)?base:[],local,remote,path,conflicts); }
+    conflicts.push(path); return JSON.parse(JSON.stringify(local));
+  }
+  if(base && typeof base==='object' && local && typeof local==='object' && remote && typeof remote==='object'){
+    var out={}, keys={};
+    Object.keys(base).forEach(function(k){keys[k]=true;}); Object.keys(local).forEach(function(k){keys[k]=true;}); Object.keys(remote).forEach(function(k){keys[k]=true;});
+    Object.keys(keys).forEach(function(k){
+      var v=mergeNode(base[k],local[k],remote[k],path+'.'+k,conflicts);
+      if(v!==undefined) out[k]=v;
+    });
+    return out;
+  }
+  conflicts.push(path);
+  return JSON.parse(JSON.stringify(local));
+}
+function mergeProjectData(base, local, remote){
+  var conflicts=[];
+  return {data:mergeNode(base,local,remote,'DATA',conflicts),conflicts:conflicts};
+}
+
+function setCloudStatus(text){ var el=document.getElementById('cloudStatus'); if(el) el.textContent=text; }
+
 function toast(msg){
   var t = document.getElementById('toast');
   t.textContent = msg;
@@ -1878,26 +2119,30 @@ function renderClusterCanvasScreen(main, crumb){
   var layout = autoLayoutNodes(topId, rootId, idSet, tree.moveRowId);
   var reachableIds = layout.order;
   var reachableSet = {}; reachableIds.forEach(function(id){ reachableSet[id]=true; });
-  // nodes that belong to this REGION but ended up in no cluster's list at all - not just
-  // unreachable within this one cluster's own nodeIds, but genuinely disconnected from every
-  // cluster root region-wide (typically leftovers from an edit that re-pointed a choice
-  // elsewhere). these used to be completely invisible anywhere in the tool. surface them here
-  // so nothing that still exists in the data can silently vanish from view.
+  // Surface both assigned-but-unreachable nodes and region-level unassigned nodes.
+  // A content swap can change graph topology while leaving cl.nodeIds untouched;
+  // those nodes must remain visible as yellow orphan nodes rather than vanishing.
+  var orphanIds = [];
+  cl.nodeIds.forEach(function(id){
+    if(!reachableSet[id]) orphanIds.push(id);
+  });
+
   var everyAssignedId = {};
   tree.clusters.forEach(function(c){ c.nodeIds.forEach(function(id){ everyAssignedId[id]=true; }); });
   everyAssignedId[tree.headerRowId] = true;
   if(tree.moveRowId) everyAssignedId[tree.moveRowId] = true;
-  var orphanIds = [];
   DATA.sheet1.rows.forEach(function(r){
-    var t = r[C['상위지역ID(부모ID)']] || r[C['지역ID']];
-    if(t===topId && !everyAssignedId[r[C['지역ID']]]) orphanIds.push(r[C['지역ID']]);
+    var rid = r[C['지역ID']];
+    var t = r[C['상위지역ID(부모ID)']] || rid;
+    if(t===topId && !everyAssignedId[rid] && orphanIds.indexOf(rid)===-1) orphanIds.push(rid);
   });
   var allIds = reachableIds.concat(orphanIds);
+
   var maxLayoutY = 0;
   reachableIds.forEach(function(rid){ var p = layout.positions[rid]; if(p) maxLayoutY = Math.max(maxLayoutY, p.y); });
   var orphanBaseY = maxLayoutY + 150;
   orphanIds.forEach(function(rid, idx){
-    layout.positions[rid] = { x: 20 + (idx % 5)*220, y: orphanBaseY + Math.floor(idx/5)*90 };
+    if(!getCanvasPos(topId, rid)) layout.positions[rid] = { x: 20 + (idx % 5)*220, y: orphanBaseY + Math.floor(idx/5)*90 };
   });
 
   var nodeEls = {};
@@ -1912,7 +2157,7 @@ function renderClusterCanvasScreen(main, crumb){
   if(orphanIds.length > 0){
     var orphanLabel = document.createElement('div'); orphanLabel.className = 'orphanSectionLabel';
     orphanLabel.style.left = '20px'; orphanLabel.style.top = (orphanBaseY - 26) + 'px';
-    orphanLabel.textContent = '⚠ 연결되지 않은 노드 ' + orphanIds.length + '개 — 지금은 어디서도 이 노드로 갈 수 없어요';
+    orphanLabel.textContent = '⚠ 고아 노드 ' + orphanIds.length + '개 — 연결이 끊겼지만 데이터는 보존되어 있습니다';
     inner.appendChild(orphanLabel);
   }
 
@@ -2888,6 +3133,266 @@ function renderSubquestDetail(main, crumb){
   main.appendChild(card);
 }
 
+function initTagColorMenuValues(){
+  var map = {tcSubquest:'subquest', tcRecipe:'recipe', tcMaterial:'material', tcProduct:'product'};
+  Object.keys(map).forEach(function(id){ document.getElementById(id).value = tagColor(map[id]); });
+  var op = DATA.tagOpacity!=null ? DATA.tagOpacity : 90;
+  document.getElementById('tcOpacity').value = op;
+  document.getElementById('tcOpacityVal').textContent = op + '%';
+}
+function initExportSettingsValues(){
+  var map = {esFileName:'fileName', esSheet1:'sheet1', esSheetItems:'items', esSheetKeyItems:'keyItems', esSheetSubquests:'subquests', esSheetRegionList:'regionList'};
+  Object.keys(map).forEach(function(id){ document.getElementById(id).value = exportName(map[id]); });
+}
+
+function refreshFontMenuValues(){
+  ensureFontSettings();
+  populateFontSelect(document.getElementById('fmMapFont'), DATA.fontSettings.mapFont);
+  populateFontSelect(document.getElementById('fmTagFont'), DATA.fontSettings.tagFont);
+  document.getElementById('fmMapBold').checked = !!DATA.fontSettings.mapBold;
+  document.getElementById('fmTagBold').checked = !!DATA.fontSettings.tagBold;
+}
+
+/* ---------------- project management ---------------- */
+function persistProjectNow(){
+  PROJECTS[PROJECT_ID] = {id:PROJECT_ID,name:DATA.toolTitle||'새 프로젝트',data:JSON.parse(JSON.stringify(DATA)),updatedAt:Date.now()};
+  localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS));
+  localStorage.setItem(ACTIVE_PROJECT_KEY,PROJECT_ID);
+}
+function makeBlankProject(){
+  function blankTable(src){ return {headers:src.headers.slice(),rows:[]}; }
+  var d={sheet1:blankTable(RAW.sheet1),items:blankTable(RAW.items),keyItems:blankTable(RAW.keyItems),subquests:blankTable(RAW.subquests),regionList:blankTable(RAW.regionList),gridPositions:{},cellColors:{},nodeCanvasPos:{},itemImages:{},regionsTree:{},toolTitle:'새 프로젝트',__buildStamp:RAW.__buildStamp};
+  applyUserPrefs(d); return d;
+}
+function rebuildProjectView(){
+  H1=DATA.sheet1.headers; C={}; H1.forEach(function(h,i){C[h]=i;});
+  rebuildRegionsTreeFromSheet1(); rebuildIndexes(); rebuildItemIndex(); rebuildSqIndex(); rebuildAllCrossRefs();
+  focusPath={}; nav={main:'map',view:'map',regionId:null,clusterIdx:null,itemCat:null,itemId:null,sqId:null,itemView:'grid',sqView:'list'};
+  titleInput.value=DATA.toolTitle||'새 프로젝트'; document.title=titleInput.value;
+  applyFontSettings(); refreshFontMenuValues(); initTagColorMenuValues(); initExportSettingsValues(); render();
+}
+async function createNewProject(){
+  persistProjectNow();
+  try{
+    if(cloudReady){
+      var d=makeBlankProject();
+      var newId=makeProjectId();
+      var ins=await supabase.from('projects').insert({id:newId,name:d.toolTitle,data:d,version:1,owner_id:cloudUser.id,updated_by:cloudUser.id}).select('id,name,data,version,updated_at').single();
+      if(ins.error) throw ins.error;
+      PROJECT_ID=newId; DATA=d; cloudBaseData=JSON.parse(JSON.stringify(d)); cloudProjectId=newId; cloudVersion=ins.data.version;
+      PROJECTS[newId]={id:newId,name:d.toolTitle,data:JSON.parse(JSON.stringify(d)),updatedAt:Date.now()};
+      localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS)); localStorage.setItem(ACTIVE_PROJECT_KEY,newId);
+      rebuildProjectView(); setCloudStatus('저장됨 · 실시간 연결'); toast('새 프로젝트를 만들었습니다. 기존 프로젝트는 보존되었습니다.');
+      return;
+    }
+  }catch(e){ console.error(e); toast('클라우드 프로젝트 생성 실패: '+(e.message||e)); return; }
+  PROJECT_ID=makeProjectId(); DATA=makeBlankProject(); PROJECTS[PROJECT_ID]={id:PROJECT_ID,name:DATA.toolTitle,data:JSON.parse(JSON.stringify(DATA)),updatedAt:Date.now()}; ACTIVE_PROJECT_ID=PROJECT_ID; localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS)); localStorage.setItem(ACTIVE_PROJECT_KEY,PROJECT_ID); rebuildProjectView(); markDirty();
+  toast('새 프로젝트를 만들었습니다. 기존 프로젝트는 보존되었습니다.');
+}
+async function openProjectList(){
+  if(cloudReady){ await refreshCloudProjectList(); }
+  var modal=document.getElementById('projectModal'), listEl=document.getElementById('projectList');
+  listEl.innerHTML='';
+  var ids=Object.keys(PROJECTS);
+  if(!ids.length){ listEl.innerHTML='<div style="color:var(--text-faint);padding:14px 0;">저장된 프로젝트가 없습니다.</div>'; modal.classList.add('open'); return; }
+  ids.sort(function(a,b){ return (PROJECTS[b].updatedAt||0)-(PROJECTS[a].updatedAt||0); });
+  ids.forEach(function(id){
+    var p=PROJECTS[id]; var row=document.createElement('div'); row.className='projectRow'+(id===PROJECT_ID?' current':'');
+    var body=document.createElement('div'); body.className='prBody';
+    var name=document.createElement('div'); name.className='prName'; name.textContent=(p.name||'이름 없음')+(id===PROJECT_ID?'  · 현재':'');
+    var meta=document.createElement('div'); meta.className='prMeta'; meta.textContent='마지막 수정: '+(p.updatedAt?new Date(p.updatedAt).toLocaleString():'-');
+    body.appendChild(name); body.appendChild(meta); row.appendChild(body); row.addEventListener('click',function(){ switchProject(id); }); listEl.appendChild(row);
+  });
+  modal.classList.add('open');
+}
+async function refreshCloudProjectList(){
+  try{
+    var res=await supabase.from('projects').select('id,name,data,version,updated_at,owner_id').order('updated_at',{ascending:false});
+    if(res.error) throw res.error;
+    var map={}; (res.data||[]).forEach(function(p){ map[p.id]={id:p.id,name:p.name,data:p.data,updatedAt:new Date(p.updated_at).getTime(),version:p.version,owner_id:p.owner_id}; });
+    PROJECTS=map;
+    localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS));
+  }catch(e){ console.error(e); }
+}
+async function switchProject(targetId){
+  if(targetId===PROJECT_ID){ document.getElementById('projectModal').classList.remove('open'); return; }
+  try{
+    if(cloudReady){
+      var res=await supabase.from('projects').select('id,name,data,version,updated_at').eq('id',targetId).single();
+      if(res.error) throw res.error;
+      DATA=JSON.parse(JSON.stringify(res.data.data)); cloudBaseData=JSON.parse(JSON.stringify(DATA)); PROJECT_ID=res.data.id; cloudProjectId=res.data.id; cloudVersion=res.data.version;
+      PROJECTS[targetId]={id:PROJECT_ID,name:res.data.name,data:JSON.parse(JSON.stringify(DATA)),updatedAt:new Date(res.data.updated_at).getTime(),version:res.data.version};
+    }else{
+      persistProjectNow(); DATA=JSON.parse(JSON.stringify(PROJECTS[targetId].data)); PROJECT_ID=targetId;
+    }
+    ACTIVE_PROJECT_ID=targetId; localStorage.setItem(ACTIVE_PROJECT_KEY,targetId); persistProjectNow(); rebuildProjectView(); document.getElementById('projectModal').classList.remove('open'); saveState(false); await subscribeToProject(targetId); toast('프로젝트를 전환했습니다.');
+  }catch(e){ console.error(e); toast('프로젝트 전환 실패: '+(e.message||e)); }
+}
+document.getElementById('btnNewProject').addEventListener('click',function(){ if(confirm('현재 프로젝트는 저장하고 새 프로젝트를 추가합니다. 기존 프로젝트는 삭제되지 않습니다. 계속할까요?')) createNewProject(); });
+document.getElementById('btnProjectList').addEventListener('click',openProjectList);
+document.getElementById('btnProjectClose').addEventListener('click',function(){document.getElementById('projectModal').classList.remove('open');});
+document.getElementById('projectModal').addEventListener('click',function(e){if(e.target===this)this.classList.remove('open');});
+document.getElementById('btnProjectModalNew').addEventListener('click',function(){document.getElementById('projectModal').classList.remove('open'); if(confirm('현재 프로젝트를 보존하고 새 프로젝트를 추가할까요?')) createNewProject();});
+
+/* ---------------- supabase auth + realtime ---------------- */
+function isSupabaseConfigured(){ return !!window.supabase && SUPABASE_CONFIG.url.indexOf('YOUR_')!==0 && SUPABASE_CONFIG.anonKey.indexOf('YOUR_')!==0; }
+async function initCloud(){
+  if(!isSupabaseConfigured()){
+    setCloudStatus('Supabase 미설정');
+    document.getElementById('authOverlay').style.display='flex';
+    document.getElementById('authMsg').textContent='HTML 파일 상단의 SUPABASE_CONFIG에 프로젝트 URL과 publishable/anon key를 입력하세요.';
+    return;
+  }
+  supabase=window.supabase.createClient(SUPABASE_CONFIG.url,SUPABASE_CONFIG.anonKey,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
+  supabase.auth.onAuthStateChange(function(event,session){
+    if(event==='SIGNED_OUT'){
+      cloudUser=null; cloudReady=false; unsubscribeCloud();
+      document.getElementById('authOverlay').style.display='flex';
+      document.getElementById('authMsg').textContent='로그아웃되었습니다.';
+      setCloudStatus('로그아웃');
+      return;
+    }
+    if(event==='SIGNED_IN' && session && !cloudUser){
+      setTimeout(function(){ onCloudSignedIn(session.user).catch(function(e){
+        console.error(e);
+        document.getElementById('authOverlay').style.display='flex';
+        document.getElementById('authMsg').textContent='로그인 후 초기화 실패: '+(e.message||e);
+      }); },0);
+    }
+  });
+  bindAuthButtons();
+  var sessionRes=await supabase.auth.getSession();
+  if(sessionRes.error) throw sessionRes.error;
+  if(sessionRes.data.session) await onCloudSignedIn(sessionRes.data.session.user);
+  else { document.getElementById('authOverlay').style.display='flex'; setCloudStatus('로그인 필요'); }
+}
+function authInputs(){
+  return {
+    email:(document.getElementById('authEmail').value||'').trim().toLowerCase(),
+    password:document.getElementById('authPassword').value||''
+  };
+}
+function validateAuthInputs(vals){
+  if(!vals.email) return '아이디(이메일)를 입력하세요.';
+  if(!/^\S+@\S+\.\S+$/.test(vals.email)) return '올바른 이메일 주소를 입력하세요.';
+  if(!vals.password) return '비밀번호를 입력하세요.';
+  if(vals.password.length<6) return '비밀번호는 6자 이상 입력하세요.';
+  return '';
+}
+function bindAuthButtons(){
+  var emailEl=document.getElementById('authEmail');
+  var pwEl=document.getElementById('authPassword');
+  function clearMsg(){ document.getElementById('authMsg').textContent=''; }
+  [emailEl,pwEl].forEach(function(el){ el.addEventListener('input',clearMsg); el.addEventListener('keydown',function(e){ if(e.key==='Enter') document.getElementById('btnAuthSignIn').click(); }); });
+  document.getElementById('btnAuthSignIn').onclick=async function(){
+    var msg=document.getElementById('authMsg'), vals=authInputs(), err=validateAuthInputs(vals);
+    if(err){ msg.textContent=err; return; }
+    msg.textContent='로그인 중…';
+    try{
+      var res=await supabase.auth.signInWithPassword({email:vals.email,password:vals.password});
+      if(res.error) throw res.error;
+      msg.textContent='로그인되었습니다.';
+    }catch(e){ msg.textContent=authErrorMessage(e); }
+  };
+  document.getElementById('btnAuthSignUp').onclick=async function(){
+    var msg=document.getElementById('authMsg'), vals=authInputs(), err=validateAuthInputs(vals);
+    if(err){ msg.textContent=err; return; }
+    msg.textContent='계정 생성 중…';
+    try{
+      var res=await supabase.auth.signUp({email:vals.email,password:vals.password});
+      if(res.error) throw res.error;
+      if(res.data.session){
+        msg.textContent='계정이 생성되었습니다. 로그인 처리 중…';
+      }else{
+        msg.textContent='계정이 생성되었습니다. 이메일 확인이 켜져 있으면 받은 메일의 인증 링크를 눌러주세요.';
+      }
+    }catch(e){ msg.textContent=authErrorMessage(e); }
+  };
+  document.getElementById('btnAuthSignOut').onclick=async function(){ if(supabase) await supabase.auth.signOut(); };
+  document.getElementById('btnCloudSignOut').onclick=async function(){ if(supabase) await supabase.auth.signOut(); };
+}
+function authErrorMessage(e){
+  var m=(e && e.message) ? e.message : String(e);
+  if(/invalid login credentials/i.test(m)) return '아이디 또는 비밀번호가 올바르지 않습니다.';
+  if(/email not confirmed/i.test(m)) return '이메일 인증이 필요합니다. 받은 인증 메일을 확인하세요.';
+  if(/user already registered/i.test(m)) return '이미 가입된 아이디입니다. 로그인해 주세요.';
+  if(/password should be at least/i.test(m)) return '비밀번호는 6자 이상이어야 합니다.';
+  if(/rate limit/i.test(m)) return '요청이 너무 많습니다. 잠시 후 다시 시도하세요.';
+  return m;
+}
+async function onCloudSignedIn(user){
+  cloudUser=user;
+  document.getElementById('authOverlay').style.display='none';
+  document.getElementById('authMsg').textContent='';
+  document.getElementById('authEmail').value='';
+  document.getElementById('authPassword').value='';
+  setCloudStatus('프로젝트 불러오는 중…');
+  try{
+    await refreshCloudProjectList();
+    var ids=Object.keys(PROJECTS);
+    var preferred=localStorage.getItem(ACTIVE_PROJECT_KEY);
+    if(!ids.length){
+      var first=JSON.parse(JSON.stringify(RAW)); first.toolTitle=first.toolTitle||'빛의왕국 탐사맵';
+      var seedId='proj_default';
+      var ins=await supabase.from('projects').insert({id:seedId,name:first.toolTitle,data:first,version:1,owner_id:user.id,updated_by:user.id}).select('id,name,data,version,updated_at').single();
+      if(ins.error){
+        var existing=await supabase.from('projects').select('id,name,data,version,updated_at').eq('id',seedId).single();
+        if(existing.error) throw ins.error;
+        ins=existing;
+      }
+      ids=[seedId];
+      PROJECTS[seedId]={id:seedId,name:ins.data.name,data:ins.data.data,updatedAt:new Date(ins.data.updated_at).getTime(),version:ins.data.version};
+      preferred=seedId;
+    }
+    var target=preferred && PROJECTS[preferred] ? preferred : ids[0];
+    var cloud=await supabase.from('projects').select('id,name,data,version,updated_at').eq('id',target).single();
+    if(cloud.error) throw cloud.error;
+    DATA=JSON.parse(JSON.stringify(cloud.data.data));
+    cloudBaseData=JSON.parse(JSON.stringify(DATA));
+    PROJECT_ID=cloud.data.id; cloudProjectId=cloud.data.id; cloudVersion=cloud.data.version; ACTIVE_PROJECT_ID=PROJECT_ID;
+    PROJECTS[PROJECT_ID]={id:PROJECT_ID,name:cloud.data.name,data:JSON.parse(JSON.stringify(DATA)),updatedAt:new Date(cloud.data.updated_at).getTime(),version:cloud.data.version};
+    localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS)); localStorage.setItem(ACTIVE_PROJECT_KEY,PROJECT_ID);
+    applyUserPrefs(DATA); H1=DATA.sheet1.headers; C={}; H1.forEach(function(h,i){C[h]=i;}); rebuildProjectView();
+    await subscribeToProject(PROJECT_ID); cloudReady=true; setCloudStatus('저장됨 · 실시간 연결');
+  }catch(e){
+    console.error(e);
+    cloudUser=null; cloudReady=false; document.getElementById('authOverlay').style.display='flex';
+    document.getElementById('authMsg').textContent='클라우드 초기화 실패: '+(e.message||e); setCloudStatus('연결 실패');
+  }
+}
+function unsubscribeCloud(){ if(cloudChannel){ try{supabase.removeChannel(cloudChannel);}catch(e){} cloudChannel=null; } }
+async function subscribeToProject(projectId){
+  unsubscribeCloud(); if(!supabase) return;
+  cloudChannel=supabase.channel('project-'+projectId)
+    .on('postgres_changes',{event:'UPDATE',schema:'public',table:'projects',filter:'id=eq.'+projectId},async function(payload){
+      var row=payload.new; if(!row || row.id!==projectId) return;
+      if(row.updated_by===cloudUser.id && Number(row.version)<=Number(cloudVersion)) return;
+      if(Date.now()<cloudIgnoreRealtimeUntil) return;
+      var localSnapshot=JSON.parse(JSON.stringify(DATA));
+      var baseSnapshot=JSON.parse(JSON.stringify(cloudBaseData||DATA));
+      var merged=mergeProjectData(baseSnapshot,localSnapshot,row.data);
+      DATA=merged.data;
+      cloudBaseData=JSON.parse(JSON.stringify(row.data));
+      PROJECT_ID=row.id; cloudProjectId=row.id; cloudVersion=row.version;
+      PROJECTS[PROJECT_ID]={id:row.id,name:row.name,data:JSON.parse(JSON.stringify(DATA)),updatedAt:new Date(row.updated_at).getTime(),version:row.version};
+      localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS)); localStorage.setItem(ACTIVE_PROJECT_KEY,PROJECT_ID);
+      applyUserPrefs(DATA); rebuildProjectView(); saveState(false);
+      if(merged.conflicts.length){
+        toast('실시간 변경을 자동 병합했습니다 · 동일 필드 '+merged.conflicts.length+'건은 내 변경을 우선했습니다.');
+        scheduleCloudSave();
+      } else {
+        toast('다른 사용자의 변경사항을 자동 병합했습니다.');
+      }
+    }).subscribe(function(status){ if(status==='SUBSCRIBED') setCloudStatus('저장됨 · 실시간 연결'); else if(status==='CHANNEL_ERROR') setCloudStatus('실시간 연결 오류'); });
+}
+
+async function reloadCurrentProjectFromCloud(){
+  if(!cloudProjectId) return;
+  var res=await supabase.from('projects').select('id,name,data,version,updated_at').eq('id',cloudProjectId).single();
+  if(res.error) throw res.error;
+  DATA=JSON.parse(JSON.stringify(res.data.data)); cloudBaseData=JSON.parse(JSON.stringify(DATA)); cloudVersion=res.data.version; applyUserPrefs(DATA); rebuildProjectView(); saveState(false);
+}
+
 /* =========================================================
    EXCEL EXPORT
    ========================================================= */
@@ -2911,6 +3416,7 @@ function initExportSettingsMenu(){
     inp.addEventListener('input', function(){
       if(!DATA.exportNames) DATA.exportNames = {};
       DATA.exportNames[map[id]] = inp.value;
+      USER_PREFS.exportNames = DATA.exportNames;
       markDirty();
     });
   });
@@ -3089,6 +3595,7 @@ initFontMenu();
 statCols();
 saveState(false);
 render();
+initCloud().catch(function(err){ console.error(err); setCloudStatus('연결 실패'); document.getElementById('authOverlay').style.display='flex'; document.getElementById('authMsg').textContent='Supabase 초기화 실패: '+(err.message||err); });
 })();
 
 </script>
