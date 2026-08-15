@@ -457,6 +457,92 @@
     </div>
   </div>
 </div>
+
+<!-- ===== bot_area SQL 내보내기 모달 ===== -->
+<div id="sqlExportModal" style="position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:1300;display:none;align-items:center;justify-content:center;">
+  <div style="width:820px;max-width:95vw;max-height:92vh;overflow:auto;background:var(--surface);border:1px solid var(--border-strong);border-radius:6px;box-shadow:0 14px 44px rgba(0,0,0,.28);padding:18px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+      <div style="font-size:16px;font-weight:700;">bot_area SQL 내보내기</div>
+      <div style="display:flex;gap:6px;">
+        <button class="ghost" id="btnSqlManual">📖 매뉴얼</button>
+        <button class="ghost" id="btnSqlClose">닫기</button>
+      </div>
+    </div>
+    <div style="font-size:11.5px;color:var(--text-dim);margin:6px 0 12px;line-height:1.6;">
+      현재 프로젝트의 '지역' 데이터를 <b>bot_area</b> 테이블용 <b>INSERT문</b>으로 만듭니다.
+      생성 전에 검증해서 <b>오류가 날 행(길이 초과·이모지 등 4바이트 문자·숫자칸 오류)은 제외</b>하고 아래에 리포트로 알려줍니다.
+    </div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;">
+      <label style="font-size:11.5px;color:var(--text-dim);">최상위 지역 ID (up_area_id)
+        <input type="text" id="sqlUpAreaId" placeholder="예: EIFFEL" style="display:block;margin-top:3px;border:1px solid var(--border-strong);border-radius:3px;padding:6px 8px;font-size:12.5px;width:160px;">
+      </label>
+      <label style="font-size:11.5px;color:var(--text-dim);">출발점 지역 ID (start_point=Y)
+        <input type="text" id="sqlStartPoint" placeholder="비우면 전부 N" style="display:block;margin-top:3px;border:1px solid var(--border-strong);border-radius:3px;padding:6px 8px;font-size:12.5px;width:160px;">
+      </label>
+      <label style="font-size:11.5px;color:var(--text-dim);">재삽입 방식
+        <select id="sqlMode" style="display:block;margin-top:3px;border:1px solid var(--border-strong);border-radius:3px;padding:6px 8px;font-size:12.5px;background:var(--surface);">
+          <option value="ignore">INSERT IGNORE · 중복 건너뜀(안전)</option>
+          <option value="insert">INSERT · 중복 시 오류</option>
+          <option value="upsert">ON DUPLICATE KEY UPDATE · 덮어쓰기</option>
+        </select>
+      </label>
+      <label style="font-size:11.5px;color:var(--text-dim);display:flex;align-items:center;gap:5px;padding-bottom:6px;">
+        <input type="checkbox" id="sqlIncludeMove" checked> '이동한다'(INCUNTR_99) 포함
+      </label>
+      <button class="primary" id="btnSqlGenerate" style="padding:7px 16px;">생성</button>
+    </div>
+    <div id="sqlReport" style="font-size:12px;margin-bottom:8px;min-height:18px;"></div>
+    <textarea id="sqlOutput" readonly placeholder="[생성] 버튼을 누르면 여기에 INSERT문이 나옵니다." style="width:100%;height:300px;font-family:var(--mono);font-size:11.5px;white-space:pre;overflow:auto;border:1px solid var(--border);border-radius:4px;padding:8px;box-sizing:border-box;background:var(--bg);color:var(--text);"></textarea>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px;">
+      <button class="ghost" id="btnSqlCopy">📋 전체 복사</button>
+      <button class="primary" id="btnSqlDownload">⬇ .sql 다운로드</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== SQL 매뉴얼 팝업 (DB를 잘 모르는 사용자용) ===== -->
+<div id="sqlManualModal" style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1400;display:none;align-items:center;justify-content:center;">
+  <div style="width:640px;max-width:94vw;max-height:90vh;overflow:auto;background:var(--surface);border:1px solid var(--border-strong);border-radius:6px;box-shadow:0 14px 44px rgba(0,0,0,.3);padding:20px;line-height:1.7;font-size:13px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;">
+      <div style="font-size:16px;font-weight:700;">📖 SQL 내보내기 사용법</div>
+      <button class="ghost" id="btnSqlManualClose">닫기</button>
+    </div>
+    <div style="color:var(--text-dim);font-size:11.5px;margin:4px 0 14px;">DB가 처음이어도 괜찮아요. 아래 순서대로만 하면 됩니다.</div>
+
+    <div style="font-weight:700;margin-top:10px;">이게 뭔가요?</div>
+    <div style="color:var(--text-dim);">편집기의 '지역' 데이터를 데이터베이스(<code>bot_area</code> 테이블)에 넣을 수 있는 <b>SQL 문장</b>으로 만들어 줍니다. 이 앱은 SQL을 <b>실행하지 않습니다</b> — 문장만 만들어 드리니, 복사해서 DB 도구에 붙여넣고 실행하시면 됩니다.</div>
+
+    <div style="font-weight:700;margin-top:14px;">1. 입력값 채우기</div>
+    <ul style="margin:4px 0;padding-left:20px;color:var(--text-dim);">
+      <li><b>최상위 지역 ID (up_area_id)</b>: 이 맵 전체를 가리키는 ID예요. 지역ID들의 공통 앞부분을 자동으로 넣어드리니 맞으면 그대로 두세요.</li>
+      <li><b>출발점 지역 ID</b>: 플레이어가 이 맵에서 처음 시작하는 지역의 ID. 모르면 비워두세요(전부 'N'으로 들어갑니다).</li>
+      <li><b>재삽입 방식</b>: 아래 3번 참고.</li>
+    </ul>
+
+    <div style="font-weight:700;margin-top:14px;">2. [생성] → [전체 복사] → DB 도구에 붙여넣기</div>
+    <div style="color:var(--text-dim);">HeidiSQL · DBeaver · phpMyAdmin · MySQL Workbench 같은 <b>DB 관리 도구의 SQL 실행창</b>에 붙여넣고 실행하세요. 실행 전에 <b>올바른 데이터베이스가 선택돼 있는지</b>, <code>bot_area</code> 테이블이 있는지 꼭 확인하세요.</div>
+
+    <div style="font-weight:700;margin-top:14px;">3. '재삽입 방식'이 뭐예요?</div>
+    <ul style="margin:4px 0;padding-left:20px;color:var(--text-dim);">
+      <li><b>INSERT IGNORE</b> (기본·안전): 같은 지역ID가 이미 있으면 <b>건너뜁니다</b>. 실수로 두 번 실행해도 안전해요.</li>
+      <li><b>INSERT</b>: 같은 지역ID가 이미 있으면 <b>오류</b>가 납니다(새로 넣을 때만).</li>
+      <li><b>ON DUPLICATE KEY UPDATE</b>: 같은 지역ID가 있으면 <b>최신 내용으로 덮어씁니다</b>(수정 반영용).</li>
+    </ul>
+
+    <div style="font-weight:700;margin-top:14px;">4. 검증 리포트</div>
+    <div style="color:var(--text-dim);">생성 시 <b>오류가 날 행을 미리 걸러내고</b> 무엇이 문제인지 알려줍니다. 자주 나오는 것:
+      <ul style="margin:4px 0;padding-left:20px;">
+        <li><b>길이 초과</b>: 지역명·인접ID 등이 컬럼 한도(예: 100자)를 넘음 → 데이터를 줄이세요.</li>
+        <li><b>4바이트 문자(이모지 등)</b>: 이 테이블은 <code>utf8</code>이라 이모지를 못 담아요 → 해당 글자를 빼거나, 테이블을 <code>utf8mb4</code>로 바꾸세요.</li>
+        <li><b>숫자칸 오류</b>: 목표치·골드·경험치 등 숫자 칸에 글자가 들어감 → 숫자만 남기세요.</li>
+      </ul>
+      걸러진 행은 SQL에 안 들어가므로 <b>실행 시 오류가 나지 않습니다.</b> 리포트에서 문제를 고친 뒤 다시 생성하면 됩니다.</div>
+
+    <div style="font-weight:700;margin-top:14px;">5. 데이터가 아주 많다면</div>
+    <div style="color:var(--text-dim);">100행씩 나눠서 문장을 만듭니다. 그래도 실행 중 <code>max_allowed_packet</code> 오류가 나면 문장을 몇 개씩 나눠 실행하세요.</div>
+  </div>
+</div>
+
 <div id="topbar">
   <input id="toolTitleInput" type="text" value="빛의왕국 탐사맵 편집기">
   <div class="sep"></div>
@@ -521,6 +607,7 @@
     </div>
   </div>
   <button class="primary" id="btnExportXlsx">엑셀로 내보내기</button>
+  <button class="ghost" id="btnExportSql" title="지역 데이터를 bot_area 테이블용 INSERT SQL로 내보내기">SQL 내보내기</button>
   <button class="ghost" id="btnImportXlsx">엑셀 불러오기</button>
   <button class="ghost" id="btnNewProject">새 프로젝트</button>
   <button class="ghost" id="btnProjectList">프로젝트 목록</button>
@@ -4229,6 +4316,160 @@ statCols();
 saveState(false);
 render();
 initCloud().catch(function(err){ console.error(err); setCloudStatus('연결 실패'); document.getElementById('authOverlay').style.display='flex'; document.getElementById('authMsg').textContent='Supabase 초기화 실패: '+(err.message||err); });
+
+/* =========================================================
+   bot_area SQL 내보내기 (지역 데이터 -> INSERT문 + 검증)
+   ========================================================= */
+// MySQL/MariaDB 문자열 이스케이프(작은따옴표로 감쌀 값)
+function sqlEscape(s){
+  return String(s).replace(/[\0\b\t\n\r\x1a\\']/g, function(c){
+    return {'\0':'\\0','\b':'\\b','\t':'\\t','\n':'\\n','\r':'\\r','\x1a':'\\Z','\\':'\\\\',"'":"\\'"}[c];
+  });
+}
+// utf8(=utf8mb3, 3바이트) 테이블은 4바이트 문자(이모지 등)를 저장하면 오류가 난다
+function sqlHasAstral(s){ return /[\u{10000}-\u{10FFFF}]/u.test(String(s)); }
+var BOT_AREA_COLS = ['up_area_id','start_point','parent_area_id','area_id','area_name','adjacent_id','incounter_cd','area_cn','target_roll','succ_cn','fail_cn','open_race','race_fail_cn','key_yn','key_id','item_id','item_drop','gold_drop','area_exp','deal_item_id','deal_gold','first_check_yn','check_fail_cn','open_target','area_comment'];
+
+function sqlDeriveUpAreaId(){
+  var H=DATA.sheet1.headers, ai=H.indexOf('지역ID'), ids=[];
+  DATA.sheet1.rows.forEach(function(r){ var v=r[ai]; if(v) ids.push(String(v)); });
+  if(!ids.length) return '';
+  var pre=ids[0];
+  ids.forEach(function(id){ var k=0; while(k<pre.length&&k<id.length&&pre[k]===id[k])k++; pre=pre.slice(0,k); });
+  var cut=pre.lastIndexOf('_'); if(cut>0) pre=pre.slice(0,cut);
+  return pre;
+}
+function sqlSuggestStart(){
+  var H=DATA.sheet1.headers, pi=H.indexOf('상위지역ID(부모ID)'), ai=H.indexOf('지역ID');
+  var rows=DATA.sheet1.rows;
+  for(var i=0;i<rows.length;i++){ var p=rows[i][pi]; if(p==null||String(p).trim()===''){ return String(rows[i][ai]||''); } }
+  return '';
+}
+
+function buildBotAreaSql(opts){
+  var H=DATA.sheet1.headers, rows=DATA.sheet1.rows;
+  var idx={}; H.forEach(function(h,i){ idx[h]=i; });
+  function col(row,name){ var i=idx[name]; return (i==null)?null:row[i]; }
+  var LIMIT={parent_area_id:100,area_id:100,area_name:100,adjacent_id:100,key_id:100,item_id:100,deal_item_id:100,incounter_cd:35,open_race:5,item_drop:10};
+  var errors=[],warnings=[],valueRows=[],seen={},skipped=0,moveSkipped=0;
+  var upAreaId=(opts.upAreaId||'').trim(), startId=(opts.startPoint||'').trim();
+
+  if(!upAreaId) warnings.push("up_area_id(최상위 지역 ID)가 비어 있어 모든 행 up_area_id=NULL로 들어갑니다.");
+  else { if(upAreaId.length>100) errors.push("up_area_id가 100자를 초과합니다."); if(sqlHasAstral(upAreaId)) errors.push("up_area_id에 4바이트 문자(이모지 등)가 있습니다."); }
+
+  for(var r=0;r<rows.length;r++){
+    var row=rows[r];
+    var areaId=col(row,'지역ID'); areaId=(areaId==null)?'':String(areaId);
+    var incounter=col(row,'종류 코드'); incounter=incounter==null?'':String(incounter);
+    var nm=col(row,'지역명'); nm=nm==null?'':String(nm);
+    var label='행 '+(r+1)+(areaId?' ['+areaId+']':'')+(nm?' '+nm:'');
+    if(!areaId){ skipped++; warnings.push(label+': 지역ID 없음 → 제외'); continue; }
+    if(!opts.includeMove && incounter==='INCUNTR_99'){ moveSkipped++; continue; }
+    if(seen[areaId]){ warnings.push(label+': 지역ID 중복 → 두 번째부터 제외'); continue; }
+    seen[areaId]=true;
+
+    var e=[], vals={};
+    vals.up_area_id = upAreaId ? "'"+sqlEscape(upAreaId)+"'" : 'NULL';
+    vals.start_point = (startId && areaId===startId) ? "'Y'" : "'N'";
+    function pStr(cn,h){ var v=col(row,h); if(v==null||v===''){vals[cn]='NULL';return;} v=String(v); if(sqlHasAstral(v))e.push(cn+'에 4바이트 문자'); var L=LIMIT[cn]; if(L&&v.length>L)e.push(cn+' 길이 '+v.length+'>'+L); vals[cn]="'"+sqlEscape(v)+"'"; }
+    function pTxt(cn,h){ var v=col(row,h); if(v==null||v===''){vals[cn]='NULL';return;} v=String(v); if(sqlHasAstral(v))e.push(cn+'에 4바이트 문자(이모지 등)'); vals[cn]="'"+sqlEscape(v)+"'"; }
+    function pInt(cn,h){ var v=col(row,h); if(v==null||String(v).trim()===''){vals[cn]='NULL';return;} var s=String(v).trim(); if(!/^-?\d+$/.test(s)){e.push(cn+'(숫자 칸)에 비숫자 값 "'+s.slice(0,16)+'"');vals[cn]='NULL';return;} vals[cn]=s; }
+    function pYN(cn,h){ var s=(col(row,h)==null?'':String(col(row,h))).trim().toUpperCase(); if(s==='Y'){vals[cn]="'Y'";} else if(s===''||s==='N'){vals[cn]="'N'";} else {warnings.push(label+': '+cn+' "'+s.slice(0,8)+'" → N 처리'); vals[cn]="'N'";} }
+
+    // area_id (필수·varchar100)
+    if(areaId.length>100)e.push('area_id 길이>100'); if(sqlHasAstral(areaId))e.push('area_id에 4바이트 문자'); vals.area_id="'"+sqlEscape(areaId)+"'";
+    pStr('parent_area_id','상위지역ID(부모ID)');
+    pStr('area_name','지역명');
+    pStr('adjacent_id','인접 지역');
+    if(incounter===''){vals.incounter_cd='NULL';} else { if(incounter.length>35)e.push('incounter_cd 길이>35'); if(sqlHasAstral(incounter))e.push('incounter_cd 4바이트'); vals.incounter_cd="'"+sqlEscape(incounter)+"'"; }
+    pTxt('area_cn','스크립트(내용)');
+    pInt('target_roll','주사위 목표치');
+    pTxt('succ_cn','성공 스크립트');
+    pTxt('fail_cn','실패 스크립트');
+    pStr('open_race','종족 전용');
+    pTxt('race_fail_cn','종족이 아닐 때 스크립트');
+    pYN('key_yn','키아이템 필요 여부');
+    pStr('key_id','키아이템 ID');
+    pStr('item_id','파밍 아이템 ID');
+    pStr('item_drop','파밍 아이템 수');
+    pInt('gold_drop','파밍 골드');
+    pInt('area_exp','파밍 경험치');
+    pStr('deal_item_id','지역거래 시, 교단원이 낼 아이템ID');
+    pInt('deal_gold','지역거래 시, 교단원이 낼 골드 상한가');
+    pYN('first_check_yn','최초 탐사 여부');
+    pTxt('check_fail_cn','최초 탐사가 아닐 시 실패 스크립트');
+    pInt('open_target','개방 조건');
+    pTxt('area_comment','비고');
+
+    if(e.length){ errors.push(label+': '+e.join(', ')); continue; }
+    valueRows.push(vals);
+  }
+
+  var mode=opts.mode||'ignore';
+  var head=(mode==='ignore'?'INSERT IGNORE INTO':'INSERT INTO')+' bot_area';
+  var tail=''; if(mode==='upsert'){ tail='\nON DUPLICATE KEY UPDATE '+BOT_AREA_COLS.filter(function(c){return c!=='area_id';}).map(function(c){return c+'=VALUES('+c+')';}).join(', '); }
+  var colList='('+BOT_AREA_COLS.join(', ')+')';
+  var sql='';
+  if(!valueRows.length){ sql='-- 생성할 유효한 지역 행이 없습니다. (아래 리포트 확인)'; }
+  for(var b=0;b<valueRows.length;b+=100){
+    var chunk=valueRows.slice(b,b+100).map(function(v){ return '('+BOT_AREA_COLS.map(function(c){return v[c];}).join(', ')+')'; });
+    sql+=head+'\n'+colList+' VALUES\n'+chunk.join(',\n')+tail+';\n\n';
+  }
+  return { sql:sql.trim(), report:{ total:rows.length, inserted:valueRows.length, errorRows:errors.length, skipped:skipped, moveSkipped:moveSkipped, errors:errors, warnings:warnings } };
+}
+
+(function wireSqlExport(){
+  function show(id){ document.getElementById(id).style.display='flex'; }
+  function hide(id){ document.getElementById(id).style.display='none'; }
+  var lastSql='';
+  var btn=document.getElementById('btnExportSql');
+  if(btn) btn.addEventListener('click', function(){
+    if(!DATA||!DATA.sheet1){ toast('지역 데이터가 없습니다.'); return; }
+    var up=document.getElementById('sqlUpAreaId'); if(!up.value) up.value=sqlDeriveUpAreaId();
+    var st=document.getElementById('sqlStartPoint'); if(!st.value) st.value=sqlSuggestStart();
+    document.getElementById('sqlReport').innerHTML='';
+    document.getElementById('sqlOutput').value='';
+    show('sqlExportModal');
+  });
+  document.getElementById('btnSqlClose').addEventListener('click', function(){ hide('sqlExportModal'); });
+  document.getElementById('sqlExportModal').addEventListener('click', function(e){ if(e.target===this) hide('sqlExportModal'); });
+  document.getElementById('btnSqlManual').addEventListener('click', function(){ show('sqlManualModal'); });
+  document.getElementById('btnSqlManualClose').addEventListener('click', function(){ hide('sqlManualModal'); });
+  document.getElementById('sqlManualModal').addEventListener('click', function(e){ if(e.target===this) hide('sqlManualModal'); });
+
+  document.getElementById('btnSqlGenerate').addEventListener('click', function(){
+    var out=buildBotAreaSql({
+      upAreaId: document.getElementById('sqlUpAreaId').value,
+      startPoint: document.getElementById('sqlStartPoint').value,
+      mode: document.getElementById('sqlMode').value,
+      includeMove: document.getElementById('sqlIncludeMove').checked
+    });
+    lastSql=out.sql;
+    document.getElementById('sqlOutput').value=out.sql;
+    var rp=out.report, esc=function(s){return String(s).replace(/[&<>]/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[m];});};
+    var html='<div style="padding:8px 10px;border-radius:4px;background:'+(rp.errorRows? 'var(--coral-soft)':'var(--success-soft)')+';border:1px solid var(--border);">';
+    html+='<b>생성 완료</b> · 전체 '+rp.total+'행 → <b style="color:var(--success)">'+rp.inserted+'행 INSERT</b>';
+    if(rp.errorRows) html+=' · <b style="color:var(--coral)">'+rp.errorRows+'행 오류로 제외</b>';
+    if(rp.skipped) html+=' · '+rp.skipped+'행 지역ID없음';
+    if(rp.moveSkipped) html+=' · '+rp.moveSkipped+"행 '이동한다' 제외";
+    html+='</div>';
+    if(rp.errors.length){ html+='<details open style="margin-top:6px;"><summary style="cursor:pointer;color:var(--coral);font-weight:600;">제외된 오류 행 '+rp.errors.length+'건 (고친 뒤 다시 생성)</summary><div style="max-height:120px;overflow:auto;font-size:11px;color:var(--text-dim);margin-top:4px;white-space:pre-wrap;">'+rp.errors.map(esc).join('\n')+'</div></details>'; }
+    if(rp.warnings.length){ html+='<details style="margin-top:6px;"><summary style="cursor:pointer;color:var(--amber);font-weight:600;">경고 '+rp.warnings.length+'건</summary><div style="max-height:100px;overflow:auto;font-size:11px;color:var(--text-dim);margin-top:4px;white-space:pre-wrap;">'+rp.warnings.map(esc).join('\n')+'</div></details>'; }
+    document.getElementById('sqlReport').innerHTML=html;
+  });
+
+  document.getElementById('btnSqlCopy').addEventListener('click', function(){
+    var ta=document.getElementById('sqlOutput'); if(!ta.value){ toast('먼저 [생성]을 눌러주세요.'); return; }
+    if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(ta.value).then(function(){toast('SQL을 복사했습니다.');},function(){ ta.select();document.execCommand('copy');toast('SQL을 복사했습니다.'); }); }
+    else { ta.select(); document.execCommand('copy'); toast('SQL을 복사했습니다.'); }
+  });
+  document.getElementById('btnSqlDownload').addEventListener('click', function(){
+    var ta=document.getElementById('sqlOutput'); if(!ta.value){ toast('먼저 [생성]을 눌러주세요.'); return; }
+    var blob=new Blob([ta.value],{type:'text/plain;charset=utf-8'});
+    var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='bot_area_insert.sql';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a); setTimeout(function(){URL.revokeObjectURL(a.href);},1000);
+  });
+})();
 })();
 
 </script>
