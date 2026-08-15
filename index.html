@@ -357,6 +357,16 @@
   .canvasEdge{stroke:var(--border-strong);stroke-width:1.5;fill:none;}
   .canvasEdge.succEdge{stroke:var(--success);}
   .canvasEdge.failEdge{stroke:#c0392b;}
+  .typeTag.trade{background:#f0eafc;color:#6b46c1;}
+  .typeTag.dice{background:#fdf3dd;color:#b8860b;}
+  .typeTag.farm{background:#e8f7ee;color:#1a8a4a;}
+  .typeTag.warn{background:#fff3cd;color:#8a6d1a;}
+  .typeTag.firstExplore{background:#eaefff;color:#3457d5;}
+  .typeTag.race{background:#fbeae5;color:#c65b3f;}
+  .requiredMark{color:#c0392b;font-weight:800;margin-left:2px;}
+
+  .requiredMark{color:#c0392b;font-weight:800;margin-left:2px;}
+  .fieldRow2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
   .canvasNode{
     position:absolute;width:150px;background:var(--surface);border:1px solid var(--border-strong);
     border-radius:2px;padding:8px 10px;cursor:grab;font-size:12px;box-shadow:0 1px 3px rgba(0,0,0,.08);
@@ -2274,6 +2284,8 @@ function renderClusterCanvasScreen(main, crumb){
     if(row[C['파밍 아이템 ID']]){ var m1=document.createElement('span'); m1.style.cssText='background:var(--success-soft);color:var(--success);'; m1.textContent='획득'; metaDiv.appendChild(m1); }
     if(row[C['키아이템 필요 여부']]==='Y'||row[C['키아이템 필요 여부']]==='y'){ var m2=document.createElement('span'); m2.style.cssText='background:#fde8e8;color:#c0392b;'; m2.textContent='열쇠'; metaDiv.appendChild(m2); }
     if(metaDiv.children.length) box.appendChild(metaDiv);
+    typeTagsForRow(row).forEach(function(t){var mt=document.createElement('span');mt.className='typeTag '+t.cls;mt.textContent=t.text;if(t.title)mt.title=t.title;metaDiv.appendChild(mt);});
+    if(metaDiv.children.length) box.appendChild(metaDiv);
 
     nodeEls[rid] = box;
     inner.appendChild(box);
@@ -2447,6 +2459,7 @@ function renderClusterScreen(main, crumb){
     if(currentRow[C['파밍 아이템 ID']]){ var b2=document.createElement('span'); b2.className='badge farm'; b2.textContent='획득'; ccMeta.appendChild(b2); }
     if(currentRow[C['키아이템 필요 여부']]==='Y'||currentRow[C['키아이템 필요 여부']]==='y'){ var b3=document.createElement('span'); b3.className='badge key'; b3.textContent='열쇠 필요'; ccMeta.appendChild(b3); }
     var b4=document.createElement('span'); b4.className='badge typecode'; b4.textContent=currentRow[C['종류 코드']]||''; ccMeta.appendChild(b4);
+    typeTagsForRow(currentRow).forEach(function(t){var bt=document.createElement('span');bt.className='badge typeTag '+t.cls;bt.textContent=t.text;if(t.title)bt.title=t.title;ccMeta.appendChild(bt);});
     if(currentRow[C['비고']] && currentRow[C['비고']].trim()){
       var b5=document.createElement('span'); b5.className='badge note'; b5.textContent='!'; b5.title='비고 있음';
       attachTooltip(b5, function(){ return '<div class="tt-row"><b>비고</b></div><div class="tt-row">'+escapeHtml(currentRow[C['비고']])+'</div>'; });
@@ -2647,7 +2660,63 @@ function fieldInput(label, value, onChange){
   wrap.appendChild(l); wrap.appendChild(inp);
   return wrap;
 }
-var TYPE_CODES = ['INCUNTR_00','INCUNTR_02','INCUNTR_03_ALL','INCUNTR_03_STR','INCUNTR_03_DEX','INCUNTR_03_WIS','INCUNTR_99'];
+var TYPE_CODES = ['INCUNTR_00','INCUNTR_02','INCUNTR_03_ALL','INCUNTR_03_STR','INCUNTR_03_DEX','INCUNTR_03_WIS','INCUNTR_04_IG','INCUNTR_04_II','INCUNTR_04_GI','INCUNTR_99'];
+
+function typeCodesArray(raw){ return String(raw||'').split(',').map(function(s){return s.trim();}).filter(Boolean); }
+function isDiceType(raw){ return typeCodesArray(raw).some(function(c){return c.indexOf('INCUNTR_03_')===0;}); }
+function isTradeType(raw){ return typeCodesArray(raw).some(function(c){return c==='INCUNTR_04_IG'||c==='INCUNTR_04_II'||c==='INCUNTR_04_GI';}); }
+function is04IGGI(raw){ var a=typeCodesArray(raw); return a.indexOf('INCUNTR_04_IG')!==-1 || a.indexOf('INCUNTR_04_GI')!==-1; }
+function is04II(raw){ return typeCodesArray(raw).indexOf('INCUNTR_04_II')!==-1; }
+function isFirstExploration(row){ return String(row[C['최초 탐사 여부']]||'').trim().toUpperCase()==='Y'; }
+function raceCode(row){ return String(row[C['종족 전용']]||'').trim(); }
+function nodeValidation(row){
+  var code=String(row[C['종류 코드']]||''), missing=[];
+  if(isDiceType(code)&&!String(row[C['주사위 목표치']]||'').trim())missing.push('주사위 목표치');
+  if(is04IGGI(code)){
+    if(!String(row[C['지역거래 시, 교단원이 낼 아이템ID']]||'').trim())missing.push('교단원이 낼 아이템');
+    if(!String(row[C['지역거래 시, 교단원이 낼 골드 상한가']]||'').trim())missing.push('교단원이 낼 골드 상한가');
+  }
+  if(is04II(code)){
+    if(!String(row[C['파밍 아이템 ID']]||'').trim())missing.push('파밍 아이템');
+    if(!String(row[C['지역거래 시, 교단원이 낼 아이템ID']]||'').trim())missing.push('교단원이 낼 아이템');
+  }
+  if(isFirstExploration(row)&&!String(row[C['최초 탐사가 아닐 시 실패 스크립트']]||'').trim())missing.push('최초 탐사가 아닐 시 실패 스크립트');
+  if(raceCode(row)&&!String(row[C['종족이 아닐 때 스크립트']]||'').trim())missing.push('종족이 아닐 때 스크립트');
+  return missing;
+}
+function typeTagsForRow(row){
+  var tags=[],code=String(row[C['종류 코드']]||'');
+  if(isTradeType(code))tags.push({text:'거래',cls:'trade'});
+  if(isDiceType(code))tags.push({text:'다이스',cls:'dice'});
+  if(code.indexOf('INCUNTR_02')===0&&String(row[C['파밍 아이템 ID']]||'').trim())tags.push({text:'파밍',cls:'farm'});
+  if(isFirstExploration(row))tags.push({text:'최초 탐사',cls:'firstExplore'});
+  if(raceCode(row))tags.push({text:'종족 전용 '+raceCode(row),cls:'race'});
+  var m=nodeValidation(row);
+  if(m.length)tags.push({text:'⚠ 필수 '+m.length+'건',cls:'warn',title:m.join(', ')});
+  return tags;
+}
+function itemSelectField(label,value,onChange,required){ var w=document.createElement('div');w.className='field';var l=document.createElement('label');l.innerHTML=escapeHtml(label)+(required?'<span class="requiredMark">*</span>':'');w.appendChild(l);var sel=document.createElement('select');sel.style.cssText='border:1px solid var(--border-strong);border-radius:2px;padding:7px 9px;font-size:12.5px;background:var(--bg);font-family:var(--sans);width:100%;box-sizing:border-box;';var b=document.createElement('option');b.value='';b.textContent='선택하세요';sel.appendChild(b);var rows=(DATA.items.rows||[]).concat(DATA.keyItems.rows||[]),seen={};rows.forEach(function(r){var id=String(r[0]||'');if(!id||seen[id])return;seen[id]=1;var o=document.createElement('option');o.value=id;o.textContent='['+id+'] '+String(r[1]||'');if(String(value||'')===id)o.selected=true;sel.appendChild(o);});if(value&&!seen[String(value)]){var ox=document.createElement('option');ox.value=String(value);ox.textContent='['+value+'] (목록에 없음)';ox.selected=true;sel.appendChild(ox);}sel.addEventListener('change',function(){onChange(sel.value);markDirty();});w.appendChild(sel);return w;}
+function firstExplorationField(row){
+  var w=document.createElement('div');w.className='field';
+  var l=document.createElement('label');l.textContent='최초 탐사 여부';w.appendChild(l);
+  var label=document.createElement('label');label.style.cssText='display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:500;cursor:pointer;';
+  var cb=document.createElement('input');cb.type='checkbox';cb.checked=isFirstExploration(row);
+  cb.addEventListener('change',function(){row[C['최초 탐사 여부']]=cb.checked?'Y':'N';markDirty();refreshNodeEditorTags(row);});
+  label.appendChild(cb);var t=document.createElement('span');t.textContent=cb.checked?'Y — 최초 탐사 노드':'N — 일반 탐사 노드';label.appendChild(t);
+  cb.addEventListener('change',function(){t.textContent=cb.checked?'Y — 최초 탐사 노드':'N — 일반 탐사 노드';});
+  w.appendChild(label);return w;
+}
+function raceSpecificField(row){
+  var w=document.createElement('div');w.className='field';
+  var l=document.createElement('label');l.textContent='종족 전용 여부';w.appendChild(l);
+  var sel=document.createElement('select');sel.style.cssText='border:1px solid var(--border-strong);border-radius:2px;padding:7px 9px;font-size:12.5px;background:var(--bg);font-family:var(--sans);width:100%;box-sizing:border-box;';
+  [['','없음'],['H_ALL','H_ALL'],['VAM','VAM'],['GAG','GAG'],['BAN','BAN'],['CYC','CYC']].forEach(function(x){var o=document.createElement('option');o.value=x[0];o.textContent=x[1];if(String(row[C['종족 전용']]||'')===x[0])o.selected=true;sel.appendChild(o);});
+  sel.addEventListener('change',function(){row[C['종족 전용']]=sel.value;markDirty();refreshNodeEditorTags(row);});
+  w.appendChild(sel);var h=document.createElement('div');h.style.cssText='font-size:10px;color:var(--text-faint);margin-top:3px;';h.textContent='값이 있으면 「종족이 아닐 때 스크립트」가 필수입니다.';w.appendChild(h);return w;
+}
+function multiTypeCodeField(row){ var w=document.createElement('div');w.className='field';var l=document.createElement('label');l.textContent='종류 코드';w.appendChild(l);var cur=typeCodesArray(row[C['종류 코드']]),sel=document.createElement('select');sel.multiple=true;sel.size=7;sel.style.cssText='border:1px solid var(--border-strong);border-radius:2px;padding:5px;background:var(--bg);font-family:var(--mono);font-size:12px;width:100%;box-sizing:border-box;';TYPE_CODES.forEach(function(x){var o=document.createElement('option');o.value=x;o.textContent=x;if(cur.indexOf(x)!==-1)o.selected=true;sel.appendChild(o);});sel.addEventListener('change',function(){var v=Array.prototype.map.call(sel.selectedOptions,function(o){return o.value;}),d=v.filter(function(x){return x.indexOf('INCUNTR_03_')===0;});if(d.length)v=v.filter(function(x){return x.indexOf('INCUNTR_03_')!==0;}).concat(d);row[C['종류 코드']]=v.join(',');markDirty();refreshNodeEditorTags(row);});w.appendChild(sel);var h=document.createElement('div');h.style.cssText='font-size:10px;color:var(--text-faint);margin-top:3px;';h.textContent='03 계열은 여러 능력치를 동시에 선택할 수 있습니다.';w.appendChild(h);return w;}
+function refreshNodeEditorTags(row){var e=document.getElementById('nodeValidationTags');if(!e)return;e.innerHTML='';typeTagsForRow(row).forEach(function(t){var b=document.createElement('span');b.className='badge typeTag '+t.cls;b.textContent=t.text;if(t.title)b.title=t.title;e.appendChild(b);});}
+
 function fieldSelect(label, value, options, onChange){
   var wrap = document.createElement('div'); wrap.className='field';
   var l = document.createElement('label'); l.textContent = label;
@@ -2789,27 +2858,34 @@ function renderNodePanel(topId, rowId){
   if(isLockedHeader || isLockedMove){
     r[C['종류 코드']] = isLockedHeader ? 'INCUNTR_00' : 'INCUNTR_99';
     var lockedField = fieldSelect('종류 코드', r[C['종류 코드']], TYPE_CODES, function(){});
-    var lockedSel = lockedField.querySelector('select');
-    lockedSel.disabled = true;
-    var lockedNote = document.createElement('div');
-    lockedNote.style.cssText = 'font-size:10px;color:var(--text-faint);margin-top:2px;';
-    lockedNote.textContent = isLockedHeader ? '지역 시작 노드는 항상 INCUNTR_00으로 고정돼요' : '이동한다 노드는 항상 INCUNTR_99로 고정돼요';
-    lockedField.appendChild(lockedNote);
-    diceRow.appendChild(lockedField);
-  } else {
-    diceRow.appendChild(fieldSelect('종류 코드', r[C['종류 코드']], TYPE_CODES, function(v){ r[C['종류 코드']]=v; }));
-  }
-  diceRow.appendChild(fieldInput('주사위 목표치', r[C['주사위 목표치']], function(v){ r[C['주사위 목표치']]=v; }));
+    var lockedSel = lockedField.querySelector('select'); lockedSel.disabled = true;
+    var lockedNote = document.createElement('div'); lockedNote.style.cssText='font-size:10px;color:var(--text-faint);margin-top:2px;';
+    lockedNote.textContent=isLockedHeader?'지역 시작 노드는 항상 INCUNTR_00으로 고정돼요':'이동한다 노드는 항상 INCUNTR_99로 고정돼요'; lockedField.appendChild(lockedNote); diceRow.appendChild(lockedField);
+  } else { diceRow.appendChild(multiTypeCodeField(r)); }
+  diceRow.appendChild(fieldInput('주사위 목표치'+(isDiceType(r[C['종류 코드']])?' *':''), r[C['주사위 목표치']], function(v){r[C['주사위 목표치']]=v;refreshNodeEditorTags(r);}));
   body.appendChild(diceRow);
+  var validationTags=document.createElement('div');validationTags.id='nodeValidationTags';validationTags.style.cssText='display:flex;gap:5px;flex-wrap:wrap;align-items:center;';body.appendChild(validationTags);
 
   body.appendChild(scriptFieldEditor('성공 스크립트', topId, r, '성공 스크립트'));
   body.appendChild(scriptFieldEditor('실패 스크립트', topId, r, '실패 스크립트'));
 
-  var farmRow3 = document.createElement('div'); farmRow3.className='fieldRow3';
-  farmRow3.appendChild(fieldInput('파밍 아이템 ID', r[C['파밍 아이템 ID']], function(v){ r[C['파밍 아이템 ID']]=v; }));
-  farmRow3.appendChild(fieldInput('파밍 아이템 수', r[C['파밍 아이템 수']], function(v){ r[C['파밍 아이템 수']]=v; }));
-  farmRow3.appendChild(fieldInput('파밍 골드', r[C['파밍 골드']], function(v){ r[C['파밍 골드']]=v; }));
-  body.appendChild(farmRow3);
+  var farmRow1=document.createElement('div');farmRow1.className='fieldRow';
+  farmRow1.appendChild(itemSelectField('파밍 아이템',r[C['파밍 아이템 ID']],function(v){r[C['파밍 아이템 ID']]=v;refreshNodeEditorTags(r);},is04II(r[C['종류 코드']])));
+  farmRow1.appendChild(fieldInput('파밍 아이템 수',r[C['파밍 아이템 수']],function(v){r[C['파밍 아이템 수']]=v;}));body.appendChild(farmRow1);
+  var farmRow2=document.createElement('div');farmRow2.className='fieldRow2';
+  farmRow2.appendChild(fieldInput('파밍 골드',r[C['파밍 골드']],function(v){r[C['파밍 골드']]=v;}));
+  farmRow2.appendChild(fieldInput('파밍 경험치',r[C['파밍 경험치']],function(v){r[C['파밍 경험치']]=v;}));body.appendChild(farmRow2);
+  var tradeRow=document.createElement('div');tradeRow.className='fieldRow';
+  tradeRow.appendChild(itemSelectField('지역거래 시, 교단원이 낼 아이템',r[C['지역거래 시, 교단원이 낼 아이템ID']],function(v){r[C['지역거래 시, 교단원이 낼 아이템ID']]=v;refreshNodeEditorTags(r);},isTradeType(r[C['종류 코드']])));
+  tradeRow.appendChild(fieldInput('지역거래 시, 교단원이 낼 골드 상한가'+(is04IGGI(r[C['종류 코드']])?' *':''),r[C['지역거래 시, 교단원이 낼 골드 상한가']],function(v){r[C['지역거래 시, 교단원이 낼 골드 상한가']]=v;refreshNodeEditorTags(r);}));body.appendChild(tradeRow);
+
+  var conditionRow = document.createElement('div'); conditionRow.className='fieldRow';
+  conditionRow.appendChild(firstExplorationField(r));
+  conditionRow.appendChild(raceSpecificField(r));
+  body.appendChild(conditionRow);
+
+  body.appendChild(fieldTextarea('최초 탐사가 아닐 시 실패 스크립트'+(isFirstExploration(r)?' *':''), r[C['최초 탐사가 아닐 시 실패 스크립트']], function(v){ r[C['최초 탐사가 아닐 시 실패 스크립트']]=v; refreshNodeEditorTags(r); }, 3));
+  body.appendChild(fieldTextarea('종족이 아닐 때 스크립트'+(raceCode(r)?' *':''), r[C['종족이 아닐 때 스크립트']], function(v){ r[C['종족이 아닐 때 스크립트']]=v; refreshNodeEditorTags(r); }, 3));
 
   var keyRow = document.createElement('div'); keyRow.className='fieldRow';
   keyRow.appendChild(fieldInput('키아이템 필요 여부', r[C['키아이템 필요 여부']], function(v){ r[C['키아이템 필요 여부']]=v; }));
@@ -2824,6 +2900,7 @@ function renderNodePanel(topId, rowId){
   }
 
   panel.appendChild(body);
+  refreshNodeEditorTags(r);
 }
 
 function renameNodeCascade(topId, oldName, newName){
@@ -2892,6 +2969,11 @@ function renderItemsScreen(main, crumb){
   var spacer2 = document.createElement('div'); spacer2.style.flex='1';
   toolbar.appendChild(spacer2);
 
+  var itemExportBtn = document.createElement('button'); itemExportBtn.className='ghost'; itemExportBtn.textContent='아이템 XLSX 내보내기';
+  itemExportBtn.addEventListener('click', function(){ exportItemsXlsx(); });
+  var itemImportBtn = document.createElement('button'); itemImportBtn.className='ghost'; itemImportBtn.textContent='아이템 XLSX 불러오기';
+  itemImportBtn.addEventListener('click', function(){ openSingleXlsxImport('itemsKey'); });
+  toolbar.appendChild(itemExportBtn); toolbar.appendChild(itemImportBtn);
   var addBtn = document.createElement('button'); addBtn.className='primary'; addBtn.textContent='+ 새 아이템';
   addBtn.addEventListener('click', function(){ addNewItem(false); });
   var addKeyBtn = document.createElement('button'); addKeyBtn.textContent='+ 새 키아이템';
@@ -3105,6 +3187,11 @@ function renderSubquestsScreen(main, crumb){
   toolbar.appendChild(viewGroup);
   var spacer3 = document.createElement('div'); spacer3.style.flex='1';
   toolbar.appendChild(spacer3);
+  var sqExportBtn = document.createElement('button'); sqExportBtn.className='ghost'; sqExportBtn.textContent='서브퀘스트 XLSX 내보내기';
+  sqExportBtn.addEventListener('click', function(){ exportSubquestsXlsx(); });
+  var sqImportBtn = document.createElement('button'); sqImportBtn.className='ghost'; sqImportBtn.textContent='서브퀘스트 XLSX 불러오기';
+  sqImportBtn.addEventListener('click', function(){ openSingleXlsxImport('subquests'); });
+  toolbar.appendChild(sqExportBtn); toolbar.appendChild(sqImportBtn);
   var addBtn = document.createElement('button'); addBtn.className='primary'; addBtn.textContent='+ 새 서브퀘스트';
   addBtn.addEventListener('click', addNewSubquest);
   toolbar.appendChild(addBtn);
@@ -3532,6 +3619,96 @@ async function reloadCurrentProjectFromCloud(){
   if(res.error) throw res.error;
   DATA=JSON.parse(JSON.stringify(res.data.data)); cloudBaseData=JSON.parse(JSON.stringify(DATA)); cloudVersion=res.data.version; applyUserPrefs(DATA); rebuildProjectView(); saveState(false);
 }
+
+/* =========================================================
+   SINGLE LIST XLSX IMPORT / EXPORT
+   ========================================================= */
+function downloadTableXlsx(sheetName, headers, rows, fileName){
+  var wb = XLSX.utils.book_new();
+  var ws = XLSX.utils.aoa_to_sheet([headers].concat(rows));
+  XLSX.utils.book_append_sheet(wb, ws, (sheetName || '데이터').slice(0,31));
+  XLSX.writeFile(wb, (fileName || 'export').replace(/[\\/:*?"<>|]/g,'_') + '.xlsx');
+}
+function exportItemsXlsx(){
+  var wb = XLSX.utils.book_new();
+  function add(name, table){
+    var ws = XLSX.utils.aoa_to_sheet([table.headers].concat(table.rows));
+    XLSX.utils.book_append_sheet(wb, ws, name.slice(0,31));
+  }
+  add('아이템', DATA.items);
+  add('키아이템', DATA.keyItems);
+  var fname = (exportName('fileName') || DEFAULT_EXPORT_NAMES.fileName) + '_아이템';
+  XLSX.writeFile(wb, fname.replace(/[\\/:*?"<>|]/g,'_') + '.xlsx');
+  toast('아이템·키아이템을 XLSX로 내보냈어요');
+}
+function exportSubquestsXlsx(){
+  var fname = (exportName('fileName') || DEFAULT_EXPORT_NAMES.fileName) + '_서브퀘스트';
+  downloadTableXlsx(exportName('subquests') || DEFAULT_EXPORT_NAMES.subquests, DATA.subquests.headers, DATA.subquests.rows, fname);
+  toast('서브퀘스트를 XLSX로 내보냈어요');
+}
+function openSingleXlsxImport(mode){
+  var input = document.createElement('input');
+  input.type = 'file'; input.accept = '.xlsx,.xls'; input.style.display='none';
+  document.body.appendChild(input);
+  input.addEventListener('change', function(){
+    var f = input.files && input.files[0];
+    input.remove();
+    if(f) importSingleXlsx(mode, f);
+  });
+  input.click();
+}
+function parsedTableForImport(wb, candidates, preferredIndex){
+  var hit = sheetToAOA(wb, candidates);
+  if(hit) return hit;
+  return sheetByPosition(wb, preferredIndex);
+}
+function normalizeImportedRows(table){
+  return table && table.headers ? {headers:table.headers.slice(), rows:table.rows.map(function(r){ return r.slice(); })} : null;
+}
+function importSingleXlsx(mode, file){
+  var reader = new FileReader();
+  reader.onload = function(){
+    try{
+      var wb = XLSX.read(reader.result, {type:'array'});
+      if(mode==='itemsKey'){
+        var sItems = parsedTableForImport(wb, [exportName('items'), DEFAULT_EXPORT_NAMES.items, '아이템'], 0);
+        var sKey = parsedTableForImport(wb, [exportName('keyItems'), DEFAULT_EXPORT_NAMES.keyItems, '키아이템'], 1);
+        if(!sItems && !sKey){ alert('아이템 또는 키아이템 시트를 찾지 못했어요.'); return; }
+        if(sItems && sItems.headers.indexOf('ID')===-1){
+          var maybeId = sItems.headers.findIndex(function(h){ return String(h).trim().toLowerCase()==='id'; });
+          if(maybeId===-1){ alert('아이템 시트에 ID 열이 없습니다.'); return; }
+        }
+        if(!sKey){ sKey = null; }
+        if(!sItems){ sItems = null; }
+        if(!confirm('아이템 XLSX를 불러오면 현재 아이템/키아이템 목록만 파일 내용으로 교체됩니다. 지도와 서브퀘스트는 유지됩니다. 계속할까요?')) return;
+        var oldImages = DATA.itemImages ? JSON.parse(JSON.stringify(DATA.itemImages)) : {};
+        if(sItems) DATA.items = normalizeImportedRows(sItems);
+        if(sKey) DATA.keyItems = normalizeImportedRows(sKey);
+        DATA.itemImages = {};
+        var keepIds = {};
+        DATA.items.rows.concat(DATA.keyItems.rows).forEach(function(r){ if(r[0]!==undefined && r[0]!==null && r[0]!=='') keepIds[String(r[0])] = true; });
+        Object.keys(oldImages).forEach(function(id){ if(keepIds[String(id)]) DATA.itemImages[id] = oldImages[id]; });
+        rebuildItemIndex(); rebuildAllCrossRefs(); statCols();
+        nav.itemId=null; nav.itemIsKey=false; nav.itemCat='전체';
+        markDirty(); render();
+        toast('아이템/키아이템 XLSX를 불러왔어요 · 기존 이미지는 같은 ID에 한해 유지했습니다');
+      }else if(mode==='subquests'){
+        var sSub = parsedTableForImport(wb, [exportName('subquests'), DEFAULT_EXPORT_NAMES.subquests, '서브퀘스트'], 0);
+        if(!sSub || sSub.headers.indexOf('ID')===-1){
+          alert('서브퀘스트 시트를 찾지 못했어요. 첫 번째 시트에 ID 열이 필요합니다.'); return;
+        }
+        if(!confirm('서브퀘스트 XLSX를 불러오면 현재 서브퀘스트 목록만 파일 내용으로 교체됩니다. 지도와 아이템은 유지됩니다. 계속할까요?')) return;
+        DATA.subquests = normalizeImportedRows(sSub);
+        rebuildSqIndex(); rebuildAllCrossRefs();
+        nav.sqId=null;
+        markDirty(); render();
+        toast('서브퀘스트 XLSX를 불러왔어요');
+      }
+    }catch(err){ alert('XLSX를 읽는 중 문제가 생겼어요: ' + (err.message||err)); }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
 
 /* =========================================================
    EXCEL EXPORT
