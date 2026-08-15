@@ -2207,9 +2207,25 @@ function autoLayoutNodes(topId, rootId, idSet, moveRowId){
 function renderClusterCanvasScreen(main, crumb){
   main.innerHTML=''; crumb.innerHTML='';
   var topId = nav.regionId;
-  var tree = DATA.regionsTree[topId];
+  if(!topId){
+    go({main:'map',view:'map',regionId:null,clusterIdx:null});
+    return;
+  }
+  // Defensive rebuild: remote/Yjs payloads may contain only sheet1 and derived
+  // regionsTree can be stale or absent. Always be able to reconstruct it.
+  if(!DATA.regionsTree || !DATA.regionsTree[topId] || !Array.isArray(DATA.regionsTree[topId].clusters)){
+    try{ rebuildRegionsTreeFromSheet1(); rebuildIndexes(); }catch(e){ console.error('graph tree rebuild failed', e); }
+  }
+  var tree = DATA.regionsTree && DATA.regionsTree[topId];
+  if(!tree || !Array.isArray(tree.clusters) || tree.clusters.length===0){
+    main.innerHTML='<div style="padding:24px;color:var(--text-faint);">이 지역의 그래프 데이터를 찾을 수 없습니다. 지역 데이터를 다시 불러와 주세요.</div>';
+    return;
+  }
+  var clusterIdx = Number.isInteger(nav.clusterIdx) ? nav.clusterIdx : 0;
+  if(clusterIdx < 0 || clusterIdx >= tree.clusters.length) clusterIdx = 0;
+  nav.clusterIdx = clusterIdx;
   var headerRow = regionHeaderRow(topId);
-  var cl = tree.clusters[nav.clusterIdx];
+  var cl = tree.clusters[clusterIdx];
   crumb.appendChild(crumbEl('지도', function(){ go({view:'map'}); }));
   crumb.appendChild(sep());
   crumb.appendChild(crumbEl(headerRow[C['지역명']], function(){ go({view:'region'}); }));
@@ -2243,13 +2259,25 @@ function renderClusterCanvasScreen(main, crumb){
   wrap.appendChild(canvasWrap);
   main.appendChild(wrap);
 
-  var nameToId = nameToIdByRegion[topId];
+  var nameToId = nameToIdByRegion[topId] || {};
   var rootId = nameToId[cl.root];
+  var idSet = {}; (cl.nodeIds||[]).forEach(function(id){ idSet[id]=true; });
+  // If an old/remote regionsTree has an invalid root name, derive a usable root
+  // from the cluster's nodes using indegree. This keeps graph view resilient.
+  if(!rootId || !idSet[rootId]){
+    var indegFallback = computeInDegrees(topId, idSet);
+    var candidates = Object.keys(idSet).filter(function(id){ return !indegFallback[id]; });
+    if(candidates.length) rootId = candidates[0];
+    else if(Object.keys(idSet).length) rootId = Object.keys(idSet)[0];
+    if(rootId){
+      var rootRow = DATA.sheet1.rows[rowById[rootId]];
+      if(rootRow){ cl.root = rootRow[C['지역명']]; }
+    }
+  }
   if(!rootId){
-    inner.innerHTML = '<div style="padding:20px;color:var(--text-faint);">이 세부지역을 표시할 수 없어요.</div>';
+    inner.innerHTML = '<div style="padding:20px;color:var(--text-faint);">그래프로 표시할 노드가 없습니다.</div>';
     return;
   }
-  var idSet = {}; cl.nodeIds.forEach(function(id){ idSet[id]=true; });
   var indeg = computeInDegrees(topId, idSet);
   var layout = autoLayoutNodes(topId, rootId, idSet, tree.moveRowId);
   var reachableIds = layout.order;
@@ -3630,6 +3658,7 @@ function applyRemoteData(incoming){
     localStorage.setItem(LS_KEY, JSON.stringify(DATA));
   }catch(e){ console.error('원격 데이터 인덱스 재구성 실패', e); }
   if(editing){ __collabPendingRender = true; return; }
+  try{ rebuildRegionsTreeFromSheet1(); rebuildIndexes(); rebuildItemIndex(); rebuildSqIndex(); rebuildAllCrossRefs(); }catch(e){ console.error('remote derived-data rebuild failed', e); }
   rebuildProjectView({preserveView:true});
 }
 function renderCollabPresence(states, selfId){
@@ -3783,7 +3812,9 @@ async function onCloudSignedIn(user){
     DATA.toolTitle = cloud.data.name || DATA.toolTitle || '빛의왕국 탐사맵 편집기';
     syncBranding(DATA.toolTitle);
     localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS)); localStorage.setItem(ACTIVE_PROJECT_KEY,PROJECT_ID);
-    applyUserPrefs(DATA); H1=DATA.sheet1.headers; C={}; H1.forEach(function(h,i){C[h]=i;}); rebuildProjectView({preserveView:true});
+    applyUserPrefs(DATA); H1=DATA.sheet1.headers; C={}; H1.forEach(function(h,i){C[h]=i;});
+    try{ rebuildRegionsTreeFromSheet1(); rebuildIndexes(); rebuildItemIndex(); rebuildSqIndex(); rebuildAllCrossRefs(); }catch(e){ console.error('login derived-data rebuild failed', e); }
+    rebuildProjectView({preserveView:true});
     await subscribeToProject(PROJECT_ID);
     await subscribeToProjectList();
     cloudReady=true; setCloudStatus('저장됨 · 실시간 연결');
