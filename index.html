@@ -1498,6 +1498,31 @@ function syncBranding(name){
   document.title = name;
   if(authBrandTitle) authBrandTitle.textContent = name;
 }
+// 프로젝트 "이름"은 Yjs 본문과 별개로 projects 테이블(목록 표시용)에도 반영해야
+// 다른 사용자의 프로젝트 목록에 실시간으로 나타난다. DB 반영이 실패해도 broadcast는
+// 계속 시도해 라이브 반영을 우선한다(과거 버전처럼 throw로 막지 않음).
+var projectNameSyncTimer = null;
+function scheduleProjectNameSync(){
+  if(!cloudProjectId || !cloudUser || !supabase) return;
+  clearTimeout(projectNameSyncTimer);
+  projectNameSyncTimer = setTimeout(pushProjectNameToCloud, 500);
+}
+async function pushProjectNameToCloud(){
+  if(!cloudProjectId || !cloudUser || !supabase) return;
+  var name = String(DATA.toolTitle || '새 프로젝트').trim() || '새 프로젝트';
+  if(PROJECTS[PROJECT_ID]){ PROJECTS[PROJECT_ID].name = name; PROJECTS[PROJECT_ID].updatedAt = Date.now(); try{ localStorage.setItem(PROJECTS_KEY, JSON.stringify(PROJECTS)); }catch(e){} }
+  var now = new Date().toISOString();
+  var meta = {id:cloudProjectId, name:name, updated_at:now};
+  try{
+    var res = await supabase.from('projects')
+      .update({name:name, updated_at:now, updated_by:cloudUser.id})
+      .eq('id', cloudProjectId)
+      .select('id,name,updated_at,version,owner_id').maybeSingle();
+    if(res.error) throw res.error;
+    if(res.data){ meta = {id:cloudProjectId, name:res.data.name||name, updated_at:res.data.updated_at||now, version:res.data.version, owner_id:res.data.owner_id}; }
+  }catch(e){ console.warn('프로젝트 이름 DB 반영 실패(실시간 broadcast는 계속 시도)', e); }
+  try{ await publishProjectListUpdate('UPDATE', meta); }catch(e){}
+}
 // Use the most recently known project name immediately, even before cloud initialization.
 syncBranding(currentProjectName());
 titleInput.addEventListener('input', function(){
@@ -1505,6 +1530,7 @@ titleInput.addEventListener('input', function(){
   DATA.toolTitle = name;
   syncBranding(name);
   if(COLLAB){ try{ COLLAB.push(DATA); }catch(e){ console.error(e); } }
+  scheduleProjectNameSync();   // 이름 변경을 다른 사용자 프로젝트 목록에 실시간 반영
   markDirty();
 });
 
