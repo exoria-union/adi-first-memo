@@ -240,6 +240,9 @@
     transition:transform .18s ease;display:flex;flex-direction:column;
   }
   #nodePanelOverlay.open #nodePanel{transform:translateX(0);}
+  #nodePanel .npIdBar{padding:8px 18px 7px;border-bottom:1px solid var(--border);background:var(--bg);display:flex;align-items:center;gap:8px;flex-shrink:0;font-size:11px;color:var(--text-dim);}
+  #nodePanel .npIdBar .npIdLabel{font-weight:700;color:var(--text-faint);letter-spacing:.02em;}
+  #nodePanel .npIdBar code{font-family:var(--mono);font-size:11.5px;color:var(--accent);font-weight:700;user-select:text;}
   #nodePanel .npHead{padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-shrink:0;}
   #nodePanel .npHead input{font-size:15px;font-weight:700;border:1px solid transparent;border-radius:2px;padding:4px 6px;flex:1;background:transparent;}
   #nodePanel .npHead input:focus{outline:none;border-color:var(--accent);background:var(--accent-soft);}
@@ -380,6 +383,8 @@
   .canvasNode:hover{border-color:var(--accent);box-shadow:0 3px 10px rgba(0,0,0,.14);z-index:5;}
   .canvasNode.dragging{cursor:grabbing;box-shadow:0 8px 20px rgba(0,0,0,.2);z-index:20;}
   .canvasNode.swapTarget{outline:2px dashed var(--accent);outline-offset:2px;background:var(--accent-soft);}
+  .canvasNode.hierarchySwapSelected{outline:3px solid var(--purple);outline-offset:3px;background:var(--purple-soft);box-shadow:0 0 0 1px rgba(107,70,193,.15),0 5px 16px rgba(107,70,193,.2);}
+  .canvasToolbar button.swapModeActive{background:var(--purple-soft);border-color:var(--purple);color:var(--purple);font-weight:700;}
   .canvasNode.moveNode{border-style:dashed;background:#fbfbfc;color:var(--text-dim);}
   .canvasNode.rootNode{border-color:var(--accent);background:var(--accent-soft);}
   .canvasNode.orphanNode{border-color:#d99a1f;border-style:dashed;background:#fdf6e8;}
@@ -2231,6 +2236,100 @@ function getReachableRowIds(topId, rootId, moveRowId){
   }
   return visited;
 }
+// 그래프에서 두 노드의 "내용"은 그대로 두고, 두 노드가 차지하는 연결 위치만 교체한다.
+// 즉 A가 B의 상위였다면 교체 뒤에는 B가 A의 상위가 된다.
+// 본문 서술/종류/아이템 등은 각 노드에 남고, ▶[지역/...] / ▶[진입/...] 링크만 구조에 맞게 이동한다.
+function splitScriptLinksDetailed(text){
+  var src = String(text||'');
+  var idx = src.search(/▶\[(?:지역|진입)\//);
+  var narrative = idx===-1 ? src : src.slice(0, idx).replace(/\n+$/,'');
+  var links = [], re = /▶\[(지역|진입)\/([^\]]+)\]/g, m;
+  while((m=re.exec(src))) links.push({keyword:m[1], name:m[2]});
+  return {narrative:narrative, links:links};
+}
+function joinScriptLinksDetailed(narrative, links){
+  var out = narrative || '';
+  var valid = (links||[]).filter(function(link){ return link && String(link.name||'').trim(); });
+  if(valid.length){
+    if(out) out += '\n\n';
+    out += valid.map(function(link){
+      return '▶['+(link.keyword||'지역')+'/'+String(link.name).trim()+']';
+    }).join('\n');
+  }
+  return out;
+}
+function hierarchySwapName(name, nameA, nameB){
+  if(name===nameA) return nameB;
+  if(name===nameB) return nameA;
+  return name;
+}
+function hierarchyRemapTargetsOnly(text, nameA, nameB){
+  if(!text) return text;
+  return String(text).replace(/▶\[(지역|진입)\/([^\]]+)\]/g, function(full, keyword, target){
+    return '▶['+keyword+'/'+hierarchySwapName(target, nameA, nameB)+']';
+  });
+}
+function swapNodeHierarchy(topId, ridA, ridB){
+  var tree = DATA.regionsTree[topId];
+  if(!tree || ridA===ridB) return false;
+  if(ridA===tree.headerRowId || ridB===tree.headerRowId){
+    alert('지역 시작 노드는 상하위 교체 대상에서 제외돼요.');
+    return false;
+  }
+  if(ridA===tree.moveRowId || ridB===tree.moveRowId){
+    alert('이동한다 노드는 상하위 교체 대상에서 제외돼요.');
+    return false;
+  }
+
+  var rowA = DATA.sheet1.rows[rowById[ridA]];
+  var rowB = DATA.sheet1.rows[rowById[ridB]];
+  if(!rowA || !rowB) return false;
+  var nameA = rowA[C['지역명']], nameB = rowB[C['지역명']];
+  if(!nameA || !nameB || nameA===nameB){
+    alert('서로 다른 이름의 노드만 상하위를 교체할 수 있어요.');
+    return false;
+  }
+
+  var cols = ['스크립트(내용)','성공 스크립트','실패 스크립트'];
+  var aParts = {}, bParts = {};
+  cols.forEach(function(col){
+    aParts[col] = splitScriptLinksDetailed(rowA[C[col]]);
+    bParts[col] = splitScriptLinksDetailed(rowB[C[col]]);
+  });
+
+  // 다른 노드가 A/B를 가리키는 링크는 서로 교환한다.
+  DATA.sheet1.rows.forEach(function(r){
+    var rid = r[C['지역ID']];
+    var rowTop = r[C['상위지역ID(부모ID)']] || rid;
+    if(rowTop!==topId || rid===ridA || rid===ridB) return;
+    cols.forEach(function(col){
+      r[C[col]] = hierarchyRemapTargetsOnly(r[C[col]], nameA, nameB);
+    });
+  });
+
+  // A와 B 자신은 서술은 그대로 유지하고, "나가는 링크 묶음"만 서로 교체한다.
+  // 교체된 링크 안에서 A/B를 가리키는 대상도 함께 치환해야 A→B가 B→A로 정확히 뒤집힌다.
+  cols.forEach(function(col){
+    var newALinks = bParts[col].links.map(function(link){
+      return {keyword:link.keyword, name:hierarchySwapName(link.name, nameA, nameB)};
+    });
+    var newBLinks = aParts[col].links.map(function(link){
+      return {keyword:link.keyword, name:hierarchySwapName(link.name, nameA, nameB)};
+    });
+    rowA[C[col]] = joinScriptLinksDetailed(aParts[col].narrative, newALinks);
+    rowB[C[col]] = joinScriptLinksDetailed(bParts[col].narrative, newBLinks);
+  });
+
+  // 세부지역 시작점(root)도 구조상의 위치이므로 A/B가 루트라면 함께 교환한다.
+  tree.clusters.forEach(function(cluster){
+    if(cluster.root===nameA) cluster.root = nameB;
+    else if(cluster.root===nameB) cluster.root = nameA;
+  });
+
+  rebuildIndexes();
+  return true;
+}
+
 function swapNodeContent(topId, ridA, ridB){
   var tree = DATA.regionsTree[topId];
   if(ridA===tree.headerRowId || ridB===tree.headerRowId){
@@ -2331,6 +2430,9 @@ function renderClusterCanvasScreen(main, crumb){
 
   var wrap = document.createElement('div');
 
+  var hierarchySwapMode = false;
+  var hierarchySwapSourceId = null;
+
   var toolbar = document.createElement('div'); toolbar.className='canvasToolbar';
   var backBtn = document.createElement('button'); backBtn.className='ghost'; backBtn.textContent='← 단계별 보기로';
   backBtn.addEventListener('click', function(){ go({view:'cluster'}); });
@@ -2343,9 +2445,23 @@ function renderClusterCanvasScreen(main, crumb){
     markDirty();
     render();
   });
+  var hierarchySwapBtn = document.createElement('button'); hierarchySwapBtn.className='ghost'; hierarchySwapBtn.textContent='↕ 상하위 교체';
+  hierarchySwapBtn.title = '켜고 노드 두 개를 차례로 클릭하면 두 노드의 연결상 위치(상위/하위)를 교체합니다. 노드 자체의 내용은 유지됩니다.';
   var hint = document.createElement('span'); hint.style.cssText='font-size:11.5px;color:var(--text-faint);';
-  hint.textContent = '노드를 드래그해서 위치를 바꿀 수 있어요 · 다른 노드 위에 놓으면 서로 자리가 바뀌어요 · 클릭하면 편집돼요';
-  toolbar.appendChild(backBtn); toolbar.appendChild(resetBtn); toolbar.appendChild(hint);
+  hint.textContent = '드래그: 위치 이동 · 다른 노드 위에 놓기: 내용 교체 · 클릭: 편집';
+  hierarchySwapBtn.addEventListener('click', function(){
+    hierarchySwapMode = !hierarchySwapMode;
+    hierarchySwapSourceId = null;
+    hierarchySwapBtn.classList.toggle('swapModeActive', hierarchySwapMode);
+    hierarchySwapBtn.textContent = hierarchySwapMode ? '↕ 상하위 교체 중' : '↕ 상하위 교체';
+    if(typeof nodeEls==='object' && nodeEls){
+      Object.keys(nodeEls).forEach(function(id){ nodeEls[id].classList.remove('hierarchySwapSelected'); });
+    }
+    hint.textContent = hierarchySwapMode
+      ? '상하위를 바꿀 첫 번째 노드를 클릭하세요 · 다시 누르면 취소'
+      : '드래그: 위치 이동 · 다른 노드 위에 놓기: 내용 교체 · 클릭: 편집';
+  });
+  toolbar.appendChild(backBtn); toolbar.appendChild(resetBtn); toolbar.appendChild(hierarchySwapBtn); toolbar.appendChild(hint);
   wrap.appendChild(toolbar);
 
   var canvasWrap = document.createElement('div'); canvasWrap.id='clusterCanvasWrap';
@@ -2412,6 +2528,50 @@ function renderClusterCanvasScreen(main, crumb){
     var saved = getCanvasPos(topId, rid);
     var pos = saved || layout.positions[rid];
     return pos || {x:24, y:24};
+  }
+
+  function handleHierarchySwapClick(rid, box){
+    if(rid===tree.headerRowId || rid===tree.moveRowId){
+      toast('지역 시작 노드와 이동한다 노드는 상하위 교체 대상에서 제외돼요');
+      return;
+    }
+    if(!hierarchySwapSourceId){
+      hierarchySwapSourceId = rid;
+      box.classList.add('hierarchySwapSelected');
+      var firstRow = DATA.sheet1.rows[rowById[rid]];
+      hint.textContent = '선택됨: '+(firstRow ? firstRow[C['지역명']] : rid)+' · 상하위를 바꿀 두 번째 노드를 클릭하세요';
+      return;
+    }
+    if(hierarchySwapSourceId===rid){
+      box.classList.remove('hierarchySwapSelected');
+      hierarchySwapSourceId = null;
+      hint.textContent = '상하위를 바꿀 첫 번째 노드를 클릭하세요 · 다시 누르면 취소';
+      return;
+    }
+
+    var sourceId = hierarchySwapSourceId;
+    var sourceEl = nodeEls[sourceId];
+    if(sourceEl) sourceEl.classList.remove('hierarchySwapSelected');
+
+    // 현재 보이는 두 위치를 기억해 뒀다가, 연결 구조 교체 후 화면에서도 두 자리를 맞바꾼다.
+    var pA = nodePos(sourceId), pB = nodePos(rid);
+    var posA = {x:pA.x, y:pA.y}, posB = {x:pB.x, y:pB.y};
+    var rowA = DATA.sheet1.rows[rowById[sourceId]];
+    var rowB = DATA.sheet1.rows[rowById[rid]];
+    var nameA = rowA ? rowA[C['지역명']] : sourceId;
+    var nameB = rowB ? rowB[C['지역명']] : rid;
+
+    if(swapNodeHierarchy(topId, sourceId, rid)){
+      setCanvasPos(topId, sourceId, posB.x, posB.y);
+      setCanvasPos(topId, rid, posA.x, posA.y);
+      markDirty();
+      toast('"'+nameA+'" ↕ "'+nameB+'" 상하위 연결 위치를 교체했어요');
+      render();
+      return;
+    }
+
+    hierarchySwapSourceId = null;
+    hint.textContent = '상하위를 바꿀 첫 번째 노드를 클릭하세요 · 다시 누르면 취소';
   }
 
   if(orphanIds.length > 0){
@@ -2587,7 +2747,8 @@ function renderClusterCanvasScreen(main, crumb){
           drawEdges();
           markDirty();
         } else {
-          openNodePanel(topId, rid);
+          if(hierarchySwapMode) handleHierarchySwapClick(rid, box);
+          else openNodePanel(topId, rid);
         }
       }
       box.addEventListener('pointermove', onMove);
@@ -3108,6 +3269,12 @@ function renderNodePanel(topId, rowId){
   collabClearPanelBindings(); __collabPanel = {topId:topId, rowId:rowId};
   var idx = rowById[rowId];
   var r = DATA.sheet1.rows[idx];
+
+  var idBar = document.createElement('div'); idBar.className='npIdBar';
+  var idLabel = document.createElement('span'); idLabel.className='npIdLabel'; idLabel.textContent='지역 ID';
+  var idCode = document.createElement('code'); idCode.textContent = String(r[C['지역ID']]||'');
+  idBar.appendChild(idLabel); idBar.appendChild(idCode);
+  panel.appendChild(idBar);
 
   var head = document.createElement('div'); head.className='npHead';
   var nameInput = document.createElement('input');
