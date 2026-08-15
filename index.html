@@ -501,6 +501,12 @@
           <input id="fmNodeSize" type="range" min="10" max="18" step="0.5" value="12">
         </label>
       </div>
+      <div class="fmSection">
+        <div class="fmLabel">사용자 글꼴 추가 (.woff/.woff2)</div>
+        <input type="text" id="fmNewFontName" placeholder="글꼴 이름 (예: 내글꼴)">
+        <input type="file" id="fmNewFontFile" accept=".woff,.woff2">
+        <button class="ghost" id="fmAddFont" style="margin-top:5px;width:100%;">+ 이 프로젝트에 글꼴 추가</button>
+      </div>
     </div>
   </div>
   <div id="exportSettingsWrap">
@@ -641,7 +647,8 @@ function extractUserPrefs(source){
     tagOpacity: source.tagOpacity != null ? source.tagOpacity : 90,
     fontSettings: source.fontSettings ? JSON.parse(JSON.stringify(source.fontSettings)) : null,
     exportNames: source.exportNames ? JSON.parse(JSON.stringify(source.exportNames)) : {},
-    cellColors: source.cellColors ? JSON.parse(JSON.stringify(source.cellColors)) : {}
+    cellColors: source.cellColors ? JSON.parse(JSON.stringify(source.cellColors)) : {},
+    customFonts: source.customFonts ? JSON.parse(JSON.stringify(source.customFonts)) : {}
   };
 }
 if(!USER_PREFS){
@@ -657,6 +664,7 @@ function applyUserPrefs(target){
   if(target.fontSettings == null && USER_PREFS.fontSettings) target.fontSettings = JSON.parse(JSON.stringify(USER_PREFS.fontSettings));
   if(target.exportNames == null && USER_PREFS.exportNames) target.exportNames = JSON.parse(JSON.stringify(USER_PREFS.exportNames));
   if(target.cellColors == null && USER_PREFS.cellColors) target.cellColors = JSON.parse(JSON.stringify(USER_PREFS.cellColors));
+  if(target.customFonts == null && USER_PREFS.customFonts) target.customFonts = JSON.parse(JSON.stringify(USER_PREFS.customFonts));
 }
 applyUserPrefs(DATA);
 function cacheSharedUiPrefs(){
@@ -919,33 +927,58 @@ var FONT_PRESETS = [
 ];
 function ensureFontSettings(){
   if(!DATA.fontSettings) DATA.fontSettings = {mapFont:'default', mapBold:true, tagFont:'default', tagBold:false, nodeFont:'default', nodeBold:true, nodeSize:12};
+  if(DATA.fontSettings.mapBold==null) DATA.fontSettings.mapBold=true;
+  if(DATA.fontSettings.tagBold==null) DATA.fontSettings.tagBold=false;
   if(DATA.fontSettings.nodeFont==null) DATA.fontSettings.nodeFont='default';
   if(DATA.fontSettings.nodeBold==null) DATA.fontSettings.nodeBold=true;
   if(DATA.fontSettings.nodeSize==null) DATA.fontSettings.nodeSize=12;
-  // Old custom-font data is intentionally discarded: only the built-in default font is supported now.
-  DATA.fontSettings.mapFont = 'default';
-  DATA.fontSettings.tagFont = 'default';
-  delete DATA.customFonts;
+  if(!DATA.customFonts) DATA.customFonts = {};
+  // Old built-in preset IDs are no longer supported; user-uploaded fonts are preserved.
+  var customIds = Object.keys(DATA.customFonts);
+  if(DATA.fontSettings.mapFont!=='default' && customIds.indexOf(DATA.fontSettings.mapFont)===-1) DATA.fontSettings.mapFont='default';
+  if(customIds.indexOf(DATA.fontSettings.tagFont)===-1 && DATA.fontSettings.tagFont!=='default') DATA.fontSettings.tagFont='default';
+  if(customIds.indexOf(DATA.fontSettings.nodeFont)===-1 && DATA.fontSettings.nodeFont!=='default') DATA.fontSettings.nodeFont='default';
 }
-function allFontOptions(){ return FONT_PRESETS.slice(); }
-function fontFamilyFor(){ return FONT_PRESETS[0].family; }
+function allFontOptions(){
+  ensureFontSettings();
+  return FONT_PRESETS.concat(Object.keys(DATA.customFonts||{}).map(function(id){
+    var f=DATA.customFonts[id]||{};
+    return {id:id,label:f.name||id,family:'"'+String(f.name||id).replace(/"/g,'\\"')+'"'};
+  }));
+}
+function fontFamilyFor(fontId){
+  ensureFontSettings();
+  var opts=allFontOptions();
+  var opt=opts.find(function(o){return o.id===fontId;});
+  return opt ? opt.family : FONT_PRESETS[0].family;
+}
 function applyFontSettings(){
   ensureFontSettings();
   var root = document.documentElement.style;
-  root.setProperty('--map-font-family', FONT_PRESETS[0].family);
+  root.setProperty('--map-font-family', fontFamilyFor(DATA.fontSettings.mapFont));
   root.setProperty('--map-font-weight', DATA.fontSettings.mapBold ? '700' : '400');
-  root.setProperty('--tag-font-family', FONT_PRESETS[0].family);
+  root.setProperty('--tag-font-family', fontFamilyFor(DATA.fontSettings.tagFont));
   root.setProperty('--tag-font-weight', DATA.fontSettings.tagBold ? '700' : '400');
-  root.setProperty('--node-font-family', FONT_PRESETS[0].family);
+  root.setProperty('--node-font-family', fontFamilyFor(DATA.fontSettings.nodeFont));
   root.setProperty('--node-font-weight', DATA.fontSettings.nodeBold ? '700' : '600');
   root.setProperty('--node-font-size', (Number(DATA.fontSettings.nodeSize)||12) + 'px');
   var styleEl=document.getElementById('customFontFaces');
-  if(styleEl) styleEl.textContent='';
+  if(!styleEl){
+    styleEl=document.createElement('style'); styleEl.id='customFontFaces'; document.head.appendChild(styleEl);
+  }
+  var rules=[];
+  Object.keys(DATA.customFonts||{}).forEach(function(id){
+    var f=DATA.customFonts[id];
+    if(!f || !f.name || !f.dataUrl) return;
+    rules.push('@font-face{font-family:"'+String(f.name).replace(/"/g,'\\"')+'";src:url("'+f.dataUrl+'");font-display:swap;}');
+  });
+  styleEl.textContent=rules.join('\n');
 }
 function populateFontSelect(sel, currentId){
   sel.innerHTML='';
-  var opt=document.createElement('option'); opt.value='default'; opt.textContent='기본'; opt.selected=true;
-  sel.appendChild(opt);
+  allFontOptions().forEach(function(o){
+    var opt=document.createElement('option'); opt.value=o.id; opt.textContent=o.label; opt.selected=(o.id===currentId); sel.appendChild(opt);
+  });
 }
 function initFontMenu(){
   ensureFontSettings();
@@ -958,10 +991,13 @@ function initFontMenu(){
   var nodeBold=document.getElementById('fmNodeBold');
   var nodeSize=document.getElementById('fmNodeSize');
   var nodeSizeVal=document.getElementById('fmNodeSizeVal');
+  var fontName=document.getElementById('fmNewFontName');
+  var fontFile=document.getElementById('fmNewFontFile');
+  var addFontBtn=document.getElementById('fmAddFont');
   function refreshSelects(){
-    populateFontSelect(mapSel,'default');
-    populateFontSelect(tagSel,'default');
-    populateFontSelect(nodeSel,'default');
+    populateFontSelect(mapSel,DATA.fontSettings.mapFont);
+    populateFontSelect(tagSel,DATA.fontSettings.tagFont);
+    populateFontSelect(nodeSel,DATA.fontSettings.nodeFont);
     mapBold.checked=!!DATA.fontSettings.mapBold;
     tagBold.checked=!!DATA.fontSettings.tagBold;
     nodeBold.checked=!!DATA.fontSettings.nodeBold;
@@ -969,11 +1005,33 @@ function initFontMenu(){
     nodeSizeVal.textContent=nodeSize.value+'px';
   }
   refreshSelects(); applyFontSettings();
-  mapSel.disabled=true; tagSel.disabled=true; nodeSel.disabled=true;
+  mapSel.addEventListener('change',function(){ DATA.fontSettings.mapFont=mapSel.value; cacheSharedUiPrefs(); applyFontSettings(); markDirty(); });
+  tagSel.addEventListener('change',function(){ DATA.fontSettings.tagFont=tagSel.value; cacheSharedUiPrefs(); applyFontSettings(); markDirty(); });
+  nodeSel.addEventListener('change',function(){ DATA.fontSettings.nodeFont=nodeSel.value; cacheSharedUiPrefs(); applyFontSettings(); markDirty(); render(); });
   mapBold.addEventListener('change',function(){ DATA.fontSettings.mapBold=mapBold.checked; cacheSharedUiPrefs(); applyFontSettings(); markDirty(); });
   tagBold.addEventListener('change',function(){ DATA.fontSettings.tagBold=tagBold.checked; cacheSharedUiPrefs(); applyFontSettings(); markDirty(); });
-  nodeBold.addEventListener('change',function(){ DATA.fontSettings.nodeBold=nodeBold.checked; cacheSharedUiPrefs(); applyFontSettings(); markDirty(); });
-  nodeSize.addEventListener('input',function(){ DATA.fontSettings.nodeSize=Number(nodeSize.value)||12; nodeSizeVal.textContent=nodeSize.value+'px'; cacheSharedUiPrefs(); applyFontSettings(); markDirty(); });
+  nodeBold.addEventListener('change',function(){ DATA.fontSettings.nodeBold=nodeBold.checked; cacheSharedUiPrefs(); applyFontSettings(); markDirty(); render(); });
+  nodeSize.addEventListener('input',function(){ DATA.fontSettings.nodeSize=Number(nodeSize.value)||12; nodeSizeVal.textContent=nodeSize.value+'px'; cacheSharedUiPrefs(); applyFontSettings(); markDirty(); render(); });
+  addFontBtn.addEventListener('click',function(){
+    var name=(fontName.value||'').trim(); var file=fontFile.files&&fontFile.files[0];
+    if(!name){ toast('글꼴 이름을 입력하세요.'); return; }
+    if(!file){ toast('글꼴 파일(.woff/.woff2)을 선택하세요.'); return; }
+    if(!/\.(woff2?|WOFF2?)$/i.test(file.name)){ toast('.woff 또는 .woff2 파일만 사용할 수 있어요.'); return; }
+    var reader=new FileReader();
+    reader.onload=function(){
+      var id='custom_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8);
+      DATA.customFonts[id]={name:name,dataUrl:reader.result};
+      DATA.fontSettings.nodeFont=id;
+      cacheSharedUiPrefs();
+      refreshSelects();
+      applyFontSettings();
+      markDirty();
+      fontName.value=''; fontFile.value='';
+      toast('글꼴을 추가하고 현재 노드 글꼴에 적용했습니다.');
+      render();
+    };
+    reader.readAsDataURL(file);
+  });
   document.getElementById('btnFontMenu').addEventListener('click',function(e){ menu.classList.toggle('open'); e.stopPropagation(); });
   document.addEventListener('click',function(){ menu.classList.remove('open'); });
   menu.addEventListener('click',function(e){ e.stopPropagation(); });
@@ -3363,8 +3421,12 @@ function refreshFontMenuValues(){
   ensureFontSettings();
   populateFontSelect(document.getElementById('fmMapFont'), DATA.fontSettings.mapFont);
   populateFontSelect(document.getElementById('fmTagFont'), DATA.fontSettings.tagFont);
+  populateFontSelect(document.getElementById('fmNodeFont'), DATA.fontSettings.nodeFont);
   document.getElementById('fmMapBold').checked = !!DATA.fontSettings.mapBold;
   document.getElementById('fmTagBold').checked = !!DATA.fontSettings.tagBold;
+  document.getElementById('fmNodeBold').checked = !!DATA.fontSettings.nodeBold;
+  document.getElementById('fmNodeSize').value = String(Number(DATA.fontSettings.nodeSize)||12);
+  document.getElementById('fmNodeSizeVal').textContent = document.getElementById('fmNodeSize').value + 'px';
 }
 
 /* ---------------- project management ---------------- */
