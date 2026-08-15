@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>빛의왕국 탐사맵 편집기</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.1/dist/umd/supabase.min.js"></script>
+<link rel="stylesheet" href="collab/presence.css">
+<script type="importmap">
+{ "imports": { "yjs": "https://esm.sh/yjs@13" } }
+</script>
 <style>
   :root{
     --bg:#f6f6f7; --surface:#ffffff; --border:#e1e1e4; --border-strong:#c9c9ce;
@@ -443,6 +447,8 @@
   <div class="sep"></div>
   <div id="savestate"><span class="dot"></span><span id="savestate-text">저장 안 됨</span></div>
   <div id="cloudStatus">연결 중…</div>
+  <div id="collabPresence" title="접속 중인 협업자"></div>
+  <div id="collabEditing"></div>
   <div class="spacer"></div>
   <div id="tagColorWrap">
     <button class="ghost" id="btnTagColor">태그 색상 ▾</button>
@@ -534,8 +540,8 @@
 (function(){
 "use strict";
 var SUPABASE_CONFIG = {
-  url: "YOUR_SUPABASE_PROJECT_URL",
-  anonKey: "YOUR_SUPABASE_PUBLISHABLE_OR_ANON_KEY"
+  url: "https://gkesaseqwfkvfylvxmnz.supabase.co",
+  anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdrZXNhc2Vxd2ZrdmZ5bHZ4bW56Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY3NDUwMzgsImV4cCI6MjEwMjMyMTAzOH0.xVBdEOvKvaV4mZQHkXo161cKGAx4SNSN4KEBQRMY6uk"
 };
 var supabase = null;
 var cloudUser = null;
@@ -546,6 +552,22 @@ var cloudSaveTimer = null;
 var cloudVersion = 0;
 var cloudProjectId = null;
 var cloudIgnoreRealtimeUntil = 0;
+var COLLAB = null;              // 활성 Yjs 협업 세션(null이면 기존 방식으로 폴백)
+var __collabPendingRender = false;
+var __collabPanelUnbinds = [];  // 열린 노드 패널의 협업 바인딩 해제 함수들
+var __collabPanel = null;       // {topId,rowId} 현재 열린 노드 패널
+function collabClearPanelBindings(){ __collabPanelUnbinds.forEach(function(fn){ try{fn();}catch(e){} }); __collabPanelUnbinds=[]; }
+function collabSetTextareaCaret(el, next){
+  var cur=el.value, s=el.selectionStart, e=el.selectionEnd, p=0, m=Math.min(cur.length,next.length);
+  while(p<m && cur[p]===next[p]) p++;
+  el.value=next;
+  if(s!=null){ var d=next.length-cur.length; try{ el.setSelectionRange(Math.max(0,s>p?s+d:s), Math.max(0,e>p?e+d:e)); }catch(err){} }
+}
+function collabRefreshViews(){
+  rebuildProjectView(); saveState(false);
+  var ov=document.getElementById('nodePanelOverlay');
+  if(__collabPanel && ov && ov.classList.contains('open')){ try{ renderNodePanel(__collabPanel.topId, __collabPanel.rowId); }catch(e){} }
+}
 var RAW = JSON.parse(document.getElementById('app-data').textContent);
 var LS_KEY = 'lumkingdom_map_editor_v1';
 var PREFS_KEY = 'lumkingdom_map_editor_prefs_v1';
@@ -1295,11 +1317,13 @@ function persist(){
   }catch(e){ toast('로컬 저장 실패: ' + e.message); }
 }
 function scheduleCloudSave(){
+  if(COLLAB){ try{ COLLAB.push(DATA); }catch(e){ console.error(e); } return; }
   if(!cloudReady || !cloudProjectId) return;
   clearTimeout(cloudSaveTimer);
   cloudSaveTimer = setTimeout(saveCurrentProjectToCloud, 450);
 }
 async function saveCurrentProjectToCloud(){
+  if(COLLAB) return; // Yjs 협업 활성 시 저장은 협업 엔진이 담당
   if(!cloudReady || !cloudProjectId || cloudSaving) return;
   cloudSaving = true;
   setCloudStatus('저장 중…');
@@ -2602,6 +2626,7 @@ function openNodePanel(topId, rowId){
 function closeNodePanel(){
   document.getElementById('nodePanelOverlay').classList.remove('open');
   currentlyEditingRowId = null;
+  collabClearPanelBindings(); __collabPanel = null;
   if(nav.main==='map' && (nav.view==='cluster' || nav.view==='canvas')) render();
 }
 
@@ -2702,12 +2727,37 @@ function scriptFieldEditor(label, topId, row, colName){
   wrap.appendChild(addBtn);
 
   narrativeTa.addEventListener('input', sync);
+
+  // ── 협업: 본문(narrative)을 글자 단위로 실시간 동기화 ──────────────
+  // 본문은 항상 접두부라, 접두부 span에만 diff를 적용하면 선택지(접미부)는
+  // 건드리지 않는다. 선택지 편집은 기존 sync→reconcile(무손실, debounce) 경로.
+  if(COLLAB && window.CollabEngine){
+    var __rowId = row[C['지역ID']], __col = C[colName], __prevNarr = parsed.narrative;
+    var __live = function(){
+      if(narrativeTa.__composing) return; // 한글 IME 조합 중엔 대기
+      var vals = Array.prototype.map.call(choicesWrap.querySelectorAll('input'), function(i){ return i.value; });
+      var composed = joinScript(narrativeTa.value, vals, writeKeyword);
+      if(COLLAB.applyCellTextEdit(__rowId, __col, __prevNarr, narrativeTa.value, composed)) __prevNarr = narrativeTa.value;
+    };
+    narrativeTa.addEventListener('compositionstart', function(){ narrativeTa.__composing = true; });
+    narrativeTa.addEventListener('compositionend', function(){ narrativeTa.__composing = false; __live(); });
+    narrativeTa.addEventListener('input', __live);
+    var __unobs = COLLAB.observeCellText(__rowId, __col, function(composed){
+      var p = splitScript(composed);
+      if(p.narrative === narrativeTa.value){ __prevNarr = p.narrative; return; }
+      if(document.activeElement === narrativeTa) collabSetTextareaCaret(narrativeTa, p.narrative);
+      else narrativeTa.value = p.narrative;
+      __prevNarr = p.narrative;
+    });
+    __collabPanelUnbinds.push(function(){ narrativeTa.removeEventListener('input', __live); __unobs(); });
+  }
   return wrap;
 }
 
 function renderNodePanel(topId, rowId){
   var panel = document.getElementById('nodePanel');
   panel.innerHTML='';
+  collabClearPanelBindings(); __collabPanel = {topId:topId, rowId:rowId};
   var idx = rowById[rowId];
   var r = DATA.sheet1.rows[idx];
 
@@ -2765,7 +2815,12 @@ function renderNodePanel(topId, rowId){
   keyRow.appendChild(fieldInput('키아이템 ID', r[C['키아이템 ID']], function(v){ r[C['키아이템 ID']]=v; }));
   body.appendChild(keyRow);
 
-  body.appendChild(fieldTextarea('비고', r[C['비고']], function(v){ r[C['비고']]=v; }, 2));
+  var bigoField = fieldTextarea('비고', r[C['비고']], function(v){ r[C['비고']]=v; }, 2);
+  body.appendChild(bigoField);
+  if(COLLAB && window.CollabEngine){
+    var bigoTa = bigoField.querySelector('textarea');
+    if(bigoTa) __collabPanelUnbinds.push(COLLAB.bindText(bigoTa, r[C['지역ID']], C['비고']));
+  }
 
   panel.appendChild(body);
 }
@@ -3182,7 +3237,9 @@ async function createNewProject(){
       PROJECT_ID=newId; DATA=d; cloudBaseData=JSON.parse(JSON.stringify(d)); cloudProjectId=newId; cloudVersion=ins.data.version;
       PROJECTS[newId]={id:newId,name:d.toolTitle,data:JSON.parse(JSON.stringify(d)),updatedAt:Date.now()};
       localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS)); localStorage.setItem(ACTIVE_PROJECT_KEY,newId);
-      rebuildProjectView(); setCloudStatus('저장됨 · 실시간 연결'); toast('새 프로젝트를 만들었습니다. 기존 프로젝트는 보존되었습니다.');
+      rebuildProjectView();
+      if(window.CollabEngine){ await startCollab(newId); } else { setCloudStatus('저장됨 · 실시간 연결'); }
+      toast('새 프로젝트를 만들었습니다. 기존 프로젝트는 보존되었습니다.');
       return;
     }
   }catch(e){ console.error(e); toast('클라우드 프로젝트 생성 실패: '+(e.message||e)); return; }
@@ -3233,6 +3290,87 @@ document.getElementById('btnProjectList').addEventListener('click',openProjectLi
 document.getElementById('btnProjectClose').addEventListener('click',function(){document.getElementById('projectModal').classList.remove('open');});
 document.getElementById('projectModal').addEventListener('click',function(e){if(e.target===this)this.classList.remove('open');});
 document.getElementById('btnProjectModalNew').addEventListener('click',function(){document.getElementById('projectModal').classList.remove('open'); if(confirm('현재 프로젝트를 보존하고 새 프로젝트를 추가할까요?')) createNewProject();});
+
+/* ---------------- Yjs 실시간 협업 브리지 ---------------- */
+// collab/ 모듈(window.CollabEngine)이 로드돼 있으면, 기존 whole-doc 클라우드
+// 동기화 대신 CRDT 협업 세션을 연다. 같은 필드 동시 편집도 무손실로 병합된다.
+async function startCollab(projectId){
+  if(!window.CollabEngine) return;
+  if(COLLAB){ try{ await COLLAB.destroy(); }catch(e){} COLLAB=null; }
+  cloudReady=false; setCloudStatus('실시간 연결 중…');
+  try{
+    var session = await window.CollabEngine.openProject({
+      supabase: supabase,
+      projectId: projectId,
+      user: cloudUser,
+      seedData: JSON.parse(JSON.stringify(DATA)),   // DB가 비어 있을 때만 시드로 사용
+      onRemote: function(data){ applyRemoteData(data); },
+      onPresence: function(states, selfId){ renderCollabPresence(states, selfId); },
+      onStatus: function(s){ setCloudStatus(collabStatusText(s)); }
+    });
+    COLLAB = session;
+    PROJECT_ID = projectId; cloudProjectId = projectId; ACTIVE_PROJECT_ID = projectId;
+    try{ localStorage.setItem(ACTIVE_PROJECT_KEY, projectId); }catch(e){}
+    applyRemoteData(session.data);                  // 로드/시드 결과를 화면에 반영
+    cloudReady = true; setCloudStatus('저장됨 · 실시간 연결');
+  }catch(e){
+    console.error(e); COLLAB=null; setCloudStatus('실시간 연결 실패');
+    toast('실시간 협업 연결 실패(로컬 저장은 계속 동작): '+(e.message||e));
+  }
+}
+function collabStatusText(s){
+  if(s==='connected') return '저장됨 · 실시간 연결';
+  if(s==='error')     return '실시간 연결 오류';
+  if(s==='save-error')return '저장 재시도 중…';
+  if(s==='closed')    return '연결 끊김';
+  return s || '';
+}
+function isTextTarget(t){
+  return t && (t.tagName==='TEXTAREA' || (t.tagName==='INPUT' && (t.type==='text'||t.type==='')) || t.isContentEditable);
+}
+// 원격 변경 -> 앱 DATA 반영. 입력 중이면 커서 보호를 위해 전체 재렌더를 보류.
+function applyRemoteData(incoming){
+  if(!incoming) return;
+  var editing = isTextTarget(document.activeElement);
+  DATA = incoming;
+  applyUserPrefs(DATA);
+  H1 = DATA.sheet1.headers; C={}; H1.forEach(function(h,i){ C[h]=i; });
+  try{
+    PROJECTS[PROJECT_ID] = {id:PROJECT_ID, name:DATA.toolTitle||'프로젝트', data:JSON.parse(JSON.stringify(DATA)), updatedAt:Date.now()};
+    localStorage.setItem(PROJECTS_KEY, JSON.stringify(PROJECTS));
+    localStorage.setItem(LS_KEY, JSON.stringify(DATA));
+  }catch(e){}
+  if(editing){ __collabPendingRender = true; return; }
+  collabRefreshViews();
+}
+function renderCollabPresence(states, selfId){
+  var box = document.getElementById('collabPresence');
+  if(!box || !window.CollabEngine) return;
+  var editors = window.CollabEngine.renderAvatars(box, states, selfId) || [];
+  var ed = document.getElementById('collabEditing');
+  if(ed){
+    ed.innerHTML = editors.length
+      ? ('✍ ' + editors.map(function(t){ return String(t).replace(/[&<>]/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[m];}); }).join(' · '))
+      : '';
+  }
+}
+// 편집 중 표시(프레즌스) + 보류된 렌더 처리
+document.addEventListener('focusin', function(e){
+  if(!COLLAB || !isTextTarget(e.target)) return;
+  var t=e.target, label=null, cell=t.closest ? t.closest('.mapcell') : null;
+  if(cell){ var nm=cell.querySelector('.cellname'); if(nm) label = nm.value || nm.textContent; }
+  else if(t.id==='toolTitleInput'){ label='제목'; }
+  try{ COLLAB.setEditing(label); }catch(err){}
+});
+document.addEventListener('focusout', function(){
+  if(!COLLAB) return;
+  try{ COLLAB.setEditing(null); }catch(err){}
+  setTimeout(function(){
+    if(!__collabPendingRender || !COLLAB) return;
+    if(isTextTarget(document.activeElement)) return;
+    __collabPendingRender=false; collabRefreshViews();
+  }, 30);
+});
 
 /* ---------------- supabase auth + realtime ---------------- */
 function isSupabaseConfigured(){ return !!window.supabase && SUPABASE_CONFIG.url.indexOf('YOUR_')!==0 && SUPABASE_CONFIG.anonKey.indexOf('YOUR_')!==0; }
@@ -3362,6 +3500,7 @@ async function onCloudSignedIn(user){
 }
 function unsubscribeCloud(){ if(cloudChannel){ try{supabase.removeChannel(cloudChannel);}catch(e){} cloudChannel=null; } }
 async function subscribeToProject(projectId){
+  if(window.CollabEngine){ return startCollab(projectId); } // Yjs 협업 경로
   unsubscribeCloud(); if(!supabase) return;
   cloudChannel=supabase.channel('project-'+projectId)
     .on('postgres_changes',{event:'UPDATE',schema:'public',table:'projects',filter:'id=eq.'+projectId},async function(payload){
@@ -3598,6 +3737,13 @@ render();
 initCloud().catch(function(err){ console.error(err); setCloudStatus('연결 실패'); document.getElementById('authOverlay').style.display='flex'; document.getElementById('authMsg').textContent='Supabase 초기화 실패: '+(err.message||err); });
 })();
 
+</script>
+<script type="module">
+  // 협업 엔진을 앱에 노출. 실패해도(예: file://로 열람) 앱은 기존 로컬 모드로 동작.
+  try{
+    const mod = await import('./collab/index.js');
+    window.CollabEngine = { openProject: mod.openProject, renderAvatars: mod.renderAvatars };
+  }catch(e){ console.warn('[collab] 모듈 로드 실패 — 로컬 모드로 동작합니다.', e); }
 </script>
 </body>
 </html>

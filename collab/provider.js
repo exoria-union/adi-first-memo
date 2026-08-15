@@ -1,0 +1,228 @@
+// ============================================================================
+// Supabase 기반 Yjs 프로바이더 (전송 + 영속 + 프레즌스)
+// ----------------------------------------------------------------------------
+// 별도 websocket 서버를 세우지 않고, 앱이 이미 쓰는 Supabase만으로 협업을 굴린다.
+//   - 전송(live): Realtime "broadcast" 채널로 Yjs 바이너리 업데이트를 주고받음.
+//                 CRDT 업데이트는 순서·중복에 강하므로 broadcast로 충분.
+//   - 영속:       doc_updates(append 로그) + doc_snapshots(주기적 압축).
+//   - 프레즌스:   y-protocols Awareness를 같은 채널로 방송(누가 어느 칸을 편집 중인지).
+//
+// broadcast 페이로드 한도(~256KB) 때문에 큰 업데이트는 청크로 쪼개 보낸다.
+// 초기 대량 상태는 broadcast가 아니라 DB(load)에서 받으므로 실제 방송은 대개 작다.
+// ============================================================================
+
+import { Y, encodeAwarenessUpdate, applyAwarenessUpdate, removeAwarenessStates } from './deps.js';
+
+// ---- base64 <-> Uint8Array (큰 배열도 안전하게) ----
+export function u8ToB64(u8) {
+  let s = '';
+  const CH = 0x8000;
+  for (let i = 0; i < u8.length; i += CH) {
+    s += String.fromCharCode.apply(null, u8.subarray(i, i + CH));
+  }
+  return btoa(s);
+}
+export function b64ToU8(b64) {
+  const s = atob(b64);
+  const u8 = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) u8[i] = s.charCodeAt(i);
+  return u8;
+}
+
+// ---- broadcast 청크 분할/재조립 ----
+const CHUNK_B64 = 180 * 1024; // base64 기준 상한(256KB 여유)
+let _mid = 0;
+export function splitForBroadcast(u8) {
+  const b64 = u8ToB64(u8);
+  if (b64.length <= CHUNK_B64) return [{ id: 0, i: 0, n: 1, d: b64 }];
+  const id = ++_mid + '_' + Date.now();
+  const n = Math.ceil(b64.length / CHUNK_B64);
+  const out = [];
+  for (let i = 0; i < n; i++) out.push({ id, i, n, d: b64.slice(i * CHUNK_B64, (i + 1) * CHUNK_B64) });
+  return out;
+}
+
+export class SupabaseYjsProvider {
+  constructor(supabase, projectId, ydoc, opts = {}) {
+    this.supabase = supabase;
+    this.projectId = projectId;
+    this.ydoc = ydoc;
+    this.awareness = opts.awareness || null;
+    this.onStatus = opts.onStatus || (() => {});
+    this.onFirstSync = opts.onFirstSync || (() => {}); // 원격/영속 상태를 처음 반영했을 때
+    this.channel = null;
+    this.synced = false;
+    this._reasm = new Map();          // 청크 재조립 버퍼
+    this._pending = [];               // 영속 대기 업데이트
+    this._flushTimer = null;
+    this._sinceSnapshot = 0;
+    this._destroyed = false;
+
+    this._onUpdate = this._onUpdate.bind(this);
+    this._onAwareness = this._onAwareness.bind(this);
+    this._onUnload = this._onUnload.bind(this);
+  }
+
+  async connect() {
+    // 1) 영속에서 현재 상태 로드(대량은 DB로)
+    await this._loadFromDb();
+
+    // 2) 로컬 업데이트 관찰 -> 방송 + 영속
+    this.ydoc.on('update', this._onUpdate);
+    if (this.awareness) this.awareness.on('update', this._onAwareness);
+    window.addEventListener('visibilitychange', this._onUnload);
+    window.addEventListener('pagehide', this._onUnload);
+
+    // 3) 채널 구독
+    this.channel = this.supabase.channel('ydoc:' + this.projectId, {
+      config: { broadcast: { self: false } },
+    });
+    this.channel
+      .on('broadcast', { event: 'y-update' }, (m) => this._recv(m.payload, false))
+      .on('broadcast', { event: 'y-sync1' }, (m) => this._onSync1(m.payload))
+      .on('broadcast', { event: 'y-sync2' }, (m) => this._recv(m.payload, true))
+      .on('broadcast', { event: 'awareness' }, (m) => this._recvAwareness(m.payload));
+
+    await new Promise((resolve) => {
+      this.channel.subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          this.onStatus('connected');
+          // 4) 동기화 핸드셰이크: 내 state vector를 알리고 부족분을 받는다.
+          this._send('y-sync1', { sv: u8ToB64(Y.encodeStateVector(this.ydoc)) });
+          if (this.awareness) this._broadcastAwareness([this.awareness.clientID]);
+          resolve();
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          this.onStatus('error');
+        } else if (status === 'CLOSED') {
+          this.onStatus('closed');
+        }
+      });
+    });
+  }
+
+  // ---- 영속 로드: 스냅샷 + 이후 업데이트 로그 ----
+  async _loadFromDb() {
+    let afterId = 0;
+    const snap = await this.supabase
+      .from('doc_snapshots').select('snapshot,last_update_id')
+      .eq('project_id', this.projectId).maybeSingle();
+    if (snap.data && snap.data.snapshot) {
+      Y.applyUpdate(this.ydoc, b64ToU8(snap.data.snapshot), this);
+      afterId = snap.data.last_update_id || 0;
+    }
+    const ups = await this.supabase
+      .from('doc_updates').select('id,update')
+      .eq('project_id', this.projectId).gt('id', afterId).order('id', { ascending: true });
+    if (ups.data && ups.data.length) {
+      this.ydoc.transact(() => {
+        for (const r of ups.data) Y.applyUpdate(this.ydoc, b64ToU8(r.update), this);
+      }, this);
+      this._lastLoadedId = ups.data[ups.data.length - 1].id;
+    } else {
+      this._lastLoadedId = afterId;
+    }
+    if (snap.data || (ups.data && ups.data.length)) { this.synced = true; this.onFirstSync(); }
+  }
+
+  // ---- 로컬 Y 변경 -> 방송 + 영속 큐 ----
+  _onUpdate(update, origin) {
+    if (origin === this) return;      // 원격/영속에서 적용한 것 -> 되쏘지 않음
+    this._send('y-update', { c: splitForBroadcast(update) });
+    this._pending.push(update);
+    if (!this._flushTimer) this._flushTimer = setTimeout(() => this._flush(), 400);
+  }
+
+  // ---- 수신: 라이브 업데이트 / 동기화 응답(청크 재조립) ----
+  _recv(payload, isSync) {
+    const full = this._reassemble(payload.c);
+    if (!full) return;                // 아직 청크 모으는 중
+    Y.applyUpdate(this.ydoc, full, this);
+    if (isSync && !this.synced) { this.synced = true; this.onFirstSync(); }
+  }
+
+  _onSync1(payload) {
+    // 상대가 모르는 부분만 골라 응답
+    const remoteSv = b64ToU8(payload.sv);
+    const diff = Y.encodeStateAsUpdate(this.ydoc, remoteSv);
+    if (diff && diff.length) this._send('y-sync2', { c: splitForBroadcast(diff) });
+  }
+
+  _reassemble(chunks) {
+    if (!chunks || !chunks.length) return null;
+    if (chunks.length === 1 && chunks[0].n === 1) return b64ToU8(chunks[0].d);
+    // 실제로는 각 broadcast가 청크 배열 전체를 담아 보내므로 한 번에 합쳐짐.
+    let b64 = '';
+    for (const ch of chunks.sort((a, b) => a.i - b.i)) b64 += ch.d;
+    return b64ToU8(b64);
+  }
+
+  // ---- 영속 flush: 대기 업데이트를 하나로 합쳐 append ----
+  async _flush() {
+    this._flushTimer = null;
+    if (!this._pending.length || this._destroyed) return;
+    const merged = Y.mergeUpdates(this._pending.splice(0));
+    try {
+      const ins = await this.supabase
+        .from('doc_updates').insert({ project_id: this.projectId, update: u8ToB64(merged) })
+        .select('id').single();
+      if (ins.data) this._lastLoadedId = ins.data.id;
+      if (++this._sinceSnapshot >= 150) this._snapshot();
+    } catch (e) {
+      // 실패 시 되돌려 다음 기회에 재시도
+      this._pending.unshift(merged);
+      this.onStatus('save-error');
+    }
+  }
+
+  // ---- 압축: 전체 상태 스냅샷 + 오래된 로그 정리 ----
+  async _snapshot() {
+    this._sinceSnapshot = 0;
+    const lastId = this._lastLoadedId || 0;
+    try {
+      await this.supabase.from('doc_snapshots').upsert({
+        project_id: this.projectId,
+        snapshot: u8ToB64(Y.encodeStateAsUpdate(this.ydoc)),
+        last_update_id: lastId,
+      });
+      await this.supabase.from('doc_updates')
+        .delete().eq('project_id', this.projectId).lte('id', lastId);
+    } catch (e) { /* 다음 기회에 */ }
+  }
+
+  // ---- 프레즌스(awareness) ----
+  _onAwareness({ added, updated, removed }, origin) {
+    if (origin === this) return;
+    this._broadcastAwareness(added.concat(updated, removed));
+  }
+  _broadcastAwareness(clients) {
+    if (!this.awareness) return;
+    const u = encodeAwarenessUpdate(this.awareness, clients);
+    this._send('awareness', { u: u8ToB64(u) });
+  }
+  _recvAwareness(payload) {
+    if (!this.awareness) return;
+    applyAwarenessUpdate(this.awareness, b64ToU8(payload.u), this);
+  }
+
+  _send(event, payload) {
+    if (!this.channel) return;
+    this.channel.send({ type: 'broadcast', event, payload });
+  }
+
+  _onUnload() {
+    if (document.visibilityState === 'hidden') { this._flush(); }
+  }
+
+  async destroy() {
+    this._destroyed = true;
+    await this._flush();
+    if (this.awareness) {
+      try { removeAwarenessStates(this.awareness, [this.awareness.clientID], 'local'); } catch (e) {}
+      this.awareness.off('update', this._onAwareness);
+    }
+    this.ydoc.off('update', this._onUpdate);
+    window.removeEventListener('visibilitychange', this._onUnload);
+    window.removeEventListener('pagehide', this._onUnload);
+    if (this.channel) { try { await this.supabase.removeChannel(this.channel); } catch (e) {} this.channel = null; }
+  }
+}

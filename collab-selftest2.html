@@ -1,0 +1,215 @@
+<meta charset="utf-8">
+<title>프로바이더/바인딩 자체 테스트</title>
+<style>
+  body{font:13px/1.6 ui-monospace,Consolas,monospace;background:#0f1116;color:#e9eaf0;padding:20px;}
+  .pass{color:#5cc185;} .fail{color:#f0846a;font-weight:700;} h1{font-size:15px;} b{color:#7d97ff;}
+  textarea{width:0;height:0;position:absolute;left:-9999px;}
+</style>
+<h1>프로바이더 · 라이브 바인딩 자체 테스트 (Supabase 목)</h1>
+<pre id="out"></pre>
+<textarea id="ta"></textarea>
+<script type="importmap">
+{ "imports": { "yjs": "https://esm.sh/yjs@13" } }
+</script>
+<script type="module">
+import { Y } from './collab/deps.js';
+import { readProject } from './collab/ydoc.js';
+import { u8ToB64, b64ToU8, splitForBroadcast } from './collab/provider.js';
+import { openProject } from './collab/index.js';
+
+const out = document.getElementById('out');
+let pass = 0, fail = 0;
+const log = (m, cls) => { out.innerHTML += (cls ? `<span class="${cls}">${m}</span>` : m) + '\n'; };
+const ok = (n, c) => { if (c){pass++;log('PASS  '+n,'pass');} else {fail++;log('FAIL  '+n,'fail');} };
+const clone = (x) => JSON.parse(JSON.stringify(x));
+const wait = (ms) => new Promise(r => setTimeout(r, ms));
+
+// ---------- 인메모리 Supabase 목 ----------
+function makeBackend() {
+  return { doc_updates: [], doc_snapshots: [], seq: 0, bus: {} };
+}
+function makeClient(backend, name) {
+  function table(t) { return backend[t]; }
+  function builder(t) {
+    const st = { t, op: 'select', filters: [], row: null, single: false, maybe: false };
+    const api = {
+      select(){ return api; },
+      insert(row){ st.op='insert'; st.row=row; return api; },
+      upsert(row){ st.op='upsert'; st.row=row; return api; },
+      delete(){ st.op='delete'; return api; },
+      eq(c,v){ st.filters.push(r=>r[c]===v); return api; },
+      gt(c,v){ st.filters.push(r=>r[c]>v); return api; },
+      lte(c,v){ st.filters.push(r=>r[c]<=v); return api; },
+      order(){ st.ordered=true; return api; },
+      single(){ st.single=true; return exec(); },
+      maybeSingle(){ st.maybe=true; return exec(); },
+      then(res,rej){ return exec().then(res,rej); },
+    };
+    function match(r){ return st.filters.every(f=>f(r)); }
+    function exec(){
+      let data=null, error=null;
+      const arr = table(st.t);
+      if (st.op==='select'){
+        let rows = arr.filter(match);
+        if (st.ordered) rows = rows.slice().sort((a,b)=>a.id-b.id);
+        if (st.maybe) data = rows[0]||null;
+        else if (st.single){ data = rows[0]||null; error = rows[0]?null:{code:'PGRST116'}; }
+        else data = rows;
+      } else if (st.op==='insert'){
+        const row = {...st.row, id: ++backend.seq};
+        arr.push(row); data = st.single ? {id:row.id} : [row];
+      } else if (st.op==='upsert'){
+        const pk='project_id'; const i=arr.findIndex(r=>r[pk]===st.row[pk]);
+        if(i>=0) arr[i]={...arr[i],...st.row}; else arr.push({...st.row});
+        data = st.row;
+      } else if (st.op==='delete'){
+        for(let i=arr.length-1;i>=0;i--) if(match(arr[i])) arr.splice(i,1);
+      }
+      return Promise.resolve({ data, error });
+    }
+    return api;
+  }
+  return {
+    _name: name,
+    from(t){ return builder(t); },
+    channel(chName){
+      const handlers = [];
+      const ch = {
+        on(_type, filter, cb){ handlers.push({ event: filter.event, cb }); return ch; },
+        subscribe(cb){ (backend.bus[chName] = backend.bus[chName]||[]).push({ ch, handlers }); setTimeout(()=>cb('SUBSCRIBED'),0); return ch; },
+        send({ event, payload }){
+          // self:false -> 다른 구독자에게만 전달
+          (backend.bus[chName]||[]).forEach(sub=>{
+            if (sub.ch===ch) return;
+            sub.handlers.forEach(h=>{ if(h.event===event) h.cb({ payload }); });
+          });
+          return Promise.resolve('ok');
+        },
+        _handlers: handlers, _chName: chName,
+      };
+      return ch;
+    },
+    removeChannel(ch){
+      const arr = backend.bus[ch._chName]; if(!arr) return Promise.resolve();
+      const i = arr.findIndex(s=>s.ch===ch); if(i>=0) arr.splice(i,1); return Promise.resolve();
+    },
+  };
+}
+
+const SAMPLE = {
+  __buildStamp:'t', toolTitle:'빛의왕국',
+  sheet1:{ headers:["p","지역ID","지역명","adj","code","스크립트(내용)"], rows:[
+    [null,"LUM_MAIN","본당","","C","거대한 아치 천장."],
+    [null,"LUM_BELL","종탑","","C","나선계단 입구."],
+  ]},
+  items:{}, cellColors:{},
+};
+const SCRIPT_COL = 5;
+
+try {
+  // ---- 인코딩 유틸 ----
+  const bytes = new Uint8Array([0,1,2,250,255,128,7,42]);
+  ok('b64 라운드트립', u8ToB64(bytes) && JSON.stringify([...b64ToU8(u8ToB64(bytes))])===JSON.stringify([...bytes]));
+  ok('작은 업데이트는 단일 청크', splitForBroadcast(new Uint8Array(100)).length===1);
+  ok('큰 업데이트는 다중 청크', splitForBroadcast(new Uint8Array(600*1024)).length>1);
+
+  const backend = makeBackend();
+  const cliA = makeClient(backend,'A');
+  const cliB = makeClient(backend,'B');
+  let remoteA=null, remoteB=null;
+
+  // A가 신규 프로젝트를 열고 시드
+  const A = await openProject({ supabase:cliA, projectId:'p1', user:{id:'ua',email:'a@x.com'},
+    seedData: clone(SAMPLE), onRemote:d=>{remoteA=d;}, onPresence:()=>{}, onStatus:()=>{} });
+  ok('A 시드 후 데이터 존재', A.data.sheet1.rows.length===2);
+  await wait(50); // flush(400ms 전) — 강제 확인용으로 조금 대기 후 수동 검증
+  // 시드가 영속되도록 flush 대기
+  await wait(500);
+  ok('시드가 doc_updates에 영속됨', backend.doc_updates.length>=1);
+
+  // B가 같은 프로젝트를 "로드"로 연다(시드 아님)
+  const B = await openProject({ supabase:cliB, projectId:'p1', user:{id:'ub',email:'b@x.com'},
+    seedData: clone(SAMPLE), onRemote:d=>{remoteB=d;}, onPresence:()=>{}, onStatus:()=>{} });
+  ok('B 로드 후 A와 동일', JSON.stringify(A.data.sheet1)===JSON.stringify(B.data.sheet1));
+
+  // A가 편집 -> push -> B가 broadcast로 수신
+  {
+    const d = clone(A.data); d.sheet1.rows[0][2]='본당(A수정)';
+    A.push(d);
+    await wait(120);
+    ok('A 편집이 B로 실시간 전파', remoteB && remoteB.sheet1.rows[0][2]==='본당(A수정)');
+  }
+
+  // 서로 다른 행 동시 편집 -> 둘 다
+  {
+    const da = clone(A.data); da.sheet1.rows[0][SCRIPT_COL]='[A] '+da.sheet1.rows[0][SCRIPT_COL]; A.push(da);
+    const db = clone(B.data); db.sheet1.rows[1][2]='종탑(B수정)'; B.push(db);
+    await wait(150);
+    ok('양방향 병합: A의 텍스트편집 B에 도달', readProject(B.ydoc).sheet1.rows[0][SCRIPT_COL].includes('[A]'));
+    ok('양방향 병합: B의 편집 A에 도달', readProject(A.ydoc).sheet1.rows[1][2]==='종탑(B수정)');
+    ok('A/B 최종 수렴', JSON.stringify(readProject(A.ydoc))===JSON.stringify(readProject(B.ydoc)));
+  }
+
+  // ---- 라이브 텍스트 바인딩 ----
+  {
+    const ta = document.getElementById('ta');
+    const unbind = A.bindText(ta, 'LUM_BELL', SCRIPT_COL);
+    ta.value = readProject(A.ydoc).sheet1.rows[1][SCRIPT_COL];
+    // A가 타이핑(요소 input) -> ytext 반영 -> B로 전파
+    ta.value = ta.value + ' (실시간타이핑)';
+    ta.dispatchEvent(new Event('input'));
+    await wait(150);
+    ok('라이브 입력이 Y.Text에 반영', readProject(A.ydoc).sheet1.rows[1][SCRIPT_COL].includes('실시간타이핑'));
+    ok('라이브 입력이 B로 전파', readProject(B.ydoc).sheet1.rows[1][SCRIPT_COL].includes('실시간타이핑'));
+    // 원격(B)이 같은 셀을 편집 -> A의 textarea에 반영(커서 보존 경로)
+    const db = clone(B.data);
+    // B.data may be stale; read fresh
+    const bd = readProject(B.ydoc); bd.sheet1.rows[1][SCRIPT_COL]='원격교체본'; B.push(bd);
+    await wait(150);
+    ok('원격 편집이 A의 입력요소에 반영', ta.value.includes('원격교체본') || readProject(A.ydoc).sheet1.rows[1][SCRIPT_COL]==='원격교체본');
+    unbind();
+  }
+
+  // ---- 합성 스크립트 필드(본문 접두부 + 선택지 접미부) 프리미티브 ----
+  {
+    const composed0 = '나선계단 입구.\n\n▶[지역/종탑]';
+    const d = readProject(A.ydoc); d.sheet1.rows[1][SCRIPT_COL] = composed0; A.push(d);
+    await wait(120);
+    ok('getCellTextValue 반환', A.getCellTextValue('LUM_BELL', SCRIPT_COL) === composed0);
+
+    // A: 본문(접두부)만 편집 -> 선택지(접미부) 보존되어야
+    const oldNarr = '나선계단 입구.';
+    const newNarr = '나선계단 입구, 쇠 냄새.';
+    const newComposed = newNarr + '\n\n▶[지역/종탑]';
+    A.applyCellTextEdit('LUM_BELL', SCRIPT_COL, oldNarr, newNarr, newComposed);
+    await wait(120);
+    ok('본문 편집이 선택지 ▶[지역/종탑] 보존', A.getCellTextValue('LUM_BELL', SCRIPT_COL) === newComposed);
+    ok('본문 편집이 B로 전파', readProject(B.ydoc).sheet1.rows[1][SCRIPT_COL] === newComposed);
+
+    // 동시: A가 본문, B가 선택지 편집 -> 둘 다 병합
+    A.applyCellTextEdit('LUM_BELL', SCRIPT_COL, newNarr, '[A]'+newNarr, '[A]'+newNarr+'\n\n▶[지역/종탑]');
+    const bd = readProject(B.ydoc); bd.sheet1.rows[1][SCRIPT_COL] = newNarr + '\n\n▶[지역/종탑]\n▶[지역/신학교]'; B.push(bd);
+    await wait(160);
+    const fa = readProject(A.ydoc).sheet1.rows[1][SCRIPT_COL];
+    const fb = readProject(B.ydoc).sheet1.rows[1][SCRIPT_COL];
+    ok('합성 동시편집 수렴(A===B)', fa === fb);
+    ok('A의 본문 편집 보존', fa.indexOf('[A]') !== -1);
+    ok('B의 선택지 편집 보존', fa.indexOf('신학교') !== -1);
+
+    // observeCellText 원격 발화
+    let fired = null;
+    const un = A.observeCellText('LUM_BELL', SCRIPT_COL, function(s){ fired = s; });
+    const bd2 = readProject(B.ydoc); bd2.sheet1.rows[1][SCRIPT_COL] = fb + ' (원격추가)'; B.push(bd2);
+    await wait(160);
+    ok('observeCellText 원격 변경 수신', fired && fired.indexOf('원격추가') !== -1);
+    un();
+  }
+
+  await A.destroy(); await B.destroy();
+  log('\n=== ' + pass + ' passed, ' + fail + ' failed ===', fail?'fail':'pass');
+  document.title = fail===0 ? 'PROVIDER OK' : 'PROVIDER FAIL';
+} catch (e) {
+  log('ERROR: ' + (e && e.stack || e), 'fail');
+  document.title = 'PROVIDER ERROR';
+}
+</script>

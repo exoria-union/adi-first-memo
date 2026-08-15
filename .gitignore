@@ -1,0 +1,11 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# 편집기
+.vscode/
+.idea/
+
+# 빌드 산출물(현재는 무빌드지만 미래 대비)
+node_modules/
+dist/

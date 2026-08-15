@@ -1,0 +1,133 @@
+<meta charset="utf-8">
+<title>협업 브리지 자체 테스트</title>
+<style>
+  body{font:13px/1.6 ui-monospace,Consolas,monospace;background:#0f1116;color:#e9eaf0;padding:20px;}
+  .pass{color:#5cc185;} .fail{color:#f0846a;font-weight:700;} h1{font-size:15px;}
+  b{color:#7d97ff;}
+</style>
+<h1>협업 브리지 자체 테스트</h1>
+<pre id="out"></pre>
+<script type="importmap">
+{ "imports": { "yjs": "https://esm.sh/yjs@13" } }
+</script>
+<script type="module">
+import { Y } from './collab/deps.js';
+import { buildProject, readProject, reconcile } from './collab/ydoc.js';
+
+const out = document.getElementById('out');
+let pass = 0, fail = 0;
+const log = (m, cls) => { out.innerHTML += (cls ? `<span class="${cls}">${m}</span>` : m) + '\n'; };
+const ok = (name, cond) => { if (cond){pass++; log('PASS  ' + name,'pass');} else {fail++; log('FAIL  ' + name,'fail');} };
+const clone = (x) => JSON.parse(JSON.stringify(x));
+
+// 실제 헤더(23열) 축약 없이 사용
+const HEADERS = ["상위지역ID(부모ID)","지역ID","지역명","인접 지역","종류 코드","스크립트(내용)","주사위 목표치","성공 스크립트","실패 스크립트","키아이템 필요 여부","키아이템 ID","파밍 아이템 ID","파밍 아이템 수","파밍 골드","파밍 경험치","지역거래 시, 교단원이 낼 아이템ID","지역거래 시, 교단원이 낼 골드 상한가","최초 탐사 여부","최초 탐사가 아닐 시 실패 스크립트","비고","종족 전용","종족이 아닐 때 스크립트","개방 조건"];
+const SCRIPT_COL = HEADERS.indexOf('스크립트(내용)');
+const FLAG_COL = HEADERS.indexOf('키아이템 필요 여부');
+
+function mkRow(id, name, script) {
+  const r = new Array(HEADERS.length).fill(null);
+  r[1] = id; r[2] = name; r[SCRIPT_COL] = script; r[9] = 'N';
+  return r;
+}
+function sampleData() {
+  return {
+    __buildStamp: 'test-1',
+    toolTitle: '빛의왕국 탐사맵',
+    sheet1: { headers: HEADERS.slice(), rows: [
+      mkRow('LUM_MAIN', '본당', '거대한 아치 천장.'),
+      mkRow('LUM_BELL', '종탑', '나선계단 입구.'),
+    ]},
+    items: { SWORD: { name: '검', desc: '낡은 검' } },
+    cellColors: { LUM_MAIN: 'purple' },
+    tagColors: { hot: '#f00' },   // 개인 설정 -> 공유되면 안 됨
+  };
+}
+
+try {
+  // ---- 1. 라운드트립: build -> read == 원본(개인키 제외) ----
+  const D = sampleData();
+  const docA = new Y.Doc();
+  const built = buildProject(docA, clone(D), 'init');
+  ok('최초 빌드 수행됨', built === true);
+  const read = readProject(docA);
+  const expected = clone(D); delete expected.tagColors; // 개인키 제외 기대
+  ok('라운드트립 일치(개인키 제외)', JSON.stringify(read) === JSON.stringify(expected));
+  ok('개인 설정 tagColors는 공유 문서에서 제외됨', !('tagColors' in read));
+
+  // ---- 2. 두 번째 클라이언트는 "빌드"가 아니라 "로드"해야 한다 ----
+  const docB = new Y.Doc();
+  Y.applyUpdate(docB, Y.encodeStateAsUpdate(docA));           // 이력 공유 로드
+  const builtB = buildProject(docB, clone(D), 'init');        // 이미 있으니 no-op이어야
+  ok('이미 로드된 문서는 재빌드 안 함', builtB === false);
+  ok('A/B 초기 상태 동일', JSON.stringify(readProject(docA)) === JSON.stringify(readProject(docB)));
+
+  // ---- 3. 로컬 편집 재조정: 평범한 셀 + 텍스트 셀 ----
+  {
+    const cur = readProject(docA); const shadow = clone(cur);
+    cur.sheet1.rows[0][FLAG_COL] = 'Y';                       // 플래그 변경
+    cur.sheet1.rows[1][SCRIPT_COL] = '나선계단 입구, 쇠 냄새.'; // 텍스트 변경
+    cur.toolTitle = '빛의왕국 탐사맵 v2';
+    reconcile(docA, cur, shadow, 'app');
+    const back = readProject(docA);
+    ok('평범한 셀 편집 반영', back.sheet1.rows[0][FLAG_COL] === 'Y');
+    ok('텍스트 셀 편집 반영', back.sheet1.rows[1][SCRIPT_COL] === '나선계단 입구, 쇠 냄새.');
+    ok('최상위 값 편집 반영', back.toolTitle === '빛의왕국 탐사맵 v2');
+    // docB도 최신으로 맞춰둠
+    Y.applyUpdate(docB, Y.encodeStateAsUpdate(docA, Y.encodeStateVector(docB)), 'remote');
+    ok('편집이 B로 전파됨', readProject(docB).toolTitle === '빛의왕국 탐사맵 v2');
+  }
+
+  // ---- 4. 핵심: 같은 텍스트 필드 동시 편집 -> 무손실 병합 ----
+  {
+    const svA0 = Y.encodeStateVector(docA);
+    const svB0 = Y.encodeStateVector(docB);
+
+    // A: LUM_MAIN 스크립트 앞에 "[A] " 추가
+    const dA = readProject(docA); const sA = clone(dA);
+    dA.sheet1.rows[0][SCRIPT_COL] = '[A] ' + dA.sheet1.rows[0][SCRIPT_COL];
+    reconcile(docA, dA, sA, 'app');
+
+    // B: 같은 셀 뒤에 " [B]" 추가 (동시)
+    const dB = readProject(docB); const sB = clone(dB);
+    dB.sheet1.rows[0][SCRIPT_COL] = dB.sheet1.rows[0][SCRIPT_COL] + ' [B]';
+    reconcile(docB, dB, sB, 'app');
+
+    // 서로 diff만 교환
+    Y.applyUpdate(docA, Y.encodeStateAsUpdate(docB, svA0), 'remote');
+    Y.applyUpdate(docB, Y.encodeStateAsUpdate(docA, svB0), 'remote');
+
+    const a = readProject(docA).sheet1.rows[0][SCRIPT_COL];
+    const b = readProject(docB).sheet1.rows[0][SCRIPT_COL];
+    log('  A 결과: ' + JSON.stringify(a));
+    log('  B 결과: ' + JSON.stringify(b));
+    ok('동시 편집 수렴(A===B)', a === b);
+    ok('A의 편집 보존', a.includes('[A]'));
+    ok('B의 편집 보존', a.includes('[B]'));
+    ok('원문 유실 없음', a.includes('거대한 아치 천장'));
+  }
+
+  // ---- 5. 서로 다른 행 동시 편집 -> 둘 다 반영 ----
+  {
+    const svA0 = Y.encodeStateVector(docA);
+    const svB0 = Y.encodeStateVector(docB);
+    const dA = readProject(docA); const sA = clone(dA);
+    dA.sheet1.rows[0][2] = '본당(수정A)';                  // A는 0행 지역명
+    reconcile(docA, dA, sA, 'app');
+    const dB = readProject(docB); const sB = clone(dB);
+    dB.sheet1.rows[1][2] = '종탑(수정B)';                  // B는 1행 지역명
+    reconcile(docB, dB, sB, 'app');
+    Y.applyUpdate(docA, Y.encodeStateAsUpdate(docB, svA0), 'remote');
+    Y.applyUpdate(docB, Y.encodeStateAsUpdate(docA, svB0), 'remote');
+    const r = readProject(docA).sheet1.rows;
+    ok('다른 행 동시 편집 둘 다 반영', r[0][2] === '본당(수정A)' && r[1][2] === '종탑(수정B)');
+    ok('A===B 수렴', JSON.stringify(readProject(docA)) === JSON.stringify(readProject(docB)));
+  }
+
+  log('\n=== ' + pass + ' passed, ' + fail + ' failed ===', fail ? 'fail' : 'pass');
+  document.title = fail === 0 ? 'BRIDGE OK' : 'BRIDGE FAIL';
+} catch (e) {
+  log('ERROR: ' + (e && e.stack || e), 'fail');
+  document.title = 'BRIDGE ERROR';
+}
+</script>
