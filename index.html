@@ -2052,9 +2052,20 @@ function stepKey(step){
    NODE CANVAS (graph) VIEW - all nodes in a cluster at once,
    horizontal auto-layout by default, freely draggable
    ========================================================= */
-if(!DATA.nodeCanvasPos) DATA.nodeCanvasPos = {};
+ensureGraphDataShape();
 function canvasPosKey(topId, rowId){ return topId+'#'+rowId; }
-function getCanvasPos(topId, rowId){ return DATA.nodeCanvasPos[canvasPosKey(topId,rowId)]; }
+function ensureGraphDataShape(){
+  if(!DATA) return;
+  if(!DATA.nodeCanvasPos || typeof DATA.nodeCanvasPos !== 'object') DATA.nodeCanvasPos = {};
+  if(!DATA.gridPositions || typeof DATA.gridPositions !== 'object') DATA.gridPositions = {};
+  if(!DATA.cellColors || typeof DATA.cellColors !== 'object') DATA.cellColors = {};
+  if(!DATA.regionsTree || typeof DATA.regionsTree !== 'object') DATA.regionsTree = {};
+}
+function getCanvasPos(topId, rowId){
+  if(!DATA) return null;
+  if(!DATA.nodeCanvasPos || typeof DATA.nodeCanvasPos !== 'object') DATA.nodeCanvasPos = {};
+  return DATA.nodeCanvasPos[canvasPosKey(topId,rowId)] || null;
+}
 function setCanvasPos(topId, rowId, x, y){
   if(!DATA.nodeCanvasPos) DATA.nodeCanvasPos = {};
   DATA.nodeCanvasPos[canvasPosKey(topId,rowId)] = {x:x, y:y};
@@ -2205,6 +2216,7 @@ function autoLayoutNodes(topId, rootId, idSet, moveRowId){
 }
 
 function renderClusterCanvasScreen(main, crumb){
+  ensureGraphDataShape();
   main.innerHTML=''; crumb.innerHTML='';
   var topId = nav.regionId;
   if(!topId){
@@ -3494,6 +3506,7 @@ function makeBlankProject(){
   applyUserPrefs(d); return d;
 }
 function rebuildProjectView(opts){
+  ensureGraphDataShape();
   opts = opts || {};
   var previousNav = nav ? JSON.parse(JSON.stringify(nav)) : null;
   H1=DATA.sheet1.headers; C={}; H1.forEach(function(h,i){C[h]=i;});
@@ -3646,6 +3659,7 @@ function applyRemoteData(incoming){
   if(!incoming || !incoming.sheet1 || !incoming.sheet1.headers) return;
   var editing = isTextTarget(document.activeElement);
   DATA = JSON.parse(JSON.stringify(incoming));
+  ensureGraphDataShape();
   applyUserPrefs(DATA);
   H1 = DATA.sheet1.headers; C={}; H1.forEach(function(h,i){ C[h]=i; });
   try{
@@ -3778,6 +3792,7 @@ function authErrorMessage(e){
   return m;
 }
 async function onCloudSignedIn(user){
+  ensureGraphDataShape();
   cloudUser=user;
   document.getElementById('authOverlay').style.display='none';
   document.getElementById('authMsg').textContent='';
@@ -3805,6 +3820,7 @@ async function onCloudSignedIn(user){
     var cloud=await supabase.from('projects').select('id,name,data,version,updated_at').eq('id',target).single();
     if(cloud.error) throw cloud.error;
     DATA=JSON.parse(JSON.stringify(cloud.data.data));
+    ensureGraphDataShape();
     if(cloud.data.name) DATA.toolTitle=cloud.data.name;
     cloudBaseData=JSON.parse(JSON.stringify(DATA));
     PROJECT_ID=cloud.data.id; cloudProjectId=cloud.data.id; cloudVersion=cloud.data.version; ACTIVE_PROJECT_ID=PROJECT_ID;
