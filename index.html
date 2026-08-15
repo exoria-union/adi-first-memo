@@ -427,7 +427,7 @@
 
 <div id="authOverlay">
   <div id="authCard">
-    <h2>빛의왕국 탐사맵 협업 로그인</h2>
+    <h2 id="authBrandTitle">빛의왕국 탐사맵 편집기</h2>
     <p>개인 계정으로 로그인하면 프로젝트와 편집 내용이 Supabase에 저장되고, 같은 프로젝트의 변경사항이 실시간으로 공유됩니다.</p>
     <div id="authActions">
       <label style="display:block;font-size:11px;font-weight:600;color:var(--text-faint);margin:0 0 4px;">아이디(이메일)</label>
@@ -1482,39 +1482,57 @@ function toast(msg){
   toast._tm = setTimeout(function(){ t.classList.remove('show'); }, 2200);
 }
 
-/* ---------------- tool title ---------------- */
+/* ---------------- shared project title / branding ---------------- */
 var titleInput = document.getElementById('toolTitleInput');
-titleInput.value = DATA.toolTitle || '빛의왕국 탐사맵 편집기';
-document.title = titleInput.value;
+var authBrandTitle = document.getElementById('authBrandTitle');
 var projectNameSaveTimer = null;
+function currentProjectName(){
+  var name = (DATA && DATA.toolTitle) ? String(DATA.toolTitle).trim() : '';
+  if(!name && PROJECT_ID && PROJECTS[PROJECT_ID] && PROJECTS[PROJECT_ID].name) name = String(PROJECTS[PROJECT_ID].name).trim();
+  return name || '빛의왕국 탐사맵 편집기';
+}
+function syncBranding(name){
+  name = String(name || currentProjectName()).trim() || '빛의왕국 탐사맵 편집기';
+  if(titleInput && document.activeElement!==titleInput) titleInput.value = name;
+  document.title = name;
+  if(authBrandTitle) authBrandTitle.textContent = name;
+}
+function updateProjectIndexLocal(name){
+  name = String(name || '새 프로젝트').trim() || '새 프로젝트';
+  if(!PROJECTS[PROJECT_ID]) PROJECTS[PROJECT_ID] = {id:PROJECT_ID,data:DATA};
+  PROJECTS[PROJECT_ID].name = name;
+  PROJECTS[PROJECT_ID].updatedAt = Date.now();
+  try{ localStorage.setItem(PROJECTS_KEY, JSON.stringify(PROJECTS)); }catch(e){}
+}
 async function persistProjectNameToCloud(){
-  if(!cloudProjectId || !cloudUser || !supabase) return;
   var name = (DATA.toolTitle || '새 프로젝트').trim() || '새 프로젝트';
+  updateProjectIndexLocal(name);
+  syncBranding(name);
+  if(!cloudProjectId || !cloudUser || !supabase) return;
   try{
-    PROJECTS[PROJECT_ID] = PROJECTS[PROJECT_ID] || {id:PROJECT_ID,data:DATA};
-    PROJECTS[PROJECT_ID].name = name;
-    PROJECTS[PROJECT_ID].updatedAt = Date.now();
-    try{ localStorage.setItem(PROJECTS_KEY, JSON.stringify(PROJECTS)); }catch(e){}
-    // Keep the project-index column authoritative even when Yjs is active.
+    // Project name is authoritative metadata, independent from Yjs DATA payload.
+    var now = new Date().toISOString();
     var res = await supabase.from('projects')
-      .update({name:name,updated_at:new Date().toISOString()})
+      .update({name:name,updated_at:now})
       .eq('id', cloudProjectId);
     if(res.error) throw res.error;
-    publishProjectListUpdate('UPDATE', {id:cloudProjectId,name:name,updated_at:new Date().toISOString()});
+    await publishProjectListUpdate('UPDATE', {id:cloudProjectId,name:name,updated_at:now});
   }catch(e){
     console.error('프로젝트 이름 저장 실패', e);
     setCloudStatus('프로젝트 이름 저장 재시도 필요');
   }
 }
+// Use the most recently known project name immediately, even before cloud initialization.
+syncBranding(currentProjectName());
 titleInput.addEventListener('input', function(){
-  DATA.toolTitle = titleInput.value;
-  document.title = titleInput.value || '빛의왕국 탐사맵 편집기';
-  PROJECTS[PROJECT_ID] = PROJECTS[PROJECT_ID] || {id:PROJECT_ID,data:DATA};
-  PROJECTS[PROJECT_ID].name = titleInput.value || '새 프로젝트';
-  PROJECTS[PROJECT_ID].updatedAt = Date.now();
-  try{ localStorage.setItem(PROJECTS_KEY, JSON.stringify(PROJECTS)); }catch(e){}
+  var name = String(titleInput.value || '').trim() || '새 프로젝트';
+  DATA.toolTitle = name;
+  syncBranding(name);
+  updateProjectIndexLocal(name);
+  // Push title through the CRDT immediately so an older remote DATA snapshot cannot restore the old title.
+  if(COLLAB){ try{ COLLAB.push(DATA); }catch(e){ console.error(e); } }
   clearTimeout(projectNameSaveTimer);
-  projectNameSaveTimer = setTimeout(persistProjectNameToCloud, 350);
+  projectNameSaveTimer = setTimeout(persistProjectNameToCloud, 250);
   markDirty();
 });
 
@@ -3468,7 +3486,9 @@ function rebuildProjectView(opts){
   }else{
     nav=previousNav;
   }
-  titleInput.value=DATA.toolTitle||'새 프로젝트'; document.title=titleInput.value;
+  var projectDisplayName = (PROJECTS[PROJECT_ID] && PROJECTS[PROJECT_ID].name) || DATA.toolTitle || '새 프로젝트';
+  DATA.toolTitle = projectDisplayName;
+  syncBranding(projectDisplayName);
   applyFontSettings(); refreshFontMenuValues(); initTagColorMenuValues(); initExportSettingsValues(); render();
 }
 async function createNewProject(){
@@ -3493,6 +3513,11 @@ async function createNewProject(){
   toast('새 프로젝트를 만들었습니다. 기존 프로젝트는 보존되었습니다.');
 }
 async function openProjectList(){
+  if(projectNameSaveTimer){
+    clearTimeout(projectNameSaveTimer);
+    projectNameSaveTimer = null;
+    await persistProjectNameToCloud();
+  }
   if(cloudReady){ await refreshCloudProjectList(); }
   var modal=document.getElementById('projectModal'), listEl=document.getElementById('projectList');
   listEl.innerHTML='';
@@ -3526,7 +3551,10 @@ async function switchProject(targetId){
       DATA=JSON.parse(JSON.stringify(res.data.data));
       if(res.data.name) DATA.toolTitle=res.data.name;
       cloudBaseData=JSON.parse(JSON.stringify(DATA)); PROJECT_ID=res.data.id; cloudProjectId=res.data.id; cloudVersion=res.data.version;
-      PROJECTS[targetId]={id:PROJECT_ID,name:res.data.name||DATA.toolTitle,data:JSON.parse(JSON.stringify(DATA)),updatedAt:new Date(res.data.updated_at).getTime(),version:res.data.version};
+      var switchedName = res.data.name || DATA.toolTitle || '새 프로젝트';
+      DATA.toolTitle = switchedName;
+      PROJECTS[targetId]={id:PROJECT_ID,name:switchedName,data:JSON.parse(JSON.stringify(DATA)),updatedAt:new Date(res.data.updated_at).getTime(),version:res.data.version};
+      syncBranding(switchedName);
     }else{
       persistProjectNow();
       DATA=JSON.parse(JSON.stringify(PROJECTS[targetId].data));
@@ -3638,6 +3666,7 @@ function isSupabaseConfigured(){ return !!window.supabase && SUPABASE_CONFIG.url
 async function initCloud(){
   if(!isSupabaseConfigured()){
     setCloudStatus('Supabase 미설정');
+    syncBranding(currentProjectName());
     document.getElementById('authOverlay').style.display='flex';
     document.getElementById('authMsg').textContent='HTML 파일 상단의 SUPABASE_CONFIG에 프로젝트 URL과 publishable/anon key를 입력하세요.';
     return;
@@ -3750,7 +3779,9 @@ async function onCloudSignedIn(user){
     if(cloud.data.name) DATA.toolTitle=cloud.data.name;
     cloudBaseData=JSON.parse(JSON.stringify(DATA));
     PROJECT_ID=cloud.data.id; cloudProjectId=cloud.data.id; cloudVersion=cloud.data.version; ACTIVE_PROJECT_ID=PROJECT_ID;
-    PROJECTS[PROJECT_ID]={id:PROJECT_ID,name:cloud.data.name,data:JSON.parse(JSON.stringify(DATA)),updatedAt:new Date(cloud.data.updated_at).getTime(),version:cloud.data.version};
+    PROJECTS[PROJECT_ID]={id:PROJECT_ID,name:cloud.data.name||DATA.toolTitle,data:JSON.parse(JSON.stringify(DATA)),updatedAt:new Date(cloud.data.updated_at).getTime(),version:cloud.data.version};
+    DATA.toolTitle = cloud.data.name || DATA.toolTitle || '빛의왕국 탐사맵 편집기';
+    syncBranding(DATA.toolTitle);
     localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS)); localStorage.setItem(ACTIVE_PROJECT_KEY,PROJECT_ID);
     applyUserPrefs(DATA); H1=DATA.sheet1.headers; C={}; H1.forEach(function(h,i){C[h]=i;}); rebuildProjectView({preserveView:true});
     await subscribeToProject(PROJECT_ID);
