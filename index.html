@@ -2869,20 +2869,56 @@ function closeNodePanel(){
   if(nav.main==='map' && (nav.view==='cluster' || nav.view==='canvas')) render();
 }
 
+// bot_area 스키마 기반 필드 도움말(각주). 라벨로 자동 매칭되어 입력칸 아래에 회색으로 표시된다.
+var FIELD_HINTS = {
+  '지역명': '지역 이름 · 최대 100자 (bot_area.area_name)',
+  '주사위 목표치': '숫자(정수)만 · 종류가 INCUNTR_03_XXX일 때 목표 굴림값 · 예: 3 (target_roll · INT)',
+  '파밍 아이템 수': '짧게(최대 10자) · 예: 1 (item_drop)',
+  '파밍 골드': '숫자(정수)만 · 예: 100 (gold_drop · INT)',
+  '파밍 경험치': '숫자(정수)만 · 예: 50 (area_exp · INT)',
+  '지역거래 시, 교단원이 낼 골드 상한가': '숫자(정수)만 · 이 값 이하로 랜덤 (deal_gold · INT)',
+  '키아이템 ID': '키 아이템 ID · 최대 100자 (key_id)',
+  '키아이템 필요 여부': 'Y=필요 / N=불필요 (key_yn)',
+  '최초 탐사가 아닐 시 실패 스크립트': '이미 최초 탐사가 끝났을 때 보여줄 글 · 길이 제한 없음 (check_fail_cn)',
+  '종족이 아닐 때 스크립트': '해당 종족이 아닐 때 보여줄 글 · 길이 제한 없음 (race_fail_cn)',
+  '비고': '운영진용 메모 · 게임에는 안 보임 (area_comment)',
+  '개방 조건': '숫자(정수)만 · 개방에 필요한 조건값 · 예: 3 (open_target · INT)',
+  '본문 스크립트': '이 지역의 스크립트 · 길이 제한 없음 · ⚠ 이모지 등 4바이트 문자는 DB(utf8)에 저장되지 않아요 (area_cn)',
+  '성공 스크립트': '조사·전투 성공 시 스크립트 (succ_cn)',
+  '실패 스크립트': '조사·전투 실패 시 스크립트 (fail_cn)'
+};
+function fieldHintFor(label){ var b=String(label==null?'':label).replace(/\s*\*$/,'').trim(); return FIELD_HINTS[b]||''; }
+function appendFieldHint(wrap, label){
+  var t=fieldHintFor(label); if(!t) return;
+  var h=document.createElement('div'); h.style.cssText='font-size:10px;color:var(--text-faint);margin-top:3px;line-height:1.45;'; h.textContent=t; wrap.appendChild(h);
+}
+// Y/N 값은 input 대신 셀렉트로 정확하게 입력
+function ynSelectField(label, value, onChange, nText, yText){
+  var w=document.createElement('div');w.className='field';
+  var l=document.createElement('label');l.textContent=label;w.appendChild(l);
+  var sel=document.createElement('select');sel.style.cssText='border:1px solid var(--border-strong);border-radius:2px;padding:7px 9px;font-size:12.5px;background:var(--bg);font-family:var(--sans);width:100%;box-sizing:border-box;';
+  var cur=(String(value==null?'':value).trim().toUpperCase()==='Y')?'Y':'N';
+  [['N',nText||'N'],['Y',yText||'Y']].forEach(function(x){var o=document.createElement('option');o.value=x[0];o.textContent=x[1];if(x[0]===cur)o.selected=true;sel.appendChild(o);});
+  sel.addEventListener('change',function(){onChange(sel.value);markDirty();});
+  w.appendChild(sel); appendFieldHint(w,label); return w;
+}
 function fieldTextarea(label, value, onChange, rows){
   var wrap = document.createElement('div'); wrap.className='field';
   var l = document.createElement('label'); l.textContent = label;
   var ta = document.createElement('textarea'); ta.value = value||''; ta.rows = rows||3;
   ta.addEventListener('input', function(){ onChange(ta.value); markDirty(); });
   wrap.appendChild(l); wrap.appendChild(ta);
+  appendFieldHint(wrap, label);
   return wrap;
 }
 function fieldInput(label, value, onChange){
   var wrap = document.createElement('div'); wrap.className='field';
   var l = document.createElement('label'); l.textContent = label;
   var inp = document.createElement('input'); inp.type='text'; inp.value = value==null?'':value;
+  if(/목표치|골드|경험치|개방 조건/.test(String(label))) inp.setAttribute('inputmode','numeric');
   inp.addEventListener('input', function(){ onChange(inp.value); markDirty(); });
   wrap.appendChild(l); wrap.appendChild(inp);
+  appendFieldHint(wrap, label);
   return wrap;
 }
 var TYPE_CODES = ['INCUNTR_00','INCUNTR_02','INCUNTR_03_ALL','INCUNTR_03_STR','INCUNTR_03_DEX','INCUNTR_03_WIS','INCUNTR_04_IG','INCUNTR_04_II','INCUNTR_04_GI','INCUNTR_99'];
@@ -2969,6 +3005,7 @@ function fieldSelect(label, value, options, onChange){
   }
   sel.addEventListener('change', function(){ onChange(sel.value); markDirty(); });
   wrap.appendChild(l); wrap.appendChild(sel);
+  appendFieldHint(wrap, label);
   return wrap;
 }
 
@@ -2978,6 +3015,7 @@ function scriptFieldEditor(label, topId, row, colName){
   var wrap = document.createElement('div'); wrap.className='field';
   var l = document.createElement('label'); l.textContent = label;
   wrap.appendChild(l);
+  appendFieldHint(wrap, label);
 
   var isHeaderMainScript = colName==='스크립트(내용)' && row[C['지역ID']]===DATA.regionsTree[topId].headerRowId;
   var writeKeyword = isHeaderMainScript ? '진입' : '지역';
@@ -3124,9 +3162,10 @@ function renderNodePanel(topId, rowId){
   body.appendChild(fieldTextarea('종족이 아닐 때 스크립트'+(raceCode(r)?' *':''), r[C['종족이 아닐 때 스크립트']], function(v){ r[C['종족이 아닐 때 스크립트']]=v; refreshNodeEditorTags(r); }, 3));
 
   var keyRow = document.createElement('div'); keyRow.className='fieldRow';
-  keyRow.appendChild(fieldInput('키아이템 필요 여부', r[C['키아이템 필요 여부']], function(v){ r[C['키아이템 필요 여부']]=v; }));
+  keyRow.appendChild(ynSelectField('키아이템 필요 여부', r[C['키아이템 필요 여부']], function(v){ r[C['키아이템 필요 여부']]=v; }, 'N — 필요 없음', 'Y — 필요'));
   keyRow.appendChild(fieldInput('키아이템 ID', r[C['키아이템 ID']], function(v){ r[C['키아이템 ID']]=v; }));
   body.appendChild(keyRow);
+  body.appendChild(fieldInput('개방 조건', r[C['개방 조건']], function(v){ r[C['개방 조건']]=v; }));
 
   var bigoField = fieldTextarea('비고', r[C['비고']], function(v){ r[C['비고']]=v; }, 2);
   body.appendChild(bigoField);
