@@ -415,6 +415,16 @@
   .canvasEdge.edgeDimmed{opacity:.15;}
   .canvasLegend{display:flex;align-items:center;gap:10px;font-size:11px;color:var(--text-faint);}
   .canvasLegend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px;}
+  .dupNameWarn{
+    background:#fff3cd;border:1px solid #e0c069;color:#8a6d1a;border-radius:3px;
+    padding:8px 10px;font-size:11.5px;line-height:1.6;margin-bottom:8px;
+  }
+  .dupNameWarn b{color:#7a5f10;}
+  .canvasNode.dupNameNode{border-color:#d99a1f;box-shadow:0 0 0 2px rgba(217,154,31,.18);}
+  .canvasNode .cnDupBadge{
+    display:inline-block;font-size:8.5px;font-weight:700;padding:1px 4px;border-radius:999px;
+    background:#fff3cd;color:#8a6d1a;margin-left:4px;vertical-align:1px;
+  }
   .canvasNode.moveNode{border-style:dashed;background:#fbfbfc;color:var(--text-dim);}
   .canvasNode.rootNode{border-color:var(--accent);background:var(--accent-soft);}
   .canvasNode.orphanNode{border-color:#d99a1f;border-style:dashed;background:#fdf6e8;}
@@ -809,21 +819,42 @@ function cacheSharedUiPrefs(){
 var H1 = DATA.sheet1.headers;
 var C = {}; H1.forEach(function(h,i){ C[h]=i; });
 
-var rowById = {}, nameToIdByRegion = {};
+/* 노드 사이의 연결은 전부 "이름"으로 걸린다(▶[지역/이름]). 그런데 같은 지역 안에 이름이
+   겹치는 행이 있으면 이름→ID 인덱스에서 뒤에 오는 행이 앞의 행을 덮어써서, 가려진 행은
+   부모가 분명히 가리키고 있는데도 아무도 도달하지 못하는 고아가 된다. 그 행에 달려 있던
+   하위 연결(예: 이동한다)까지 통째로 그래프에서 사라진다.
+   그래서 이름→ID는 "단수"(호환용)와 "복수"(실제 연결 해석용) 두 가지를 함께 만든다. */
+var rowById = {}, nameToIdByRegion = {}, nameToIdsByRegion = {};
 function rebuildIndexes(){
   rowById = {};
   DATA.sheet1.rows.forEach(function(r,i){ rowById[r[C['지역ID']]] = i; });
   nameToIdByRegion = {};
+  nameToIdsByRegion = {};
   Object.keys(DATA.regionsTree).forEach(function(topId){
     nameToIdByRegion[topId] = {};
+    nameToIdsByRegion[topId] = {};
   });
   DATA.sheet1.rows.forEach(function(r){
     var top = r[C['상위지역ID(부모ID)']] || r[C['지역ID']];
+    var name = r[C['지역명']], id = r[C['지역ID']];
     if(!nameToIdByRegion[top]) nameToIdByRegion[top] = {};
-    nameToIdByRegion[top][r[C['지역명']]] = r[C['지역ID']];
+    if(!nameToIdsByRegion[top]) nameToIdsByRegion[top] = {};
+    if(nameToIdByRegion[top][name] === undefined) nameToIdByRegion[top][name] = id;
+    if(!nameToIdsByRegion[top][name]) nameToIdsByRegion[top][name] = [];
+    if(nameToIdsByRegion[top][name].indexOf(id)===-1) nameToIdsByRegion[top][name].push(id);
   });
 }
 rebuildIndexes();
+// 이름이 가리키는 모든 행 ID. 이름이 겹치면 둘 다 돌려주므로, 어느 쪽도 조용히 사라지지 않는다.
+function idsForName(topId, name){
+  var m = nameToIdsByRegion[topId];
+  return (m && m[name]) ? m[name] : [];
+}
+// 이 지역 안에서 이름이 겹치는 노드들. 그래프 화면에서 경고로 알린다.
+function duplicateNodeNames(topId){
+  var m = nameToIdsByRegion[topId] || {};
+  return Object.keys(m).filter(function(n){ return m[n].length > 1; });
+}
 
 // Rebuilds DATA.regionsTree (header/cluster/이동한다 structure) purely from the raw sheet1 rows -
 // the JS equivalent of the Python pipeline that built it at export time. Needed whenever sheet1
@@ -846,39 +877,56 @@ function rebuildRegionsTreeFromSheet1(){
     var headerI = null;
     for(var k=0;k<idxs.length;k++){ if(rows[idxs[k]][typeIdx]==='INCUNTR_00'){ headerI = idxs[k]; break; } }
     if(headerI===null) return;
+    // 이름이 겹치는 행이 있으면 예전에는 뒤의 행이 앞의 행을 덮어써서, 가려진 행이 어느
+    // 세부지역에도 못 들어가고 그래프에서 고아로 떨어졌다. 이름 하나에 행 여러 개를 담는다.
     var byName = {};
-    idxs.forEach(function(i){ byName[rows[i][nameIdx]] = i; });
+    idxs.forEach(function(i){
+      var nm = rows[i][nameIdx];
+      if(!byName[nm]) byName[nm] = [];
+      byName[nm].push(i);
+    });
     var headerChoices = parseChoices(rows[headerI][scriptIdx]);
     var clusterRoots = headerChoices.filter(function(c){ return c!=='이동한다'; });
 
+    // assigned는 "이름"이 아니라 "행 인덱스" 기준이다. 이름이 겹치는 행들을 각각 따로 추적해야
+    // 한쪽이 다른 쪽을 덮어써서 어느 세부지역에도 못 들어가는 일이 없다.
+    // 자리 배정은 enqueue 시점에 확정한다(dequeue 시점에 하면 두 부모가 같은 사본을 집어
+    // 나머지 사본이 영영 배정되지 않는다). 링크 하나에 행 하나씩 짝지어지므로,
+    // 부모가 둘이면 같은 이름의 사본도 각자 제 갈래로 나뉜다.
     var assigned = {};
     var clusters = [];
+    function claimOne(name){
+      var list = byName[name] || [];
+      for(var i=0;i<list.length;i++){
+        if(!assigned[list[i]]){ assigned[list[i]] = true; return list[i]; }
+      }
+      return null;
+    }
     clusterRoots.forEach(function(root){
-      if(assigned[root] || !(root in byName)) return;
-      var queue=[root], members=[], localSeen={};
+      if(!(root in byName)) return;
+      var seed = claimOne(root);
+      if(seed===null) return;
+      var queue = [seed], members = [];
       while(queue.length){
-        var cur = queue.shift();
-        if(localSeen[cur] || assigned[cur]) continue;
-        localSeen[cur]=true;
-        if(!(cur in byName)) continue;
-        assigned[cur]=true;
-        members.push(cur);
-        var ri = byName[cur];
+        var ri = queue.shift();
+        members.push(ri);
         var nexts = parseChoices(rows[ri][scriptIdx])
           .concat(parseChoices(rows[ri][succIdx]||''))
           .concat(parseChoices(rows[ri][failIdx]||''));
         nexts.forEach(function(n){
-          if(!localSeen[n] && !assigned[n] && (n in byName) && n!=='이동한다') queue.push(n);
+          if(n==='이동한다' || !(n in byName)) return;
+          var ni = claimOne(n);
+          if(ni!==null) queue.push(ni);
         });
       }
-      clusters.push({root:root, nodeIds: members.map(function(n){ return rows[byName[n]][idIdx]; })});
+      clusters.push({root:root, nodeIds: members.map(function(i){ return rows[i][idIdx]; })});
     });
 
     tree[topId] = {
       id: topId,
       headerRowId: rows[headerI][idIdx],
       clusters: clusters,
-      moveRowId: ('이동한다' in byName) ? rows[byName['이동한다']][idIdx] : null
+      moveRowId: byName['이동한다'] ? rows[byName['이동한다'][0]][idIdx] : null
     };
   });
   DATA.regionsTree = tree;
@@ -2363,7 +2411,6 @@ function setCanvasPos(topId, rowId, x, y){
 // branches share, so dragging a subtree doesn't yank a shared node away from its
 // other parent's branch
 function computeInDegrees(topId, idSet){
-  var nameToId = nameToIdByRegion[topId];
   var indeg = {};
   Object.keys(idSet).forEach(function(id){ indeg[id] = 0; });
   Object.keys(idSet).forEach(function(id){
@@ -2374,8 +2421,9 @@ function computeInDegrees(topId, idSet){
       .concat(parseChoices(row[C['실패 스크립트']]||''));
     choices.forEach(function(cname){
       if(cname==='이동한다') return;
-      var nid = nameToId[cname];
-      if(nid && idSet[nid]!==undefined) indeg[nid] = (indeg[nid]||0)+1;
+      idsForName(topId, cname).forEach(function(nid){
+        if(idSet[nid]!==undefined) indeg[nid] = (indeg[nid]||0)+1;
+      });
     });
   });
   return indeg;
@@ -2383,7 +2431,6 @@ function computeInDegrees(topId, idSet){
 // nodes reachable from startRid that have exactly one incoming edge within idSet -
 // i.e. "belong" exclusively to this branch and should travel together with it
 function getExclusiveDescendants(topId, startRid, idSet, indeg){
-  var nameToId = nameToIdByRegion[topId];
   var visited = {}; visited[startRid] = true;
   var queue = [startRid], result = [];
   while(queue.length){
@@ -2395,10 +2442,11 @@ function getExclusiveDescendants(topId, startRid, idSet, indeg){
       .concat(parseChoices(row[C['실패 스크립트']]||''));
     choices.forEach(function(cname){
       if(cname==='이동한다') return;
-      var nid = nameToId[cname];
-      if(nid && !visited[nid] && idSet[nid]!==undefined && indeg[nid]===1){
-        visited[nid] = true; result.push(nid); queue.push(nid);
-      }
+      idsForName(topId, cname).forEach(function(nid){
+        if(!visited[nid] && idSet[nid]!==undefined && indeg[nid]===1){
+          visited[nid] = true; result.push(nid); queue.push(nid);
+        }
+      });
     });
   }
   return result;
@@ -2408,7 +2456,6 @@ function getExclusiveDescendants(topId, startRid, idSet, indeg){
 // canvas itself uses - returns a Set-like object of reachable row IDs (not names, since a
 // hierarchy swap moves links between rows while each row's own ID stays put)
 function getReachableRowIds(topId, rootId, moveRowId){
-  var nameToId = nameToIdByRegion[topId];
   var visited = {};
   if(!rootId) return visited;
   var queue = [rootId];
@@ -2422,8 +2469,9 @@ function getReachableRowIds(topId, rootId, moveRowId){
       .concat(parseChoices(row[C['실패 스크립트']]||''));
     choices.forEach(function(cname){
       if(cname==='이동한다') return;
-      var nid = nameToId[cname];
-      if(nid && !visited[nid]){ visited[nid]=true; queue.push(nid); }
+      idsForName(topId, cname).forEach(function(nid){
+        if(!visited[nid]){ visited[nid]=true; queue.push(nid); }
+      });
     });
   }
   return visited;
@@ -2570,7 +2618,6 @@ function swapNodeHierarchy(topId, ridA, ridB){
 
 
 function autoLayoutNodes(topId, rootId, idSet, moveRowId){
-  var nameToId = nameToIdByRegion[topId];
   var visited = {};
   var layerOf = {};
   var order = [];
@@ -2591,11 +2638,14 @@ function autoLayoutNodes(topId, rootId, idSet, moveRowId){
         if(moveRowId && !visited[moveRowId]){ visited[moveRowId]=true; queue.push([moveRowId, depth+1]); }
         return;
       }
-      var nid = nameToId[cname];
-      if(nid && (idSet[nid] || nid===moveRowId) && !visited[nid]){
-        visited[nid] = true;
-        queue.push([nid, depth+1]);
-      }
+      // 이름이 겹치는 노드가 있으면 모두 따라간다. 한쪽만 골라 버리면 나머지 한쪽과
+      // 그 아래 가지가 통째로 그래프에서 사라진다.
+      idsForName(topId, cname).forEach(function(nid){
+        if((idSet[nid] || nid===moveRowId) && !visited[nid]){
+          visited[nid] = true;
+          queue.push([nid, depth+1]);
+        }
+      });
     });
   }
   var LAYER_W = 220, NODE_H = 80; // grid-aligned (multiples of the 20px drag-snap grid)
@@ -2700,6 +2750,20 @@ function renderClusterCanvasScreen(main, crumb){
   toolbar.appendChild(backBtn); toolbar.appendChild(resetBtn); toolbar.appendChild(hierarchySwapBtn);
   toolbar.appendChild(lockBtn); toolbar.appendChild(legend); toolbar.appendChild(hint);
   wrap.appendChild(toolbar);
+
+  // 연결은 이름으로만 걸리므로, 같은 지역에 이름이 겹치면 그 이름을 가리키는 링크가
+  // 어느 쪽을 뜻하는지 정할 수 없다. 그래프는 양쪽 모두로 선을 긋되, 사실을 알려 준다.
+  var dupNames = duplicateNodeNames(topId);
+  var dupIdSet = {};
+  dupNames.forEach(function(n){ idsForName(topId, n).forEach(function(id){ dupIdSet[id]=true; }); });
+  if(dupNames.length){
+    var warn = document.createElement('div'); warn.className='dupNameWarn';
+    warn.innerHTML = '⚠ 이 지역에 이름이 겹치는 노드가 있어요: '
+      + dupNames.map(function(n){ return '<b>'+escapeHtml(n)+'</b> ('+idsForName(topId,n).length+'개)'; }).join(', ')
+      + '<br>연결은 이름으로 걸리기 때문에, 이 이름을 가리키는 선은 같은 이름의 노드 <b>모두</b>로 이어집니다. '
+      + '의도한 한쪽만 연결하려면 노드 이름을 서로 다르게 바꿔주세요.';
+    wrap.appendChild(warn);
+  }
 
   var canvasWrap = document.createElement('div'); canvasWrap.id='clusterCanvasWrap';
   var inner = document.createElement('div'); inner.id='clusterCanvasInner';
@@ -2854,7 +2918,10 @@ function renderClusterCanvasScreen(main, crumb){
       var fw = fromEl ? fromEl.offsetWidth : 150;
       var fh = fromEl ? fromEl.offsetHeight : 50;
       function edgeTo(targetName, cls){
-        var tid = targetName==='이동한다' ? tree.moveRowId : nameToId[targetName];
+        var targets = targetName==='이동한다' ? [tree.moveRowId] : idsForName(topId, targetName);
+        targets.forEach(function(tid){ edgeToId(tid, cls); });
+      }
+      function edgeToId(tid, cls){
         if(!tid || !nodeEls[tid]) return;
         var toPos = nodePos(tid);
         var toEl = nodeEls[tid];
@@ -2889,8 +2956,10 @@ function renderClusterCanvasScreen(main, crumb){
       .concat(parseChoices(row[C['실패 스크립트']]||''));
     var out = [];
     names.forEach(function(n){
-      var tid = n==='이동한다' ? tree.moveRowId : nameToId[n];
-      if(tid && nodeEls[tid] && tid!==rid && out.indexOf(tid)===-1) out.push(tid);
+      var targets = n==='이동한다' ? [tree.moveRowId] : idsForName(topId, n);
+      targets.forEach(function(tid){
+        if(tid && nodeEls[tid] && tid!==rid && out.indexOf(tid)===-1) out.push(tid);
+      });
     });
     return out;
   }
@@ -2998,6 +3067,13 @@ function renderClusterCanvasScreen(main, crumb){
     if(cnToolbar.children.length) box.appendChild(cnToolbar);
 
     var nameDiv = document.createElement('div'); nameDiv.className='cnName'; nameDiv.textContent = row[C['지역명']];
+    if(dupIdSet[rid]){
+      box.classList.add('dupNameNode');
+      var dupBadge = document.createElement('span'); dupBadge.className='cnDupBadge';
+      dupBadge.textContent = '이름중복';
+      dupBadge.title = '같은 지역에 이름이 같은 노드가 또 있어요 (' + rid + ') — 링크가 양쪽 모두로 이어집니다';
+      nameDiv.appendChild(dupBadge);
+    }
     var typeDiv = document.createElement('div'); typeDiv.className='cnType'; typeDiv.textContent = row[C['종류 코드']]||'';
     box.appendChild(nameDiv); box.appendChild(typeDiv);
     var metaDiv = document.createElement('div'); metaDiv.className='cnMeta';
