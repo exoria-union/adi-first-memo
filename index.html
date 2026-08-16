@@ -269,6 +269,20 @@
   /* ============ LIST SCREENS (items/subquests) ============ */
   #main.listscreen{max-width:1240px;margin:0 auto;}
   .listToolbar{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;}
+  .regionPick{
+    width:100%;font-size:10.5px;padding:3px 5px;border:1px solid var(--border);border-radius:2px;
+    background:var(--surface);color:var(--text);font-family:inherit;cursor:pointer;margin-top:6px;
+  }
+  .regionPick:hover{border-color:var(--accent);}
+  .regionPick.noRegion{color:var(--text-faint);border-style:dashed;}
+  .itemCard.bulkSelected{outline:2px solid var(--accent);outline-offset:-2px;background:var(--accent-soft);}
+  .icBulkCheck{position:absolute;top:6px;right:6px;width:15px;height:15px;accent-color:var(--accent);cursor:pointer;z-index:3;}
+  .bulkBar{
+    display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%;
+    background:var(--accent-soft);border:1px solid var(--accent-soft-border);border-radius:3px;padding:8px 10px;
+  }
+  .bulkBar .bulkCount{font-size:12px;font-weight:700;color:var(--accent);}
+  .bulkBar select{font-size:12px;padding:4px 6px;border:1px solid var(--border-strong);border-radius:2px;font-family:inherit;}
   .viewModeGroup{display:flex;gap:2px;background:var(--bg);border:1px solid var(--border-strong);padding:2px;border-radius:2px;}
   .viewModeBtn{padding:5px 12px;font-size:11.5px;border:none;background:transparent;color:var(--text-dim);cursor:pointer;border-radius:0;}
   .viewModeBtn.active{background:var(--surface);color:var(--accent);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.08);}
@@ -3675,6 +3689,58 @@ function renameNodeCascade(topId, oldName, newName){
    ITEMS SCREEN
    ========================================================= */
 var ITEM_CATS = ['전체','재료','레시피','소모품(완제)','재료(거래품)','소모품(완제, 거래품)'];
+
+/* ---------------- 목록에서 지역 지정 (개별 + 일괄) ----------------
+   획득처의 지역명 접두사가 지도 위치이므로, 지역 선택은 결국 그 접두사를 바꾸는 일이다.
+   세부 경로("- 지하 납골당 → …")는 건드리지 않고 지역명만 교체한다. */
+function sortedRegionNames(){
+  return regionNamesByLengthDesc()
+    .map(function(e){ return e.name; })
+    .sort(function(a,b){ return a.localeCompare(b,'ko'); });
+}
+function buildRegionSelect(currentName, onPick){
+  var sel = document.createElement('select');
+  sel.className = 'regionPick' + (currentName ? '' : ' noRegion');
+  var none = document.createElement('option');
+  none.value = ''; none.textContent = '— 지역 없음 —';
+  sel.appendChild(none);
+  sortedRegionNames().forEach(function(n){
+    var o = document.createElement('option'); o.value = n; o.textContent = n;
+    sel.appendChild(o);
+  });
+  // 현재 지역명이 목록에 없으면(지역이 지워졌거나 오타) 그 값도 옵션으로 넣어 보여준다
+  if(currentName && sortedRegionNames().indexOf(currentName)===-1){
+    var extra = document.createElement('option');
+    extra.value = currentName; extra.textContent = currentName + ' (없는 지역)';
+    sel.appendChild(extra);
+  }
+  sel.value = currentName || '';
+  // 카드 클릭(=상세 열기)과 드래그로 번지지 않게 막는다
+  sel.addEventListener('click', function(e){ e.stopPropagation(); });
+  sel.addEventListener('pointerdown', function(e){ e.stopPropagation(); });
+  sel.addEventListener('change', function(e){
+    e.stopPropagation();
+    sel.classList.toggle('noRegion', !sel.value);
+    onPick(sel.value);
+  });
+  return sel;
+}
+// 아이템 한 건의 지역을 바꾼다. 빈 값이면 지역명 접두사만 떼어낸다(지도에서 내려놓기).
+function setItemRegionByName(row, newName){
+  var before = row[3];
+  if(!newName){
+    var parts = splitAcquisition(row[3]);
+    if(parts.region===null) return false;
+    row[3] = parts.rest.replace(/^\s*[-–]\s*/,'').trim();
+  } else {
+    row[3] = withRegionPrefix(row[3], newName);
+  }
+  return row[3] !== before;
+}
+var itemBulkMode = false;
+var itemBulkSelection = {};
+function bulkKey(id, isKey){ return (isKey?'K':'I') + id; }
+
 function renderItemsScreen(main, crumb){
   // defensive: always clear own target, so this function is safe to call directly too
   main.innerHTML=''; crumb.innerHTML='';
@@ -3719,19 +3785,81 @@ function renderItemsScreen(main, crumb){
   addBtn.addEventListener('click', function(){ addNewItem(false); });
   var addKeyBtn = document.createElement('button'); addKeyBtn.textContent='+ 새 키아이템';
   addKeyBtn.addEventListener('click', function(){ addNewItem(true); });
+  var bulkStartBtn = document.createElement('button'); bulkStartBtn.className='ghost';
+  bulkStartBtn.textContent='여러 아이템 지역 한번에 바꾸기';
+  bulkStartBtn.addEventListener('click', function(){
+    itemBulkMode = true; itemBulkSelection = {};
+    render();
+  });
+  if(!itemBulkMode) toolbar.appendChild(bulkStartBtn);
   toolbar.appendChild(addKeyBtn);
   toolbar.appendChild(addBtn);
   wrap.appendChild(toolbar);
 
-  var grid = document.createElement('div'); grid.className='itemGrid' + (nav.itemView!=='grid' ? ' view'+nav.itemView.charAt(0).toUpperCase()+nav.itemView.slice(1) : '');
   var cat = nav.itemCat || '전체';
   var all = DATA.items.rows.map(function(r){ return {row:r, key:false}; })
     .concat(DATA.keyItems.rows.map(function(r){ return {row:r, key:true}; }));
+  var visible = all.filter(function(entry){
+    var rcat = entry.key ? '키아이템' : entry.row[2];
+    return cat==='전체' || rcat===cat;
+  });
+
+  if(itemBulkMode){
+    var bar = document.createElement('div'); bar.className='bulkBar';
+    // 선택은 분류 탭을 넘어 유지되므로, 개수와 적용 범위 모두 "지금 보이는 목록"이 아니라
+    // 전체 선택분을 기준으로 삼아야 한다. 안 그러면 다른 탭에서 고른 것이 조용히 빠진다.
+    var allByKey = {};
+    all.forEach(function(e){ allByKey[bulkKey(e.row[0], e.key)] = e; });
+    var selectedKeys = Object.keys(itemBulkSelection).filter(function(k){ return allByKey[k]; });
+    var visibleSelected = visible.filter(function(e){ return itemBulkSelection[bulkKey(e.row[0], e.key)]; }).length;
+    var countEl = document.createElement('span'); countEl.className='bulkCount';
+    countEl.textContent = selectedKeys.length + '개 선택됨'
+      + (selectedKeys.length > visibleSelected ? ' (이 목록 밖 ' + (selectedKeys.length - visibleSelected) + '개 포함)' : '');
+    var selAllBtn = document.createElement('button'); selAllBtn.className='ghost'; selAllBtn.textContent='이 목록 전체 선택';
+    selAllBtn.addEventListener('click', function(){
+      visible.forEach(function(e){ itemBulkSelection[bulkKey(e.row[0], e.key)] = true; });
+      render();
+    });
+    var clearBtn = document.createElement('button'); clearBtn.className='ghost'; clearBtn.textContent='선택 해제';
+    clearBtn.addEventListener('click', function(){ itemBulkSelection = {}; render(); });
+    var bulkSel = document.createElement('select');
+    var ph = document.createElement('option'); ph.value=''; ph.textContent='옮길 지역 선택…';
+    bulkSel.appendChild(ph);
+    sortedRegionNames().forEach(function(n){
+      var o = document.createElement('option'); o.value=n; o.textContent=n; bulkSel.appendChild(o);
+    });
+    var noneOpt = document.createElement('option'); noneOpt.value='__none__'; noneOpt.textContent='— 지역 없음으로 —';
+    bulkSel.appendChild(noneOpt);
+    var applyBtn2 = document.createElement('button'); applyBtn2.className='primary'; applyBtn2.textContent='선택한 아이템에 적용';
+    applyBtn2.addEventListener('click', function(){
+      if(!bulkSel.value){ toast('옮길 지역을 먼저 고르세요'); return; }
+      var targets = selectedKeys.map(function(k){ return allByKey[k]; });
+      if(!targets.length){ toast('아이템을 먼저 선택하세요'); return; }
+      var toName = bulkSel.value==='__none__' ? '' : bulkSel.value;
+      var changed = 0;
+      targets.forEach(function(e){ if(setItemRegionByName(e.row, toName)) changed++; });
+      rebuildItemIndex(); rebuildAllCrossRefs(); markDirty();
+      toast(changed + '개 아이템의 지역을 ' + (toName ? '"'+toName+'"(으)로' : '없음으로') + ' 바꿨어요');
+      itemBulkMode = false; itemBulkSelection = {};
+      render();
+    });
+    var cancelBtn2 = document.createElement('button'); cancelBtn2.className='ghost'; cancelBtn2.textContent='취소';
+    cancelBtn2.addEventListener('click', function(){ itemBulkMode=false; itemBulkSelection={}; render(); });
+    bar.appendChild(countEl); bar.appendChild(selAllBtn); bar.appendChild(clearBtn);
+    var barSpacer = document.createElement('div'); barSpacer.style.flex='1'; bar.appendChild(barSpacer);
+    bar.appendChild(bulkSel); bar.appendChild(applyBtn2); bar.appendChild(cancelBtn2);
+    wrap.appendChild(bar);
+    var bulkHint = document.createElement('div');
+    bulkHint.style.cssText='font-size:11px;color:var(--text-faint);margin:6px 0 12px;';
+    bulkHint.textContent='카드를 클릭해서 선택/해제하세요 · 분류 탭을 바꿔가며 골라도 선택은 그대로 쌓이고, 적용은 고른 전체에 한 번에 들어갑니다';
+    wrap.appendChild(bulkHint);
+  }
+
+  var grid = document.createElement('div'); grid.className='itemGrid' + (nav.itemView!=='grid' ? ' view'+nav.itemView.charAt(0).toUpperCase()+nav.itemView.slice(1) : '');
   var anyShown = false;
-  all.forEach(function(entry){
+  visible.forEach(function(entry){
     var r = entry.row;
     var rcat = entry.key ? '키아이템' : r[2];
-    if(cat!=='전체' && rcat!==cat) return;
     anyShown = true;
     var card = document.createElement('div'); card.className='itemCard';
     var bucket = entry.key ? 'material' : itemCategoryBucket(rcat);
@@ -3781,7 +3909,35 @@ function renderItemsScreen(main, crumb){
       });
       card.appendChild(tagsWrap);
     }
-    card.addEventListener('click', function(){ go({itemId:r[0], itemIsKey:entry.key}); });
+
+    // 목록에서 바로 지역을 지정한다(= 획득처의 지역명 접두사 교체 = 지도상의 위치 이동).
+    // 일괄 선택 중에는 카드 전체가 선택 토글이므로 개별 드롭다운은 숨긴다.
+    if(!itemBulkMode){
+      card.appendChild(buildRegionSelect(splitAcquisition(r[3]).region, function(name){
+        if(setItemRegionByName(r, name)){
+          rebuildItemIndex(); rebuildAllCrossRefs(); markDirty();
+          toast(r[1] + ' → ' + (name ? name : '지역 없음'));
+        }
+      }));
+    }
+
+    var selKey = bulkKey(r[0], entry.key);
+    if(itemBulkMode){
+      var toggleSel = function(){
+        if(itemBulkSelection[selKey]) delete itemBulkSelection[selKey];
+        else itemBulkSelection[selKey] = true;
+        render();
+      };
+      card.style.position = 'relative';
+      if(itemBulkSelection[selKey]) card.classList.add('bulkSelected');
+      var chk = document.createElement('input'); chk.type='checkbox'; chk.className='icBulkCheck';
+      chk.checked = !!itemBulkSelection[selKey];
+      chk.addEventListener('click', function(e){ e.stopPropagation(); toggleSel(); });
+      card.appendChild(chk);
+      card.addEventListener('click', function(){ toggleSel(); });
+    } else {
+      card.addEventListener('click', function(){ go({itemId:r[0], itemIsKey:entry.key}); });
+    }
     grid.appendChild(card);
   });
   if(!anyShown){
