@@ -769,6 +769,7 @@ var cloudIgnoreRealtimeUntil = 0;
 var cloudBaseData = null;       // 원본에서 선언 누락됐던 변수("use strict" ReferenceError 방지)
 var COLLAB = null;              // 활성 Yjs 협업 세션(null이면 기존 방식으로 폴백)
 var __collabPendingRender = false;
+var __pendingRemote = null;     // 편집 중 도착한 원격본(보류) — 로컬 편집 보호용
 var __collabPanelUnbinds = [];  // 열린 노드 패널의 협업 바인딩 해제 함수들
 var __collabPanel = null;       // {topId,rowId} 현재 열린 노드 패널
 function collabClearPanelBindings(){ __collabPanelUnbinds.forEach(function(fn){ try{fn();}catch(e){} }); __collabPanelUnbinds=[]; }
@@ -5151,7 +5152,18 @@ async function startCollab(projectId){
     cloudReady = true; setCloudStatus('저장됨 · 실시간 연결');
   }catch(e){
     console.error(e); COLLAB=null; setCloudStatus('실시간 연결 실패');
-    toast('실시간 협업 연결 실패(로컬 저장은 계속 동작): '+(e.message||e));
+    // ★ 협업 연결 실패 시, onCloudSignedIn이 세팅한 stale한 projects.data(협업 전환 후
+    //    갱신 안 되는 시드본) 대신 localStorage의 최신 로컬본으로 복구해 데이터 초기화를 막는다.
+    try{
+      var ls=JSON.parse(localStorage.getItem(LS_KEY)||'null');
+      if(ls && ls.sheet1 && ls.sheet1.headers){
+        DATA=ls; ensureGraphDataShape(); applyUserPrefs(DATA);
+        H1=DATA.sheet1.headers; C={}; H1.forEach(function(h,i){C[h]=i;});
+        try{ rebuildRegionsTreeFromSheet1(); rebuildIndexes(); rebuildItemIndex(); rebuildSqIndex(); rebuildAllCrossRefs(); }catch(_){}
+        rebuildProjectView({preserveView:true});
+      }
+    }catch(_){}
+    toast('실시간 협업 연결 실패 — 로컬 저장본을 표시합니다.');
   }
 }
 function collabStatusText(s){
@@ -5167,7 +5179,10 @@ function isTextTarget(t){
 // 원격 변경 -> 앱 DATA 반영. 입력 중이면 커서 보호를 위해 전체 재렌더를 보류.
 function applyRemoteData(incoming){
   if(!incoming || !incoming.sheet1 || !incoming.sheet1.headers) return;
-  var editing = isTextTarget(document.activeElement);
+  // ★ 편집 중이면 DATA/localStorage를 절대 건드리지 않는다. 아직 Yjs로 올라가지 않은
+  //    로컬 편집이 원격본에 덮여 사라지는 것을 막는다. 최신 원격본만 보류했다가 blur 후 병합.
+  if(isTextTarget(document.activeElement)){ __pendingRemote = incoming; __collabPendingRender = true; return; }
+  __pendingRemote = null;
   DATA = JSON.parse(JSON.stringify(incoming));
   ensureGraphDataShape();
   applyUserPrefs(DATA);
@@ -5181,8 +5196,6 @@ function applyRemoteData(incoming){
     localStorage.setItem(PROJECTS_KEY, JSON.stringify(PROJECTS));
     localStorage.setItem(LS_KEY, JSON.stringify(DATA));
   }catch(e){ console.error('원격 데이터 인덱스 재구성 실패', e); }
-  if(editing){ __collabPendingRender = true; return; }
-  try{ rebuildRegionsTreeFromSheet1(); rebuildIndexes(); rebuildItemIndex(); rebuildSqIndex(); rebuildAllCrossRefs(); }catch(e){ console.error('remote derived-data rebuild failed', e); }
   rebuildProjectView({preserveView:true});
 }
 function renderCollabPresence(states, selfId){
@@ -5208,8 +5221,15 @@ document.addEventListener('focusout', function(){
   if(!COLLAB) return;
   try{ COLLAB.setEditing(null); }catch(err){}
   setTimeout(function(){
+    if(isTextTarget(document.activeElement)) return; // 아직 다른 칸 편집 중이면 대기
+    if(__pendingRemote && COLLAB){
+      __pendingRemote=null; __collabPendingRender=false;
+      try{ COLLAB.push(DATA); }catch(e){ console.error(e); }          // 방금까지의 로컬 편집을 Yjs로 확정(유실 방지)
+      var merged = COLLAB.readCurrent ? COLLAB.readCurrent() : null;  // 로컬+원격 병합 결과를 다시 읽어 반영
+      if(merged){ applyRemoteData(merged); } else { collabRefreshViews(); }
+      return;
+    }
     if(!__collabPendingRender || !COLLAB) return;
-    if(isTextTarget(document.activeElement)) return;
     __collabPendingRender=false; collabRefreshViews();
   }, 30);
 });

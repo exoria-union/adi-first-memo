@@ -113,6 +113,8 @@ export async function openProject(cfg) {
   return {
     ydoc, awareness, provider,
     get data() { return data; },
+    // 현재 Yjs 문서의 병합 결과(로컬+원격)를 즉시 읽는다. blur 시 안전 병합에 사용.
+    readCurrent() { return readProject(ydoc); },
     push(latest) {
       reconcile(ydoc, latest, shadow, APP);
       shadow = clone(latest);
