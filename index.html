@@ -938,6 +938,109 @@ function duplicateNodeNames(topId){
   return Object.keys(m).filter(function(n){ return m[n].length > 1; });
 }
 
+// 이름 링크는 최종적으로 "한 노드"만 가리켜야 한다. 중복 이름이 남아 있더라도
+// 현재 세부지역/탐색 집합 안의 노드를 우선하고, 없으면 첫 번째 행만 사용한다.
+function resolveNodeIdForLink(topId, name, preferredSet, usedSet){
+  if(name==='이동한다'){
+    var tree = DATA.regionsTree && DATA.regionsTree[topId];
+    if(tree && tree.moveRowId) return tree.moveRowId;
+  }
+  var ids = idsForName(topId, name);
+  var candidates = ids;
+  if(preferredSet){
+    var preferred = ids.filter(function(id){ return !!preferredSet[id]; });
+    if(preferred.length) candidates = preferred;
+  }
+  if(usedSet){
+    for(var i=0;i<candidates.length;i++) if(!usedSet[candidates[i]]) return candidates[i];
+  }
+  return candidates.length ? candidates[0] : null;
+}
+
+function rowCloneSignature(row){
+  // 지역ID만 제외하고 비교한다. 이름이 같고 나머지 필드가 전부 같다면 이름 기반 링크로도
+  // 두 행을 구분할 방법이 없는 완전 복제본이므로 하나만 남겨도 의미가 달라지지 않는다.
+  return JSON.stringify((row||[]).map(function(v,i){ return i===C['지역ID'] ? '__ROW_ID__' : v; }));
+}
+function nextUnusedNodeRowId(topId, used){
+  var prefix = String(topId)+'_';
+  var maxN = 0;
+  DATA.sheet1.rows.forEach(function(r){
+    var id = String(r[C['지역ID']]||'');
+    if(id.indexOf(prefix)!==0) return;
+    var tail = id.slice(prefix.length);
+    if(/^\d+$/.test(tail)) maxN = Math.max(maxN, parseInt(tail,10));
+  });
+  var n = maxN + 1, id;
+  do{ id = prefix + String(n++).padStart(2,'0'); }while(used[id]);
+  return id;
+}
+function hasNodeIntegrityIssues(){
+  if(!DATA || !DATA.sheet1 || !Array.isArray(DATA.sheet1.rows)) return false;
+  var idCol=C['지역ID'], nameCol=C['지역명'], topCol=C['상위지역ID(부모ID)'];
+  var seenId={}, seenClone={};
+  for(var i=0;i<DATA.sheet1.rows.length;i++){
+    var r=DATA.sheet1.rows[i], rid=String(r[idCol]||''), top=String(r[topCol]||rid||''), name=String(r[nameCol]||'');
+    if(rid){ if(seenId[rid]) return true; seenId[rid]=true; }
+    if(name){
+      var ck=top+'\u0000'+name+'\u0000'+rowCloneSignature(r);
+      if(seenClone[ck]) return true;
+      seenClone[ck]=true;
+    }
+  }
+  return false;
+}
+function repairAllNodeIntegrity(){
+  if(!DATA || !DATA.sheet1 || !Array.isArray(DATA.sheet1.rows)) return {removed:0,reId:0};
+  var idCol=C['지역ID'], nameCol=C['지역명'], topCol=C['상위지역ID(부모ID)'];
+  var rows=DATA.sheet1.rows, remove={}, usedId={}, firstById={}, removed=0, reId=0;
+
+  // 1) 지역ID는 앱 전체에서 유일해야 한다. 같은 ID의 완전 복제본은 제거하고,
+  // 내용이 다른 일반 노드는 새 ID를 부여해 rowById 덮어쓰기를 막는다.
+  rows.forEach(function(r,i){
+    var rid=String(r[idCol]||''), top=String(r[topCol]||rid||'');
+    if(!rid) return;
+    if(firstById[rid]!==undefined){
+      var first=rows[firstById[rid]];
+      if(rowCloneSignature(first)===rowCloneSignature(r)){
+        remove[i]=true; removed++; return;
+      }
+      if(r[topCol]){
+        var fresh=nextUnusedNodeRowId(top, usedId);
+        r[idCol]=fresh; rid=fresh; reId++;
+      }
+    }
+    if(rid){ firstById[rid]=i; usedId[rid]=true; }
+  });
+
+  if(Object.keys(remove).length){
+    DATA.sheet1.rows = rows.filter(function(r,i){ return !remove[i]; });
+    rows = DATA.sheet1.rows;
+  }
+
+  // 2) 같은 이름 자체는 기존 데이터에서 의도적으로 여러 갈래에 쓰일 수 있다.
+  // 따라서 이름이 같다는 이유만으로 합치거나 이름을 바꾸지 않고, 내용까지 완전히 같은 복제행만 제거한다.
+  remove={};
+  var seenClone={};
+  rows.forEach(function(r,i){
+    var rid=String(r[idCol]||''), top=String(r[topCol]||rid||''), name=String(r[nameCol]||'');
+    if(!name) return;
+    var ck=top+'\u0000'+name+'\u0000'+rowCloneSignature(r);
+    if(seenClone[ck]!==undefined){ remove[i]=true; removed++; return; }
+    seenClone[ck]=i;
+  });
+  if(Object.keys(remove).length){
+    DATA.sheet1.rows = rows.filter(function(r,i){ return !remove[i]; });
+  }
+  return {removed:removed,reId:reId};
+}
+
+function repairNodeIntegrityIfNeeded(label){
+  if(!hasNodeIntegrityIssues()) return {removed:0,reId:0};
+  try{ takeSnapshot(label || '노드 중복 자동 정리 직전'); }catch(e){ console.warn(e); }
+  return repairAllNodeIntegrity();
+}
+
 // Rebuilds DATA.regionsTree (header/cluster/이동한다 structure) purely from the raw sheet1 rows -
 // the JS equivalent of the Python pipeline that built it at export time. Needed whenever sheet1
 // is replaced wholesale (Excel import) rather than incrementally edited through the UI.
@@ -1614,19 +1717,12 @@ function addNodeAsChoice(topId, fromRowId){
   toast('새 노드 "'+name+'"를 추가했어요');
   return newId;
 }
-/* 편집창의 "+ 선택지 추가"용. 선택지를 만든다는 건 곧 "다음 노드를 만든다"는 뜻인데,
-   예전에는 빈 입력칸만 생기고 실제 행은 만들어지지 않았다. 그래서 이름을 다 치기 전까지는
-   어디도 가리키지 않는 끊어진 링크가 남고, 우연히 기존 노드와 같은 이름을 치면 이름 중복이
-   생겼다. 이제는 선택지를 추가하는 순간 진짜 노드가 생기고 링크가 함께 걸린다.
-   colName 은 본문/성공/실패 중 어느 스크립트의 선택지인지 지정한다. */
-function addNodeForChoice(topId, fromRowId, colName, keyword){
+/* 편집창에서 사용자가 "＋ 새 노드를 만들어 연결…"을 명시적으로 골랐을 때만 호출한다.
+   단순히 선택지 한 줄을 추가하는 것만으로는 노드를 만들지 않는다. */
+function addNodeForChoice(topId, fromRowId){
   var name = uniqueNodeName(topId, '새 노드');
   var newId = nextNodeRowId(topId);
   DATA.sheet1.rows.push(blankNodeRow(topId, newId, name));
-  var fromRow = DATA.sheet1.rows[rowById[fromRowId]];
-  var parsed = splitScript(fromRow[C[colName]]);
-  parsed.choices.push(name);
-  fromRow[C[colName]] = joinScript(parsed.narrative, parsed.choices, keyword);
   var ownerCluster = findClusterOfNode(topId, fromRowId);
   if(ownerCluster && ownerCluster.nodeIds.indexOf(newId)===-1) ownerCluster.nodeIds.push(newId);
   rebuildIndexes();
@@ -1987,8 +2083,15 @@ function deepEqual(a,b){
 }
 function mergeArrayByIdentity(base, local, remote, path, conflicts){
   var idMap={};
+  var isSheet1Rows = /(?:^|\.)sheet1\.rows$/.test(String(path||''));
   function keyFor(v,i){
-    if(Array.isArray(v) && v.length && (typeof v[0]==='string'||typeof v[0]==='number')) return String(v[0]);
+    if(Array.isArray(v) && v.length){
+      // sheet1의 v[0]은 상위지역ID라 같은 지역의 모든 노드가 같은 키가 된다.
+      // 노드 병합에서는 실제 고유키인 지역ID(v[1])를 써야 행이 서로 덮이거나 증식하지 않는다.
+      var keyIndex = isSheet1Rows ? 1 : 0;
+      var key = v[keyIndex];
+      if(typeof key==='string' || typeof key==='number') return String(key);
+    }
     return '__idx_'+i;
   }
   var keys=[];
@@ -2689,6 +2792,7 @@ function setCanvasPos(topId, rowId, x, y){
 // other parent's branch
 function computeInDegrees(topId, idSet){
   var indeg = {};
+  var edgeUse = {};
   Object.keys(idSet).forEach(function(id){ indeg[id] = 0; });
   Object.keys(idSet).forEach(function(id){
     var row = DATA.sheet1.rows[rowById[id]];
@@ -2698,9 +2802,11 @@ function computeInDegrees(topId, idSet){
       .concat(parseChoices(row[C['실패 스크립트']]||''));
     choices.forEach(function(cname){
       if(cname==='이동한다') return;
-      idsForName(topId, cname).forEach(function(nid){
-        if(idSet[nid]!==undefined) indeg[nid] = (indeg[nid]||0)+1;
-      });
+      var nid = resolveNodeIdForLink(topId, cname, idSet, edgeUse);
+      if(nid && idSet[nid]!==undefined){
+        indeg[nid] = (indeg[nid]||0)+1;
+        edgeUse[nid] = true;
+      }
     });
   });
   return indeg;
@@ -2719,11 +2825,10 @@ function getExclusiveDescendants(topId, startRid, idSet, indeg){
       .concat(parseChoices(row[C['실패 스크립트']]||''));
     choices.forEach(function(cname){
       if(cname==='이동한다') return;
-      idsForName(topId, cname).forEach(function(nid){
-        if(!visited[nid] && idSet[nid]!==undefined && indeg[nid]===1){
-          visited[nid] = true; result.push(nid); queue.push(nid);
-        }
-      });
+      var nid = resolveNodeIdForLink(topId, cname, idSet, visited);
+      if(nid && !visited[nid] && idSet[nid]!==undefined && indeg[nid]===1){
+        visited[nid] = true; result.push(nid); queue.push(nid);
+      }
     });
   }
   return result;
@@ -2732,7 +2837,7 @@ function getExclusiveDescendants(topId, startRid, idSet, indeg){
 // BFS reachability from a cluster root, following the same "▶[지역/…]"/"▶[진입/…]" edges the
 // canvas itself uses - returns a Set-like object of reachable row IDs (not names, since a
 // hierarchy swap moves links between rows while each row's own ID stays put)
-function getReachableRowIds(topId, rootId, moveRowId){
+function getReachableRowIds(topId, rootId, moveRowId, preferredSet){
   var visited = {};
   if(!rootId) return visited;
   var queue = [rootId];
@@ -2746,12 +2851,38 @@ function getReachableRowIds(topId, rootId, moveRowId){
       .concat(parseChoices(row[C['실패 스크립트']]||''));
     choices.forEach(function(cname){
       if(cname==='이동한다') return;
-      idsForName(topId, cname).forEach(function(nid){
-        if(!visited[nid]){ visited[nid]=true; queue.push(nid); }
-      });
+      var nid = resolveNodeIdForLink(topId, cname, preferredSet, visited);
+      if(nid && !visited[nid]){ visited[nid]=true; queue.push(nid); }
     });
   }
   return visited;
+}
+// 지역 전체의 모든 세부지역 root에서 실제로 도달 가능한 노드를 합친다.
+// 그래프의 고아 개수/색상/삭제 동작이 모두 같은 기준을 쓰도록 하는 단일 판정원이다.
+function getRegionReachableRowIds(topId){
+  var tree = DATA.regionsTree && DATA.regionsTree[topId];
+  var out = {};
+  if(!tree) return out;
+  (tree.clusters||[]).forEach(function(cl){
+    var preferred = {};
+    (cl.nodeIds||[]).forEach(function(id){ preferred[id]=true; });
+    var rootId = resolveNodeIdForLink(topId, cl.root, preferred);
+    var seen = getReachableRowIds(topId, rootId, tree.moveRowId, preferred);
+    Object.keys(seen).forEach(function(id){ out[id]=true; });
+  });
+  if(tree.headerRowId) out[tree.headerRowId]=true;
+  return out;
+}
+function getRegionOrphanRowIds(topId){
+  var tree = DATA.regionsTree && DATA.regionsTree[topId];
+  if(!tree) return [];
+  var reachable = getRegionReachableRowIds(topId), out=[];
+  DATA.sheet1.rows.forEach(function(r){
+    var rid=r[C['지역ID']], top=r[C['상위지역ID(부모ID)']]||rid;
+    if(top!==topId || !rid || rid===tree.headerRowId || rid===tree.moveRowId) return;
+    if(!reachable[rid] && rowById[rid]!==undefined && out.indexOf(rid)===-1) out.push(rid);
+  });
+  return out;
 }
 // 그래프에서 두 노드의 "내용"은 그대로 두고, 두 노드가 차지하는 연결 위치만 교체한다.
 // 즉 A가 B의 상위였다면 교체 뒤에는 B가 A의 상위가 된다.
@@ -2898,8 +3029,15 @@ function autoLayoutNodes(topId, rootId, idSet, moveRowId){
   var visited = {};
   var layerOf = {};
   var order = [];
+  var edgeTargets = {};
   var queue = [[rootId, 0]];
   visited[rootId] = true;
+  function rememberEdge(fromId, name, toId){
+    if(!toId) return;
+    if(!edgeTargets[fromId]) edgeTargets[fromId] = {};
+    if(!edgeTargets[fromId][name]) edgeTargets[fromId][name] = [];
+    edgeTargets[fromId][name].push(toId);
+  }
   while(queue.length){
     var pair = queue.shift();
     var rid = pair[0], depth = pair[1];
@@ -2912,17 +3050,18 @@ function autoLayoutNodes(topId, rootId, idSet, moveRowId){
       .concat(parseChoices(row[C['실패 스크립트']]||''));
     choices.forEach(function(cname){
       if(cname === '이동한다'){
+        rememberEdge(rid, cname, moveRowId);
         if(moveRowId && !visited[moveRowId]){ visited[moveRowId]=true; queue.push([moveRowId, depth+1]); }
         return;
       }
-      // 이름이 겹치는 노드가 있으면 모두 따라간다. 한쪽만 골라 버리면 나머지 한쪽과
-      // 그 아래 가지가 통째로 그래프에서 사라진다.
-      idsForName(topId, cname).forEach(function(nid){
-        if((idSet[nid] || nid===moveRowId) && !visited[nid]){
-          visited[nid] = true;
-          queue.push([nid, depth+1]);
-        }
-      });
+      // 같은 이름의 노드가 여러 개면 이미 사용한 사본을 피하면서 한 링크당 한 노드만 배정한다.
+      // 모든 사본이 이미 쓰인 뒤에는 첫 사본을 재사용하므로 합류(convergence) 링크도 유지된다.
+      var nid = resolveNodeIdForLink(topId, cname, idSet, visited);
+      rememberEdge(rid, cname, nid);
+      if(nid && (idSet[nid] || nid===moveRowId) && !visited[nid]){
+        visited[nid] = true;
+        queue.push([nid, depth+1]);
+      }
     });
   }
   var LAYER_W = 220, NODE_H = 80; // grid-aligned (multiples of the 20px drag-snap grid)
@@ -2934,7 +3073,7 @@ function autoLayoutNodes(topId, rootId, idSet, moveRowId){
     var idx = layerCounters[depth]++;
     positions[rid] = {x: depth*LAYER_W + 20, y: idx*NODE_H + 20};
   });
-  return { positions: positions, order: order };
+  return { positions: positions, order: order, edgeTargets: edgeTargets };
 }
 
 /* 그래프 화면 상태(다시 그려도 유지돼야 하는 것들).
@@ -3028,8 +3167,8 @@ function renderClusterCanvasScreen(main, crumb){
   toolbar.appendChild(lockBtn); toolbar.appendChild(legend); toolbar.appendChild(hint);
   wrap.appendChild(toolbar);
 
-  // 연결은 이름으로만 걸리므로, 같은 지역에 이름이 겹치면 그 이름을 가리키는 링크가
-  // 어느 쪽을 뜻하는지 정할 수 없다. 그래프는 양쪽 모두로 선을 긋되, 사실을 알려 준다.
+  // 연결은 이름으로만 걸리므로 같은 지역의 중복 이름은 모호하다. 자동 정리 뒤에도 남아 있다면
+  // 안전을 위해 링크 하나는 한 노드에만 연결하고, 여기에서 중복 상태를 경고한다.
   var dupNames = duplicateNodeNames(topId);
   var dupIdSet = {};
   dupNames.forEach(function(n){ idsForName(topId, n).forEach(function(id){ dupIdSet[id]=true; }); });
@@ -3037,8 +3176,8 @@ function renderClusterCanvasScreen(main, crumb){
     var warn = document.createElement('div'); warn.className='dupNameWarn';
     warn.innerHTML = '⚠ 이 지역에 이름이 겹치는 노드가 있어요: '
       + dupNames.map(function(n){ return '<b>'+escapeHtml(n)+'</b> ('+idsForName(topId,n).length+'개)'; }).join(', ')
-      + '<br>연결은 이름으로 걸리기 때문에, 이 이름을 가리키는 선은 같은 이름의 노드 <b>모두</b>로 이어집니다. '
-      + '의도한 한쪽만 연결하려면 노드 이름을 서로 다르게 바꿔주세요.';
+      + '<br>같은 이름이 여러 갈래에 의도적으로 쓰인 경우는 그대로 보존합니다. 그래프에서는 '
+      + '각 링크가 한 노드에만 배정되며, 내용까지 완전히 같은 복제 행만 자동 정리합니다.';
     wrap.appendChild(warn);
   }
 
@@ -3100,36 +3239,31 @@ function renderClusterCanvasScreen(main, crumb){
   });
   if(healed) markDirty();
 
-  // Surface both assigned-but-unreachable nodes and region-level unassigned nodes.
-  // 연결이 실제로 끊긴 노드만 여기 남는다.
-  var orphanIds = [];
-  cl.nodeIds.forEach(function(id){
-    if(!reachableSet[id] && orphanIds.indexOf(id)===-1) orphanIds.push(id);
-  });
+  // 고아 판정은 "현재 세부지역에서 안 보인다"가 아니라, 이 지역의 어떤 세부지역 root에서도
+  // 도달할 수 없는 실제 노드만 대상으로 한다. 숫자/노란 표시/완전삭제가 전부 같은 orphanSet을 쓴다.
+  var orphanIds = getRegionOrphanRowIds(topId);
+  var orphanSet = {}; orphanIds.forEach(function(id){ orphanSet[id]=true; });
 
-  var everyAssignedId = {};
-  tree.clusters.forEach(function(c){ c.nodeIds.forEach(function(id){ everyAssignedId[id]=true; }); });
-  everyAssignedId[tree.headerRowId] = true;
-  if(tree.moveRowId) everyAssignedId[tree.moveRowId] = true;
-  DATA.sheet1.rows.forEach(function(r){
-    var rid = r[C['지역ID']];
-    var t = r[C['상위지역ID(부모ID)']] || rid;
-    if(t===topId && !everyAssignedId[rid] && !reachableSet[rid] && orphanIds.indexOf(rid)===-1) orphanIds.push(rid);
+  // 이동한다는 고정 출구라 연결이 없어도 화면에는 남기되, 실제 고아 개수에는 포함하지 않는다.
+  var extraIds = [];
+  if(tree.moveRowId && !reachableSet[tree.moveRowId] && rowById[tree.moveRowId]!==undefined) extraIds.push(tree.moveRowId);
+
+  var allIds = [];
+  reachableIds.concat(orphanIds).concat(extraIds).forEach(function(id){
+    if(id && allIds.indexOf(id)===-1) allIds.push(id);
   });
-  // 이동한다는 지역의 고정 출구라 everyAssignedId 에서 제외돼 있다. 그래서 아무도 가리키지
-  // 않는 상태가 되면(연결이 끊기거나 새로 만든 직후) 그래프에서 통째로 안 보였다.
-  // 연결이 없더라도 반드시 화면에 남겨, 어디에 붙일지 바로 손볼 수 있게 한다.
-  if(tree.moveRowId && !reachableSet[tree.moveRowId] && orphanIds.indexOf(tree.moveRowId)===-1
-     && rowById[tree.moveRowId]!==undefined){
-    orphanIds.push(tree.moveRowId);
-  }
-  var allIds = reachableIds.concat(orphanIds);
 
   var maxLayoutY = 0;
   reachableIds.forEach(function(rid){ var p = layout.positions[rid]; if(p) maxLayoutY = Math.max(maxLayoutY, p.y); });
   var orphanBaseY = maxLayoutY + 150;
   orphanIds.forEach(function(rid, idx){
     if(!getCanvasPos(topId, rid)) layout.positions[rid] = { x: 20 + (idx % 5)*220, y: orphanBaseY + Math.floor(idx/5)*90 };
+  });
+  extraIds.forEach(function(rid, idx){
+    if(!getCanvasPos(topId, rid) && !layout.positions[rid]){
+      var orphanRows = Math.ceil(orphanIds.length/5);
+      layout.positions[rid] = { x: 20 + (idx % 5)*220, y: orphanBaseY + orphanRows*90 + 70 + Math.floor(idx/5)*90 };
+    }
   });
 
   var nodeEls = {};
@@ -3201,9 +3335,14 @@ function renderClusterCanvasScreen(main, crumb){
       var fromEl = nodeEls[rid];
       var fw = fromEl ? fromEl.offsetWidth : 150;
       var fh = fromEl ? fromEl.offsetHeight : 50;
+      var edgeUse = {};
       function edgeTo(targetName, cls){
-        var targets = targetName==='이동한다' ? [tree.moveRowId] : idsForName(topId, targetName);
-        targets.forEach(function(tid){ edgeToId(tid, cls); });
+        var list = layout.edgeTargets && layout.edgeTargets[rid] && layout.edgeTargets[rid][targetName];
+        var nth = edgeUse[targetName] || 0;
+        var tid = list && list[nth] ? list[nth]
+          : (targetName==='이동한다' ? tree.moveRowId : resolveNodeIdForLink(topId, targetName, idSet));
+        edgeUse[targetName] = nth + 1;
+        edgeToId(tid, cls);
       }
       function edgeToId(tid, cls){
         if(!tid || !nodeEls[tid]) return;
@@ -3238,12 +3377,14 @@ function renderClusterCanvasScreen(main, crumb){
     var names = parseChoices(row[C['스크립트(내용)']])
       .concat(parseChoices(row[C['성공 스크립트']]||''))
       .concat(parseChoices(row[C['실패 스크립트']]||''));
-    var out = [];
+    var out = [], edgeUse = {};
     names.forEach(function(n){
-      var targets = n==='이동한다' ? [tree.moveRowId] : idsForName(topId, n);
-      targets.forEach(function(tid){
-        if(tid && nodeEls[tid] && tid!==rid && out.indexOf(tid)===-1) out.push(tid);
-      });
+      var list = layout.edgeTargets && layout.edgeTargets[rid] && layout.edgeTargets[rid][n];
+      var nth = edgeUse[n] || 0;
+      var tid = list && list[nth] ? list[nth]
+        : (n==='이동한다' ? tree.moveRowId : resolveNodeIdForLink(topId, n, idSet));
+      edgeUse[n] = nth + 1;
+      if(tid && nodeEls[tid] && tid!==rid && out.indexOf(tid)===-1) out.push(tid);
     });
     return out;
   }
@@ -3299,7 +3440,7 @@ function renderClusterCanvasScreen(main, crumb){
     var isMove = rid === tree.moveRowId;
     var isHeader = rid === tree.headerRowId;
     var box = document.createElement('div');
-    box.className = 'canvasNode' + (isMove?' moveNode':'') + (rid===rootId?' rootNode':'') + (!reachableSet[rid]?' orphanNode':'');
+    box.className = 'canvasNode' + (isMove?' moveNode':'') + (rid===rootId?' rootNode':'') + (orphanSet[rid]?' orphanNode':'');
     box.style.left = pos.x+'px'; box.style.top = pos.y+'px';
 
     var cnToolbar = document.createElement('div'); cnToolbar.className='cnToolbar';
@@ -3327,7 +3468,7 @@ function renderClusterCanvasScreen(main, crumb){
     if(!isMove && !isHeader){
       // 고아 노드는 이미 끊을 연결이 없어서 "연결 해제" 삭제가 아무 효과도 내지 못한다.
       // 이 경우에만 행까지 지우는 완전 삭제로 넘긴다.
-      var isOrphanNode = !reachableSet[rid];
+      var isOrphanNode = !!orphanSet[rid];
       var delBtn2 = document.createElement('button'); delBtn2.className='cnIconBtn cnIconDel'; delBtn2.textContent='×';
       delBtn2.title = isOrphanNode ? '이 고아 노드를 완전히 삭제' : '이 노드 삭제(연결 해제 · 고아 노드로 보존)';
       delBtn2.addEventListener('pointerdown', function(e){ e.stopPropagation(); });
@@ -3660,10 +3801,12 @@ function splitScript(text){
 function joinScript(narrative, choices, keyword){
   keyword = keyword || '지역';
   var out = narrative || '';
-  var valid = choices.filter(function(c){ return c && c.trim(); });
+  var valid = (choices||[]).filter(function(c){ return c!=null && String(c).trim(); });
   if(valid.length){
     if(out) out += '\n\n';
-    out += valid.map(function(c){ return '▶['+keyword+'/'+c.trim()+']'; }).join('\n');
+    // 노드 링크는 이름의 완전 일치로 해석한다. 저장할 때 trim하면 기존 이름의 끝 공백 등이
+    // 사라져 멀쩡한 링크가 고아 링크로 바뀔 수 있으므로 실제 문자열은 그대로 보존한다.
+    out += valid.map(function(c){ return '▶['+keyword+'/'+String(c)+']'; }).join('\n');
   }
   return out;
 }
@@ -3972,10 +4115,16 @@ function scriptFieldEditor(label, topId, row, colName){
   var choicesWrap = document.createElement('div'); choicesWrap.className='choiceEditList';
   wrap.appendChild(choicesWrap);
 
-  function sync(){
+  function sync(structural){
     var vals = Array.prototype.map.call(choicesWrap.querySelectorAll('select.choiceTarget'), function(sel){ return sel.value; })
-      .filter(function(v){ return v; });
+      .filter(function(v){ return v && v!=='__new__'; });
     row[C[colName]] = joinScript(narrativeTa.value, vals, writeKeyword);
+    // 선택지 구조가 바뀐 경우에는 파생 regionsTree도 즉시 다시 만든다.
+    // 이 단계가 빠지면 고아 노드를 다시 골라도 cluster.nodeIds가 예전 상태라 연결이 안 된 것처럼 보인다.
+    if(structural){
+      rebuildRegionsTreeFromSheet1();
+      rebuildIndexes();
+    }
     markDirty();
   }
 
@@ -3984,6 +4133,10 @@ function scriptFieldEditor(label, topId, row, colName){
   // 그래서 대상은 목록에서 고르게 하고, 새 노드가 필요하면 그 자리에서 만들어 붙인다.
   function buildTargetOptions(sel, current){
     sel.innerHTML = '';
+    var empty = document.createElement('option');
+    empty.value = ''; empty.textContent = '— 연결할 노드 선택 —';
+    if(!current) empty.selected = true;
+    sel.appendChild(empty);
     var seen = {};
     var names = [];
     DATA.sheet1.rows.forEach(function(r2){
@@ -4024,20 +4177,23 @@ function scriptFieldEditor(label, topId, row, colName){
     buildTargetOptions(sel, val||'');
     sel.addEventListener('change', function(){
       if(sel.value==='__new__'){
-        var made = addNodeForChoice(topId, row[C['지역ID']], colName, writeKeyword);
-        renderNodePanel(topId, row[C['지역ID']]);
+        var made = addNodeForChoice(topId, row[C['지역ID']]);
+        buildTargetOptions(sel, made.name);
+        sel.value = made.name;
+        sync(true);
         refreshGraphBehindPanel();
         toast('새 노드 "'+made.name+'"를 만들어 연결했어요');
         return;
       }
       if(sel.value==='이동한다' && !idsForName(topId,'이동한다').length){
         ensureMoveNode(topId);
-        sync();
-        renderNodePanel(topId, row[C['지역ID']]);
+        buildTargetOptions(sel, '이동한다');
+        sel.value = '이동한다';
+        sync(true);
         refreshGraphBehindPanel();
         return;
       }
-      sync();
+      sync(true);
       buildTargetOptions(sel, sel.value);
       refreshGraphBehindPanel();
     });
@@ -4050,20 +4206,17 @@ function scriptFieldEditor(label, topId, row, colName){
       else alert('"'+name+'"과(와) 일치하는 노드를 이 지역에서 찾을 수 없어요.');
     });
     var rm = document.createElement('button'); rm.className='ghost'; rm.textContent='✕'; rm.title='이 선택지(연결)만 끊기 · 노드는 남아요';
-    rm.addEventListener('click', function(){ rowEl.remove(); sync(); refreshGraphBehindPanel(); });
+    rm.addEventListener('click', function(){ rowEl.remove(); sync(true); refreshGraphBehindPanel(); });
     rowEl.appendChild(sel); rowEl.appendChild(jumpBtn); rowEl.appendChild(rm);
     choicesWrap.appendChild(rowEl);
   }
   parsed.choices.forEach(function(c){ addChoiceRow(c); });
 
-  var addBtn = document.createElement('button'); addBtn.className='ghost'; addBtn.textContent='+ 선택지 추가 (새 노드 생성)';
+  var addBtn = document.createElement('button'); addBtn.className='ghost'; addBtn.textContent='+ 선택지 추가';
   addBtn.style.cssText='align-self:flex-start;margin-top:4px;';
-  addBtn.title = '선택지를 추가하면 이어질 노드도 함께 만들어집니다';
+  addBtn.title = '빈 선택지 한 줄만 추가합니다. 기존 노드를 고르거나 "새 노드를 만들어 연결"을 직접 선택하세요.';
   addBtn.addEventListener('click', function(){
-    var made = addNodeForChoice(topId, row[C['지역ID']], colName, writeKeyword);
-    renderNodePanel(topId, row[C['지역ID']]);
-    refreshGraphBehindPanel();
-    toast('선택지와 새 노드 "'+made.name+'"를 함께 만들었어요');
+    addChoiceRow('');
   });
   wrap.appendChild(addBtn);
 
@@ -4076,7 +4229,8 @@ function scriptFieldEditor(label, topId, row, colName){
     var __rowId = row[C['지역ID']], __col = C[colName], __prevNarr = parsed.narrative;
     var __live = function(){
       if(narrativeTa.__composing) return; // 한글 IME 조합 중엔 대기
-      var vals = Array.prototype.map.call(choicesWrap.querySelectorAll('input'), function(i){ return i.value; });
+      var vals = Array.prototype.map.call(choicesWrap.querySelectorAll('select.choiceTarget'), function(sel){ return sel.value; })
+        .filter(function(v){ return v && v!=='__new__'; });
       var composed = joinScript(narrativeTa.value, vals, writeKeyword);
       if(COLLAB.applyCellTextEdit(__rowId, __col, __prevNarr, narrativeTa.value, composed)) __prevNarr = narrativeTa.value;
     };
@@ -4810,6 +4964,7 @@ function rebuildProjectView(opts){
   opts = opts || {};
   var previousNav = nav ? JSON.parse(JSON.stringify(nav)) : null;
   H1=DATA.sheet1.headers; C={}; H1.forEach(function(h,i){C[h]=i;});
+  var nodeRepair = repairNodeIntegrityIfNeeded();
   rebuildRegionsTreeFromSheet1(); rebuildIndexes(); rebuildItemIndex(); rebuildSqIndex();
   // 지역명 인덱스가 준비된 뒤에 실행해야 획득처의 지역명 접두사를 제대로 알아본다.
   // 프로젝트를 바꾸거나 원격 데이터를 받아도 프로젝트당 1회만 수행된다.
@@ -4840,6 +4995,10 @@ function rebuildProjectView(opts){
   applyProjectNameLocally(projectDisplayName);
   syncBranding(projectDisplayName);
   applyFontSettings(); refreshFontMenuValues(); initTagColorMenuValues(); initExportSettingsValues(); render();
+  if(nodeRepair && (nodeRepair.removed || nodeRepair.reId)){
+    markDirty();
+    toast('중복 노드를 안전 정리했어요 · 완전 복제 제거 '+nodeRepair.removed+' · ID 복구 '+nodeRepair.reId);
+  }
 }
 async function createNewProject(){
   persistProjectNow();
@@ -5504,6 +5663,7 @@ document.getElementById('importFileInput').addEventListener('change', function()
       }
       H1 = DATA.sheet1.headers;
       C = {}; H1.forEach(function(h,i){ C[h]=i; });
+      repairNodeIntegrityIfNeeded('엑셀 불러오기 중 노드 중복 정리 직전');
       rebuildRegionsTreeFromSheet1();
       rebuildIndexes();
       rebuildItemIndex();
@@ -5563,6 +5723,7 @@ function importRegionXlsx(topId, file){
         var top = r[C['상위지역ID(부모ID)']] || r[C['지역ID']];
         return top !== topId;
       }).concat(newRows);
+      repairNodeIntegrityIfNeeded('지역 엑셀 불러오기 중 노드 중복 정리 직전');
       rebuildRegionsTreeFromSheet1();
       rebuildIndexes();
       rebuildAllCrossRefs();
