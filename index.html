@@ -897,14 +897,51 @@ function allRegionNames(){
   Object.keys(DATA.regionsTree).forEach(function(topId){ out[topId] = regionName(topId); });
   return out;
 }
+/* 획득처 텍스트의 맨 앞 지역명 = 지도에서 그 아이템이 놓인 칸. 즉 이 접두사가 위치의 원본이다.
+   지역명끼리 앞부분이 겹칠 수 있으므로("숲" vs "숲속마을") 반드시 "가장 긴 이름 먼저" 매칭한다.
+   짧은 쪽이 먼저 걸리면 아이템이 엉뚱한 칸에 붙는다. */
+function regionNamesByLengthDesc(){
+  var names = allRegionNames();
+  return Object.keys(names)
+    .map(function(topId){ return {topId:topId, name:String(names[topId]||'')}; })
+    .filter(function(e){ return e.name; })
+    .sort(function(a,b){ return b.name.length - a.name.length; });
+}
+// 텍스트가 어느 지역명으로 시작하는지 찾는다. 없으면 null.
+function matchRegionPrefix(text){
+  var src = String(text||'');
+  var list = regionNamesByLengthDesc();
+  for(var i=0;i<list.length;i++){
+    if(src.indexOf(list[i].name)===0) return list[i];
+  }
+  return null;
+}
+// 획득처를 {지역명, 나머지}로 쪼갠다. 지역명이 안 붙어 있으면 region은 null.
+function splitAcquisition(text){
+  var src = String(text||'');
+  var hit = matchRegionPrefix(src);
+  if(!hit) return {topId:null, region:null, rest:src};
+  return {topId:hit.topId, region:hit.name, rest:src.slice(hit.name.length)};
+}
+// 획득처의 지역명만 갈아끼우고 뒤의 세부 경로 메모는 그대로 둔다.
+// (지도 드래그·지역 이름 변경 양쪽에서 쓰는 단일 경로)
+function withRegionPrefix(text, newRegionName){
+  var parts = splitAcquisition(text);
+  if(parts.region === null){
+    var rest = String(text||'').trim();
+    return rest ? (newRegionName + ' - ' + rest) : newRegionName;
+  }
+  return newRegionName + parts.rest;
+}
 function rebuildRegionItemIds(){
   var names = allRegionNames();
   var result = {};
   Object.keys(names).forEach(function(topId){ result[topId] = []; });
+  var list = regionNamesByLengthDesc();
   DATA.items.rows.concat(DATA.keyItems.rows).forEach(function(r){
     var src = r[3] || '';
-    for(var topId in names){
-      if(src.indexOf(names[topId]) === 0){ result[topId].push(r[0]); break; }
+    for(var i=0;i<list.length;i++){
+      if(src.indexOf(list[i].name) === 0){ result[list[i].topId].push(r[0]); break; }
     }
   });
   DATA.regionItemIds = result;
@@ -1165,6 +1202,63 @@ function statCols(){
   ensureStatColumns();
   HP_COL = DATA.items.headers.indexOf('HP 회복량');
   SP_COL = DATA.items.headers.indexOf('SP 회복량');
+}
+
+/* ---------------- 획득처 ↔ 지도 위치 연동 ----------------
+   획득처의 맨 앞 지역명이 지도상의 위치를 결정한다. 그래서 "(배치 예정)", "(기존 유지)" 같은
+   진행 상황 메모가 획득처에 섞여 있으면 위치 정보와 작업 메모가 한 칸에 뒤엉킨다.
+   메모는 버리지 않고 별도 '메모' 칸으로 옮겨 두고, 획득처는 위치만 담게 한다. */
+function ensureItemMemoColumns(){
+  [DATA.items, DATA.keyItems].forEach(function(t){
+    if(t && t.headers && t.headers.indexOf('메모')===-1) t.headers.push('메모');
+  });
+}
+function itemMemoCol(isKey){
+  ensureItemMemoColumns();
+  return (isKey ? DATA.keyItems : DATA.items).headers.indexOf('메모');
+}
+// 위치가 아니라 "작업 진행 상황"을 적어둔 괄호 주석들. 획득처에서 빼내 메모로 옮긴다.
+var PLACEMENT_NOTE_RE = /^(배치\s*예정|기존\s*유지|수동\s*이동됨.*|아직\s*어디서.*|획득처\s*재검토.*|미배치|배치\s*필요)$/;
+// 획득처에서 배치 관련 주석만 떼어낸다. 지역명 뒤쪽만 훑으므로 "왕성(핵심성소)"처럼
+// 지역명 자체에 들어 있는 괄호는 건드리지 않는다.
+function extractPlacementNotes(acquisition){
+  var parts = splitAcquisition(acquisition);
+  var moved = [];
+  var rest = parts.rest.replace(/\(([^)]*)\)/g, function(full, inner){
+    var keep = [];
+    String(inner).split(',').forEach(function(piece){
+      var t = piece.trim();
+      if(!t) return;
+      if(PLACEMENT_NOTE_RE.test(t)) moved.push(t);
+      else keep.push(t);
+    });
+    return keep.length ? '('+keep.join(', ')+')' : '';
+  });
+  rest = rest.replace(/\s{2,}/g,' ').replace(/\s+$/,'');
+  rest = rest.replace(/[\s-]+$/,'');   // 주석만 있던 자리에 남은 " - " 꼬리 정리
+  var cleaned = parts.region === null ? rest.trim() : (parts.region + rest);
+  return {acquisition: cleaned, notes: moved};
+}
+// 최초 1회만 수행. 이미 옮긴 메모를 다시 덧붙이지 않도록 플래그로 막는다.
+function migratePlacementNotesToMemo(){
+  if(!DATA || !DATA.items || !DATA.keyItems) return 0;
+  ensureItemMemoColumns();
+  if(DATA.__placementNotesMigrated) return 0;
+  var moved = 0;
+  [[DATA.items,false],[DATA.keyItems,true]].forEach(function(pair){
+    var table = pair[0], memoCol = itemMemoCol(pair[1]);
+    table.rows.forEach(function(r){
+      var res = extractPlacementNotes(r[3]);
+      if(!res.notes.length) return;
+      r[3] = res.acquisition;
+      var prev = String(r[memoCol]||'').trim();
+      var add = res.notes.join(', ');
+      r[memoCol] = prev ? (prev + ' · ' + add) : add;
+      moved++;
+    });
+  });
+  DATA.__placementNotesMigrated = true;
+  return moved;
 }
 
 /* ---------------- map cell "더보기" in-place expansion ---------------- */
@@ -1851,6 +1945,7 @@ function renderMapScreen(main, crumb){
             other[C['스크립트(내용)']] = other[C['스크립트(내용)']].split('▶[지역/'+oldName+']').join('▶[지역/'+newName+']');
           }
         });
+        renameRegionInLinks(oldName, newName);
       }
       markDirty();
     });
@@ -2074,20 +2169,47 @@ function openMoveTagModal(payload, toRegion){
   overlay.onclick = function(e){ if(e.target===overlay){ cleanup(); render(); } };
 }
 
+/* 지역 이름이 바뀌면 그 지역을 가리키던 획득처/의뢰지역 접두사도 같이 바꿔야 한다.
+   안 그러면 접두사가 더 이상 어떤 지역과도 맞지 않아, 아이템·서브퀘스트가 지도에서
+   조용히 사라진다(데이터는 남아 있는데 어느 칸에도 안 붙는 상태). */
+function renameRegionInLinks(oldName, newName){
+  if(!oldName || oldName===newName) return 0;
+  var changed = 0;
+  function swapPrefix(text){
+    var s = String(text||'');
+    if(s.indexOf(oldName)!==0) return null;
+    return newName + s.slice(oldName.length);
+  }
+  DATA.items.rows.concat(DATA.keyItems.rows).forEach(function(r){
+    var next = swapPrefix(r[3]);
+    if(next!==null){ r[3] = next; changed++; }
+  });
+  DATA.subquests.rows.forEach(function(sq){
+    [2,3,4].forEach(function(fi){
+      var next = swapPrefix(sq[fi]);
+      if(next!==null){ sq[fi] = next; changed++; }
+    });
+  });
+  return changed;
+}
+
 function moveTagToRegion(payload, toRegion, specificNode){
   var toName = regionName(toRegion);
   var fullTarget = specificNode ? (toName + ' - ' + specificNode) : toName;
   if(payload.type==='item'){
     var row = itemById[payload.id];
     if(!row) return;
-    var oldSrc = row[3] || '';
-    var fromName = regionName(payload.fromRegion);
-    if(oldSrc.indexOf(fromName)===0){
-      row[3] = fullTarget + oldSrc.slice(fromName.length);
+    // 획득처 = 위치. 예전에는 접두사가 안 맞으면 "(수동 이동됨 - 원래: …)"를 덧붙여
+    // 획득처를 계속 오염시켰다. 이제는 지역명 부분만 정확히 갈아끼운다.
+    if(specificNode){
+      // 특정 노드를 골랐다면 세부 경로를 새로 지정한 것이므로 옛 경로는 대체하고,
+      // "(보상)" 같은 뒤쪽 부가 표기만 남긴다.
+      var tailNotes = (splitAcquisition(row[3]).rest.match(/\([^)]*\)\s*$/)||[''])[0].trim();
+      row[3] = fullTarget + (tailNotes ? ' ' + tailNotes : '');
     } else {
-      row[3] = fullTarget + ' (수동 이동됨 - 원래: ' + oldSrc + ')';
+      row[3] = withRegionPrefix(row[3], toName);
     }
-    toast(row[1] + ' → ' + fullTarget + '(으)로 배치 지역 변경');
+    toast(row[1] + ' → ' + fullTarget + '(으)로 획득처를 옮겼어요');
   } else if(payload.type==='subquest'){
     var sq = sqById[payload.id];
     if(!sq) return;
@@ -3796,8 +3918,17 @@ function renderItemDetail(main, crumb){
 
   card.appendChild(fieldInput('이름', r[1], function(v){ r[1]=v; }));
   card.appendChild(fieldInput('분류', r[2], function(v){ r[2]=v; }));
-  card.appendChild(fieldTextarea(isKey?'용도':'획득처', r[3], function(v){ r[3]=v; }, 2));
+  var acqField = fieldTextarea(isKey?'용도':'획득처', r[3], function(v){ r[3]=v; }, 2);
+  if(!isKey){
+    var acqHelp = document.createElement('div');
+    acqHelp.style.cssText='font-size:10.5px;color:var(--text-faint);margin-top:3px;line-height:1.5;';
+    acqHelp.textContent = '맨 앞의 지역명이 지도상의 위치입니다. 지도에서 다른 칸으로 끌어다 놓으면 이 지역명이 자동으로 바뀌고, 뒤의 세부 경로는 그대로 유지돼요.';
+    acqField.appendChild(acqHelp);
+  }
+  card.appendChild(acqField);
   card.appendChild(fieldTextarea('설명', r[4], function(v){ r[4]=v; }, 3));
+  var memoCol = itemMemoCol(isKey);
+  card.appendChild(fieldTextarea('메모', r[memoCol], function(v){ r[memoCol]=v; }, 2));
 
   if(!isKey && itemCategoryBucket(r[2])==='product'){
     statCols();
@@ -3982,10 +4113,15 @@ function ensureBotAreaColumns(){
 function rebuildProjectView(opts){
   ensureGraphDataShape();
   ensureBotAreaColumns();
+  ensureItemMemoColumns();
   opts = opts || {};
   var previousNav = nav ? JSON.parse(JSON.stringify(nav)) : null;
   H1=DATA.sheet1.headers; C={}; H1.forEach(function(h,i){C[h]=i;});
-  rebuildRegionsTreeFromSheet1(); rebuildIndexes(); rebuildItemIndex(); rebuildSqIndex(); rebuildAllCrossRefs();
+  rebuildRegionsTreeFromSheet1(); rebuildIndexes(); rebuildItemIndex(); rebuildSqIndex();
+  // 지역명 인덱스가 준비된 뒤에 실행해야 획득처의 지역명 접두사를 제대로 알아본다.
+  // 프로젝트를 바꾸거나 원격 데이터를 받아도 프로젝트당 1회만 수행된다.
+  migratePlacementNotesToMemo();
+  rebuildAllCrossRefs();
   var preserveView = opts.preserveView !== false && previousNav && previousNav.main==='map';
   if(preserveView && previousNav.view==='canvas'){
     var pt=DATA.regionsTree && previousNav.regionId ? DATA.regionsTree[previousNav.regionId] : null;
@@ -4753,6 +4889,11 @@ initTagColorMenu();
 initExportSettingsMenu();
 initFontMenu();
 statCols();
+(function(){
+  // 획득처에 섞여 있던 배치 진행 메모를 '메모' 칸으로 옮긴다(프로젝트당 최초 1회).
+  var moved = migratePlacementNotesToMemo();
+  if(moved){ markDirty(); setTimeout(function(){ toast('획득처의 배치 메모 '+moved+'건을 메모 칸으로 옮겼어요'); }, 600); }
+})();
 saveState(false);
 render();
 initCloud().catch(function(err){ console.error(err); setCloudStatus('연결 실패'); document.getElementById('authOverlay').style.display='flex'; document.getElementById('authMsg').textContent='Supabase 초기화 실패: '+(err.message||err); });
