@@ -104,7 +104,7 @@ export class SupabaseYjsProvider {
 
     // 부팅 시 복구한 로컬 전용 편집을 공유+영속한다(다른 클라이언트/서버에도 반영).
     if (this._recoveredDelta) {
-      this._send('y-update', { c: splitForBroadcast(this._recoveredDelta) });
+      this._sendUpdate('y-update', this._recoveredDelta);
       this._pending.push(this._recoveredDelta);
       if (!this._flushTimer) this._flushTimer = setTimeout(() => this._flush(), 400);
       this._recoveredDelta = null;
@@ -151,7 +151,7 @@ export class SupabaseYjsProvider {
   // ---- 로컬 Y 변경 -> 방송 + 영속 큐 ----
   _onUpdate(update, origin) {
     if (origin === this) return;      // 원격/영속에서 적용한 것 -> 되쏘지 않음
-    this._send('y-update', { c: splitForBroadcast(update) });
+    this._sendUpdate('y-update', update);
     this._pending.push(update);
     if (!this._flushTimer) this._flushTimer = setTimeout(() => this._flush(), 400);
     if (!this._saveLocalTimer) this._saveLocalTimer = setTimeout(() => this._saveLocal(), 1000);
@@ -164,28 +164,37 @@ export class SupabaseYjsProvider {
     catch (e) { /* 용량 초과 등은 무시(Supabase가 주 저장) */ }
   }
 
-  // ---- 수신: 라이브 업데이트 / 동기화 응답(청크 재조립) ----
+  // 큰 업데이트는 broadcast 256KB 한도 때문에 청크를 "각각 다른 메시지"로 보낸다.
+  // (예전엔 청크 배열을 한 메시지에 다 담아, 대용량이면 broadcast가 통째로 실패해 실시간 전파가 끊겼다.)
+  _sendUpdate(event, u8) {
+    const chunks = splitForBroadcast(u8);
+    for (const ch of chunks) this._send(event, { c: ch });
+  }
+
+  // ---- 수신: 여러 메시지로 온 청크를 id별로 모아 재조립 ----
   _recv(payload, isSync) {
-    const full = this._reassemble(payload.c);
-    if (!full) return;                // 아직 청크 모으는 중
+    const ch = payload && payload.c;
+    if (!ch || ch.d == null) return;
+    let full;
+    if (!ch.n || ch.n === 1) {
+      full = b64ToU8(ch.d);
+    } else {
+      let buf = this._reasm.get(ch.id);
+      if (!buf) { buf = { n: ch.n, parts: [], count: 0 }; this._reasm.set(ch.id, buf); }
+      if (buf.parts[ch.i] === undefined) { buf.parts[ch.i] = ch.d; buf.count++; }
+      if (buf.count < buf.n) return;                 // 아직 다 안 옴
+      this._reasm.delete(ch.id);
+      full = b64ToU8(buf.parts.join(''));
+    }
     Y.applyUpdate(this.ydoc, full, this);
     if (isSync && !this.synced) { this.synced = true; this.onFirstSync(); }
   }
 
   _onSync1(payload) {
-    // 상대가 모르는 부분만 골라 응답
+    // 상대가 모르는 부분만 골라 응답(청크로 나눠 전송)
     const remoteSv = b64ToU8(payload.sv);
     const diff = Y.encodeStateAsUpdate(this.ydoc, remoteSv);
-    if (diff && diff.length) this._send('y-sync2', { c: splitForBroadcast(diff) });
-  }
-
-  _reassemble(chunks) {
-    if (!chunks || !chunks.length) return null;
-    if (chunks.length === 1 && chunks[0].n === 1) return b64ToU8(chunks[0].d);
-    // 실제로는 각 broadcast가 청크 배열 전체를 담아 보내므로 한 번에 합쳐짐.
-    let b64 = '';
-    for (const ch of chunks.sort((a, b) => a.i - b.i)) b64 += ch.d;
-    return b64ToU8(b64);
+    if (diff && diff.length) this._sendUpdate('y-sync2', diff);
   }
 
   // ---- 영속 flush: 대기 업데이트를 하나로 합쳐 append ----

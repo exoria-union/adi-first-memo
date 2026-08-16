@@ -207,6 +207,14 @@ try {
     un();
   }
 
+  // ---- 대용량 업데이트: 여러 청크(개별 메시지)로 방송 → B에서 재조립 ----
+  {
+    const big = '나'.repeat(150000);
+    const d = readProject(A.ydoc); d.sheet1.rows[0][SCRIPT_COL] = big; A.push(d);
+    await wait(250);
+    ok('대용량 편집이 다중청크로 B에 전파', (readProject(B.ydoc).sheet1.rows[0][SCRIPT_COL]||'').length === big.length);
+  }
+
   // ---- ③ 부팅 복구: Supabase가 비어도 localStorage 캐시로 미-flush 편집 복구 ----
   {
     const d = readProject(A.ydoc); d.toolTitle='복구테스트제목'; A.push(d);

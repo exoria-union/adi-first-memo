@@ -253,7 +253,15 @@ function reconcileRow(yRow, dRow, sRow, headers) {
     const dv = dRow[c];
     const sv = sRow ? sRow[c] : undefined;
     if (deepEq(dv, sv)) continue;
-    if (RICH_TEXT_COLUMNS.has(headers[c])) {
+    const isText = RICH_TEXT_COLUMNS.has(headers[c]);
+    // Yjs 행이 이 열까지 없는 경우(마이그레이션으로 열이 늘어난 sparse 행) → 홀은 null로 채우고 append.
+    // 예전엔 여기서 yRow.delete(c,1)이 범위를 벗어나 "Length exceeded!"로 reconcile이 죽어 편집이 유실됐다.
+    if (c >= yRow.length) {
+      while (yRow.length < c) yRow.push([null]);
+      yRow.push([isText ? newText(dv) : dv]);
+      continue;
+    }
+    if (isText) {
       let cell = yRow.get(c);
       if (!(cell instanceof Y.Text)) { // 타입 방어
         yRow.delete(c, 1); yRow.insert(c, [newText(dv)]);
@@ -261,7 +269,7 @@ function reconcileRow(yRow, dRow, sRow, headers) {
         applyTextDiff(cell, sv, dv);
       }
     } else {
-      yRow.delete(c, 1); yRow.insert(c, [dv]); // 고정폭 -> 길이 유지
+      yRow.delete(c, 1); yRow.insert(c, [dv]);
     }
   }
 }

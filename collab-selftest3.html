@@ -1,0 +1,75 @@
+<meta charset="utf-8">
+<title>협업 스트레스 테스트</title>
+<style>body{font:13px/1.6 ui-monospace,Consolas,monospace;background:#0f1116;color:#e9eaf0;padding:20px}.p{color:#5cc185}.f{color:#f0846a;font-weight:700}b{color:#7d97ff}h1{font-size:15px}</style>
+<h1>협업 스트레스·엣지 테스트</h1>
+<pre id="out"></pre>
+<script type="importmap">{ "imports": { "yjs": "https://esm.sh/yjs@13" } }</script>
+<script type="module">
+import { Y } from './collab/deps.js';
+import { buildProject, readProject, reconcile } from './collab/ydoc.js';
+import { splitForBroadcast, u8ToB64, b64ToU8 } from './collab/provider.js';
+
+const out=document.getElementById('out'); let pass=0,fail=0;
+const log=(m,c)=>{out.innerHTML+=(c?`<span class="${c}">${m}</span>`:m)+'\n';};
+const ok=(n,c)=>{if(c){pass++;log('PASS  '+n,'p');}else{fail++;log('FAIL  '+n,'f');}};
+const clone=x=>JSON.parse(JSON.stringify(x));
+const HDR=["부모","지역ID","지역명","인접","코드","스크립트(내용)"];
+function row(id,name,script){var r=new Array(HDR.length).fill(null);r[1]=id;r[2]=name;r[5]=script||null;return r;}
+function sample(){return{__buildStamp:'t',toolTitle:'맵',sheet1:{headers:HDR.slice(),rows:[row('A','에이','a본문'),row('B','비','b본문'),row('C','씨','c본문')]},items:{},cellColors:{}};}
+// 두 클라이언트를 CRDT로 연결(A 빌드 → B 로드)
+function pair(){const A=new Y.Doc();buildProject(A,sample(),'init');const B=new Y.Doc();Y.applyUpdate(B,Y.encodeStateAsUpdate(A));return[A,B];}
+function exchange(A,B,svA,svB){Y.applyUpdate(A,Y.encodeStateAsUpdate(B,svA),'remote');Y.applyUpdate(B,Y.encodeStateAsUpdate(A,svB),'remote');}
+
+try{
+  // ── 1. 행 삭제(마지막) ──
+  {const[A,B]=pair();const d=readProject(A);d.sheet1.rows.splice(2,1);reconcile(A,d,readProject(A),'app');
+   Y.applyUpdate(B,Y.encodeStateAsUpdate(A,Y.encodeStateVector(B)),'remote');
+   const rb=readProject(B).sheet1.rows;ok('마지막 행 삭제 전파',rb.length===2&&rb[0][1]==='A'&&rb[1][1]==='B');}
+
+  // ── 2. 행 삭제(중간) ──
+  {const[A,B]=pair();const before=readProject(A);const d=clone(before);d.sheet1.rows.splice(1,1);/*B 삭제*/reconcile(A,d,before,'app');
+   Y.applyUpdate(B,Y.encodeStateAsUpdate(A,Y.encodeStateVector(B)),'remote');
+   const rb=readProject(B).sheet1.rows;ok('중간 행 삭제: 데이터 수렴',JSON.stringify(rb)===JSON.stringify([row('A','에이','a본문'),row('C','씨','c본문')]));}
+
+  // ── 3. 행 추가(신규 세부지역) ──
+  {const[A,B]=pair();const before=readProject(A);const d=clone(before);d.sheet1.rows.push(row('D','디','d본문'));reconcile(A,d,before,'app');
+   Y.applyUpdate(B,Y.encodeStateAsUpdate(A,Y.encodeStateVector(B)),'remote');
+   const rb=readProject(B).sheet1.rows;ok('신규 행 추가 전파',rb.length===4&&rb[3][1]==='D'&&rb[3][5]==='d본문');}
+
+  // ── 4. 동시: A가 행 추가, B가 다른 행 편집 ──
+  {const[A,B]=pair();const svA=Y.encodeStateVector(A),svB=Y.encodeStateVector(B);
+   const da=readProject(A);da.sheet1.rows.push(row('D','디','d'));reconcile(A,da,readProject(A),'app');
+   const db=readProject(B);db.sheet1.rows[0][2]='에이수정';reconcile(B,db,readProject(B),'app');
+   exchange(A,B,svA,svB);
+   const ra=readProject(A).sheet1.rows,rb=readProject(B).sheet1.rows;
+   ok('동시 추가+편집 수렴',JSON.stringify(ra)===JSON.stringify(rb));
+   ok('동시 추가+편집 둘 다 보존',ra.some(r=>r[1]==='D')&&ra.find(r=>r[1]==='A')[2]==='에이수정');}
+
+  // ── 5. sparse 행(마이그레이션): 헤더 3개 추가 후 새 열 편집 ──
+  {const[A,B]=pair();const d=readProject(A);
+   d.sheet1.headers.push('최초 유일 지급 여부','유일 아이템 소진 스크립트','갈림길 그룹'); // 23→26 대신 6→9
+   d.sheet1.rows[1][8]='GRP1'; // 새 열(갈림길 그룹=index 8)에 값 — 행이 sparse 확장
+   reconcile(A,d,readProject(A),'app');
+   Y.applyUpdate(B,Y.encodeStateAsUpdate(A,Y.encodeStateVector(B)),'remote');
+   const rbHeaders=readProject(B).sheet1.headers, rbRows=readProject(B).sheet1.rows;
+   ok('마이그레이션 헤더 전파',rbHeaders.length===9&&rbHeaders[8]==='갈림길 그룹');
+   ok('sparse 새 열 값 전파',rbRows[1][8]==='GRP1');
+   ok('다른 행은 새 열 비어있음(NULL/undefined)',rbRows[0][8]==null&&rbRows[2][8]==null);}
+
+  // ── 6. 대용량 업데이트 청킹: split → 다중 메시지 재조립 ──
+  {const A=new Y.Doc();const big='가'.repeat(200000);A.getText('t').insert(0,big); // ~200K chars
+   const upd=Y.encodeStateAsUpdate(A);
+   const chunks=splitForBroadcast(upd);
+   ok('대용량 업데이트가 여러 청크로 분할됨(>1)',chunks.length>1);
+   ok('모든 청크가 256KB base64 한도 이하',chunks.every(c=>c.d.length<=190*1024));
+   // 다중 메시지 재조립(수신측 로직 모사): 청크를 개별로 받아 id별 버퍼에 모아 합침
+   const buf={};let full=null;
+   for(const ch of chunks){ if(ch.n===1){full=b64ToU8(ch.d);break;} (buf[ch.id]=buf[ch.id]||[])[ch.i]=ch.d;
+     if(buf[ch.id].filter(Boolean).length===ch.n){full=b64ToU8(buf[ch.id].join(''));} }
+   const C=new Y.Doc();Y.applyUpdate(C,full);
+   ok('청크 재조립 후 원본 복원',C.getText('t').toString().length===big.length);}
+
+  log('\n=== '+pass+' passed, '+fail+' failed ===',fail?'f':'p');
+  document.title=fail===0?'STRESS OK':'STRESS FAIL';
+}catch(e){log('ERROR: '+(e&&e.stack||e),'f');document.title='STRESS ERROR';}
+</script>
