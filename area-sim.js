@@ -268,6 +268,18 @@ export function createSim(data, opts = {}) {
   };
 }
 
+// 채팅 입력 정규화: '종탑' / '나선계단/힘/포션' / '[진입/정문 홀]' / '▶[지역/X]' 모두 → {name,action,potion}
+// (실제 봇은 진입 노드도 명령이 [지역/노드이름]. ▶[진입/…]는 스크립트 표시용 마커일 뿐이라 벗겨낸다.)
+export function parseAreaInput(raw) {
+  let s = String(raw == null ? '' : raw).trim().replace(/^▶\s*/, '');
+  const m = s.match(/^\[\s*(?:지역|진입|동행)\s*\/\s*([\s\S]+?)\s*\]$/);
+  if (m) s = m[1]; else s = s.replace(/^\[|\]$/g, '').trim();
+  const parts = s.split('/').map(x => x.trim()).filter(Boolean);
+  const potion = parts.slice(1).includes('포션');
+  const action = parts[1] && parts[1] !== '포션' ? parts[1] : '';
+  return { name: parts[0] || '', action, potion };
+}
+
 // ============================================================================
 // 채팅 UI — 컨테이너에 캐릭터 설정 + 채팅 로그 + 입력/선택지 버튼을 그린다.
 // ============================================================================
@@ -308,7 +320,7 @@ export function openAreaTestUI(container, data, opts = {}) {
 
   // ---- 입력 ----
   const inputRow = el('div', 'display:flex;gap:6px;margin-top:8px;');
-  const cmdIn = el('input', 'flex:1;border:1px solid var(--border-strong,#ccc);border-radius:4px;padding:8px 10px;font-size:13px;'); cmdIn.placeholder = '예: 종탑  또는  나선계단/힘/포션  (또는 선택지 버튼 클릭)';
+  const cmdIn = el('input', 'flex:1;border:1px solid var(--border-strong,#ccc);border-radius:4px;padding:8px 10px;font-size:13px;'); cmdIn.placeholder = '예: 종탑 · 나선계단/힘/포션 · [진입/정문 홀] 붙여넣기도 OK · 또는 아래 ▶선택지 클릭';
   const sendBtn = el('button', 'padding:8px 16px;', '입력'); sendBtn.className = 'primary';
   inputRow.appendChild(cmdIn); inputRow.appendChild(sendBtn); container.appendChild(inputRow);
   const hint = el('div', 'font-size:10.5px;color:var(--text-faint,#999);margin-top:6px;', '봇 명령: [지역/지역명] 으로 시작 → 스크립트의 ▶[지역/X] 선택지를 입력해 이동. 능력 판정(INCUNTR_03)은 [지역/X/힘|솜씨|지혜] 형식. 포션은 뒤에 /포션.');
@@ -325,9 +337,9 @@ export function openAreaTestUI(container, data, opts = {}) {
   }
   function submit(raw) {
     if (!sim) { bubble('먼저 [탐사 시작]을 눌러주세요.', 'bot'); return; }
-    const parts = String(raw).split('/').map(s => s.trim()).filter(Boolean);
-    const name = parts[0], action = parts[1] || '', potion = (parts[2] || '') === '포션' || parts.includes('포션');
-    bubble('[지역/' + parts.join('/') + ']', 'user');
+    const { name, action, potion } = parseAreaInput(raw);
+    if (!name) return;
+    bubble('[지역/' + name + (action ? '/' + action : '') + (potion ? '/포션' : '') + ']', 'user');
     const out = sim.command(name, action, potion);
     bubble(out.msg, 'bot');
     renderChoices(out.choices);

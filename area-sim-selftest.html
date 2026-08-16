@@ -4,7 +4,7 @@
 <h3>자동봇 테스트모드 엔진 자체 테스트</h3>
 <pre id="out"></pre>
 <script type="module">
-import { createSim, buildAreas } from './area-sim.js';
+import { createSim, buildAreas, parseAreaInput } from './area-sim.js';
 const out=document.getElementById('out'); let pass=0,fail=0;
 const log=(m,c)=>{out.innerHTML+=(c?`<span class="${c}">${m}</span>`:m)+'\n';};
 const ok=(n,c)=>{if(c){pass++;log('PASS  '+n,'p');}else{fail++;log('FAIL  '+n,'f');}};
@@ -57,6 +57,16 @@ try{
   const sim3=createSim({rows,headers:H},{character:{gold:10}});
   sim3.command('종탑'); r=sim3.command('상인');
   ok('거래(GI) 골드 부족: 거부 메시지', r.msg.includes('충분한 골드'));
+
+  // 7) 입력 파싱: 마커 붙여넣기도 이름만 추출
+  const pi=(s)=>parseAreaInput(s);
+  ok('파싱: 순수 이름', pi('종탑').name==='종탑');
+  ok('파싱: [진입/정문 홀] → 정문 홀', pi('[진입/정문 홀]').name==='정문 홀');
+  ok('파싱: ▶[지역/열람실] → 열람실', pi('▶[지역/열람실]').name==='열람실' );
+  ok('파싱: 나선계단/힘/포션', (function(){var p=pi('나선계단/힘/포션');return p.name==='나선계단'&&p.action==='힘'&&p.potion===true;})());
+  ok('파싱: [지역/나선계단/힘]', (function(){var p=pi('[지역/나선계단/힘]');return p.name==='나선계단'&&p.action==='힘';})());
+  ok('파싱: 정문 홀/포션(스탯없이 포션)', (function(){var p=pi('정문 홀/포션');return p.name==='정문 홀'&&p.action===''&&p.potion===true;})());
+  ok('파싱: [지역/포기] → 포기', pi('[지역/포기]').name==='포기');
 
   log('\n=== '+pass+' passed, '+fail+' failed ===',fail?'f':'p');
   document.title=fail===0?'SIM OK':'SIM FAIL';
