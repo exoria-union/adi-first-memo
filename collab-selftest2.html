@@ -107,6 +107,8 @@ const SAMPLE = {
 const SCRIPT_COL = 5;
 
 try {
+  // 이전 실행의 로컬 캐시 오염 방지
+  try{ Object.keys(localStorage).forEach(function(k){ if(k.indexOf('ydoc_local_')===0) localStorage.removeItem(k); }); }catch(e){}
   // ---- 인코딩 유틸 ----
   const bytes = new Uint8Array([0,1,2,250,255,128,7,42]);
   ok('b64 라운드트립', u8ToB64(bytes) && JSON.stringify([...b64ToU8(u8ToB64(bytes))])===JSON.stringify([...bytes]));
@@ -203,6 +205,18 @@ try {
     await wait(160);
     ok('observeCellText 원격 변경 수신', fired && fired.indexOf('원격추가') !== -1);
     un();
+  }
+
+  // ---- ③ 부팅 복구: Supabase가 비어도 localStorage 캐시로 미-flush 편집 복구 ----
+  {
+    const d = readProject(A.ydoc); d.toolTitle='복구테스트제목'; A.push(d);
+    A.provider._saveLocal();                 // localStorage['ydoc_local_p1']에 동기 확정
+    const backend2 = makeBackend();          // 완전히 빈 새 서버(마지막 편집이 flush 안 된 상황 모사)
+    const cliC = makeClient(backend2,'C');
+    const Csess = await openProject({ supabase:cliC, projectId:'p1', user:{id:'uc',email:'c@x.com'},
+      seedData: clone(SAMPLE), onRemote:()=>{}, onPresence:()=>{}, onStatus:()=>{} });
+    ok('빈 서버에서도 localStorage 캐시로 복구', readProject(Csess.ydoc).toolTitle==='복구테스트제목');
+    await Csess.destroy();
   }
 
   await A.destroy(); await B.destroy();

@@ -57,6 +57,9 @@ export class SupabaseYjsProvider {
     this._flushTimer = null;
     this._sinceSnapshot = 0;
     this._destroyed = false;
+    this._lsKey = 'ydoc_local_' + projectId; // Yjs 상태 로컬 캐시(부팅 복구용). localStorage는 동기라 이탈 시에도 남는다.
+    this._saveLocalTimer = null;
+    this._recoveredDelta = null;
 
     this._onUpdate = this._onUpdate.bind(this);
     this._onAwareness = this._onAwareness.bind(this);
@@ -98,6 +101,14 @@ export class SupabaseYjsProvider {
         }
       });
     });
+
+    // 부팅 시 복구한 로컬 전용 편집을 공유+영속한다(다른 클라이언트/서버에도 반영).
+    if (this._recoveredDelta) {
+      this._send('y-update', { c: splitForBroadcast(this._recoveredDelta) });
+      this._pending.push(this._recoveredDelta);
+      if (!this._flushTimer) this._flushTimer = setTimeout(() => this._flush(), 400);
+      this._recoveredDelta = null;
+    }
   }
 
   // ---- 영속 로드: 스냅샷 + 이후 업데이트 로그 ----
@@ -121,7 +132,20 @@ export class SupabaseYjsProvider {
     } else {
       this._lastLoadedId = afterId;
     }
-    if (snap.data || (ups.data && ups.data.length)) { this.synced = true; this.onFirstSync(); }
+    if (snap.data || (ups.data && ups.data.length)) this.synced = true;
+    // ★ 로컬 캐시된 Yjs 상태를 덧입혀, Supabase에 flush 안 된 마지막 편집을 복구한다.
+    //    CRDT라 이미 반영된 업데이트는 무시되고 로컬 전용 편집만 병합된다(원격 되돌림 없음).
+    try {
+      const local = localStorage.getItem(this._lsKey);
+      if (local) {
+        const sv0 = Y.encodeStateVector(this.ydoc);
+        Y.applyUpdate(this.ydoc, b64ToU8(local), this);       // origin=this: 로드 중 재방송 방지
+        const delta = Y.encodeStateAsUpdate(this.ydoc, sv0);  // 로컬 전용(미영속) 편집분
+        if (delta && delta.length > 2) this._recoveredDelta = delta; // 있으면 connect 후 영속+공유
+        this.synced = true;
+      }
+    } catch (e) { console.warn('[collab] 로컬 캐시 복구 실패', e); }
+    if (this.synced) this.onFirstSync();
   }
 
   // ---- 로컬 Y 변경 -> 방송 + 영속 큐 ----
@@ -130,6 +154,14 @@ export class SupabaseYjsProvider {
     this._send('y-update', { c: splitForBroadcast(update) });
     this._pending.push(update);
     if (!this._flushTimer) this._flushTimer = setTimeout(() => this._flush(), 400);
+    if (!this._saveLocalTimer) this._saveLocalTimer = setTimeout(() => this._saveLocal(), 1000);
+  }
+
+  // 현재 Yjs 전체 상태를 localStorage에 동기 저장. 페이지 이탈 시에도 확실히 남아 부팅 복구의 근거가 된다.
+  _saveLocal() {
+    this._saveLocalTimer = null;
+    try { localStorage.setItem(this._lsKey, u8ToB64(Y.encodeStateAsUpdate(this.ydoc))); }
+    catch (e) { /* 용량 초과 등은 무시(Supabase가 주 저장) */ }
   }
 
   // ---- 수신: 라이브 업데이트 / 동기화 응답(청크 재조립) ----
@@ -210,11 +242,13 @@ export class SupabaseYjsProvider {
   }
 
   _onUnload() {
-    if (document.visibilityState === 'hidden') { this._flush(); }
+    this._saveLocal();                                        // 항상 로컬에 동기 확정(이탈 시 유실 방지)
+    if (document.visibilityState === 'hidden') this._flush(); // Supabase는 best-effort
   }
 
   async destroy() {
     this._destroyed = true;
+    clearTimeout(this._saveLocalTimer); this._saveLocal();
     await this._flush();
     if (this.awareness) {
       try { removeAwarenessStates(this.awareness, [this.awareness.clientID], 'local'); } catch (e) {}
