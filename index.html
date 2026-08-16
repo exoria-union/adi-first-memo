@@ -643,6 +643,20 @@
   </div>
 </div>
 
+<!-- ===== 자동봇 테스트 모드 (지역 탐사 체험) ===== -->
+<div id="areaTestModal" style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1350;display:none;align-items:center;justify-content:center;">
+  <div style="width:720px;max-width:95vw;max-height:94vh;overflow:auto;background:var(--surface);border:1px solid var(--border-strong);border-radius:8px;box-shadow:0 14px 44px rgba(0,0,0,.3);padding:16px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+      <div style="font-size:16px;font-weight:700;">🧭 자동봇 테스트 모드 — 지역 탐사 체험</div>
+      <button class="ghost" id="btnAreaTestClose">닫기</button>
+    </div>
+    <div style="font-size:11.5px;color:var(--text-dim);margin-bottom:10px;line-height:1.6;">
+      실제 자동봇(exoria_bot의 area_system)처럼 채팅으로 지역 탐사를 진행해 봅니다. 캐릭터를 설정하고 시작 지역을 골라 <b>[탐사 시작]</b> → 스크립트의 <b>▶ 선택지</b>를 눌러 이동하세요. (단일 플레이어 근사 — 팀/동행·일일 한도 등 일부는 단순화)
+    </div>
+    <div id="areaTestBody"></div>
+  </div>
+</div>
+
 <div id="topbar">
   <input id="toolTitleInput" type="text" value="빛의왕국 탐사맵 편집기">
   <div class="sep"></div>
@@ -708,6 +722,7 @@
   </div>
   <button class="primary" id="btnExportXlsx">엑셀로 내보내기</button>
   <button class="ghost" id="btnExportSql" title="지역 데이터를 bot_area 테이블용 INSERT SQL로 내보내기">SQL 내보내기</button>
+  <button class="ghost" id="btnAreaTest" title="자동봇처럼 채팅으로 지역 탐사를 테스트/체험">🧭 테스트 모드</button>
   <button class="ghost" id="btnImportXlsx">엑셀 불러오기</button>
   <button class="ghost" id="btnNewProject">새 프로젝트</button>
   <button class="ghost" id="btnSnapshots" title="편집 내용을 되돌릴 수 있는 복구 지점">↶ 되돌리기</button>
@@ -5773,6 +5788,23 @@ statCols();
 })();
 saveState(false);
 render();
+/* ---------------- 자동봇 테스트 모드 배선 ---------------- */
+(function(){
+  function areaItemName(id){ var rows=(DATA.items&&DATA.items.rows)||[]; for(var i=0;i<rows.length;i++){ if(rows[i][0]===id) return String(rows[i][1]||('아이템#'+id)); } return '아이템#'+id; }
+  var btn=document.getElementById('btnAreaTest');
+  if(btn) btn.addEventListener('click', function(){
+    if(!window.AreaTest){ toast('테스트 모드 모듈 로드 대기 중… 잠시 후 다시 시도하세요.'); return; }
+    if(!DATA||!DATA.sheet1){ toast('지역 데이터가 없습니다.'); return; }
+    document.getElementById('areaTestModal').style.display='flex';
+    try{ window.AreaTest.openAreaTestUI(document.getElementById('areaTestBody'), {rows:DATA.sheet1.rows, headers:DATA.sheet1.headers}, {itemName:areaItemName}); }
+    catch(e){ console.error(e); toast('테스트 모드 초기화 실패: '+(e.message||e)); }
+  });
+  var cb=document.getElementById('btnAreaTestClose');
+  if(cb) cb.addEventListener('click', function(){ document.getElementById('areaTestModal').style.display='none'; });
+  var modal=document.getElementById('areaTestModal');
+  if(modal) modal.addEventListener('click', function(e){ if(e.target===modal) modal.style.display='none'; });
+})();
+
 initCloud().catch(function(err){ console.error(err); setCloudStatus('연결 실패'); document.getElementById('authOverlay').style.display='flex'; document.getElementById('authMsg').textContent='Supabase 초기화 실패: '+(err.message||err); });
 
 /* =========================================================
@@ -5941,6 +5973,10 @@ function buildBotAreaSql(opts){
     const mod = await import('./collab/index.js');
     window.CollabEngine = { openProject: mod.openProject, renderAvatars: mod.renderAvatars };
   }catch(e){ console.warn('[collab] 모듈 로드 실패 — 로컬 모드로 동작합니다.', e); }
+  try{
+    const am = await import('./area-sim.js');
+    window.AreaTest = { openAreaTestUI: am.openAreaTestUI };
+  }catch(e){ console.warn('[area-test] 테스트 모드 모듈 로드 실패', e); }
 </script>
 </body>
 </html>

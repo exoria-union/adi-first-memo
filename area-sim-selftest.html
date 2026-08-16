@@ -1,0 +1,64 @@
+<meta charset="utf-8">
+<title>테스트모드 엔진 자체 테스트</title>
+<style>body{font:13px/1.6 ui-monospace,Consolas,monospace;background:#0f1116;color:#e9eaf0;padding:20px}.p{color:#5cc185}.f{color:#f0846a;font-weight:700}b{color:#7d97ff}</style>
+<h3>자동봇 테스트모드 엔진 자체 테스트</h3>
+<pre id="out"></pre>
+<script type="module">
+import { createSim, buildAreas } from './area-sim.js';
+const out=document.getElementById('out'); let pass=0,fail=0;
+const log=(m,c)=>{out.innerHTML+=(c?`<span class="${c}">${m}</span>`:m)+'\n';};
+const ok=(n,c)=>{if(c){pass++;log('PASS  '+n,'p');}else{fail++;log('FAIL  '+n,'f');}};
+
+const H=['상위지역ID(부모ID)','지역ID','지역명','인접 지역','종류 코드','스크립트(내용)','주사위 목표치','성공 스크립트','실패 스크립트','키아이템 필요 여부','키아이템 ID','파밍 아이템 ID','파밍 아이템 수','파밍 골드','파밍 경험치','지역거래 시, 교단원이 낼 아이템ID','지역거래 시, 교단원이 낼 골드 상한가','최초 탐사 여부','최초 탐사가 아닐 시 실패 스크립트','종족 전용','종족이 아닐 때 스크립트','개방 조건','최초 유일 지급 여부','유일 아이템 소진 스크립트','갈림길 그룹'];
+const ci={}; H.forEach((h,i)=>ci[h]=i);
+function mk(o){ const r=new Array(H.length).fill(null); for(const k in o){ r[ci[k]]=o[k]; } return r; }
+const rows=[
+  mk({'지역ID':'BELL','상위지역ID(부모ID)':'','지역명':'종탑','종류 코드':'INCUNTR_00','스크립트(내용)':'나선계단 입구, 쇠 냄새가 난다.\n\n▶[진입/나선계단을 오른다]'}),
+  mk({'지역ID':'BELL_01','상위지역ID(부모ID)':'BELL','지역명':'나선계단을 오른다','종류 코드':'INCUNTR_03_STR','주사위 목표치':1,'스크립트(내용)':'가파른 계단이 위로 이어진다.\n\n▶[지역/종을 친다]','성공 스크립트':'{name}은 힘껏 계단을 올랐다!\n\n▶[지역/종을 친다]','실패 스크립트':'미끄러져 굴렀다...'}),
+  mk({'지역ID':'BELL_02','상위지역ID(부모ID)':'BELL','지역명':'종을 친다','종류 코드':'INCUNTR_99','인접 지역':'LIB','스크립트(내용)':'거대한 종이 울려 퍼진다. 탐사 완료!'}),
+  // 거래 노드(골드 지불→아이템)
+  mk({'지역ID':'BELL_03','상위지역ID(부모ID)':'BELL','지역명':'상인','종류 코드':'INCUNTR_04_GI','지역거래 시, 교단원이 낼 골드 상한가':100,'파밍 아이템 ID':'50','파밍 아이템 수':1,'스크립트(내용)':'상인이 물건을 건넸다.'}),
+];
+
+try{
+  // 인덱스 빌드
+  const A=buildAreas(rows,H);
+  ok('시작 지역 인덱싱(parent 빈 최상위=종탑)', A.byName['종탑'] && A.byName['종탑'].area_id==='BELL');
+
+  // 1) 시작
+  const sim=createSim({rows,headers:H},{character:{str:6,ch_name:'테스터'},itemName:id=>'검#'+id});
+  let r=sim.command('종탑');
+  ok('시작: 진입 스크립트 표시', r.msg.includes('나선계단 입구'));
+  ok('시작: 선택지에 나선계단 추출', r.choices.includes('나선계단을 오른다'));
+
+  // 2) 능력판정 노드로 이동(스탯 없이) → 노드 스크립트
+  r=sim.command('나선계단을 오른다');
+  ok('스탯 없이 이동: 노드 스크립트 표시', r.msg.includes('가파른 계단'));
+
+  // 3) 힘으로 판정(목표1이라 반드시 성공)
+  r=sim.command('나선계단을 오른다','힘');
+  ok('능력판정: 주사위 표기(6D6>=1)', r.msg.includes('6D6>=1'));
+  ok('능력판정 성공: 성공 스크립트({name} 치환)', r.msg.includes('테스터은 힘껏'));
+  ok('성공 후 선택지: 종을 친다', r.choices.includes('종을 친다'));
+
+  // 4) 완료
+  r=sim.command('종을 친다');
+  ok('완료(INCUNTR_99): 완료 스크립트', r.msg.includes('탐사 완료'));
+  ok('완료: 종료 플래그', r.ended===true);
+
+  // 5) 거래(골드→아이템): 새 세션
+  const sim2=createSim({rows,headers:H},{character:{gold:500},itemName:id=>'물약#'+id});
+  sim2.command('종탑');
+  r=sim2.command('상인');
+  ok('거래(GI): 골드 차감 표기', r.msg.includes('골드 -100'));
+  ok('거래(GI): 아이템 획득 표기', r.msg.includes('물약#50'));
+
+  // 6) 골드 부족
+  const sim3=createSim({rows,headers:H},{character:{gold:10}});
+  sim3.command('종탑'); r=sim3.command('상인');
+  ok('거래(GI) 골드 부족: 거부 메시지', r.msg.includes('충분한 골드'));
+
+  log('\n=== '+pass+' passed, '+fail+' failed ===',fail?'f':'p');
+  document.title=fail===0?'SIM OK':'SIM FAIL';
+}catch(e){log('ERROR: '+(e&&e.stack||e),'f');document.title='SIM ERROR';}
+</script>

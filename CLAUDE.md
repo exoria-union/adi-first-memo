@@ -45,5 +45,8 @@ ES 모듈이라 **http로 서빙 필수**: `py -m http.server 8000`(또는 `pyth
 ## bot_area SQL 내보내기
 툴바 [SQL 내보내기]. 시트 컬럼→`bot_area` 매핑, up_area_id/start_point는 모달 입력. 검증: 길이 초과·**4바이트 문자(테이블이 utf8mb3라 이모지 불가)**·INT 칸 비숫자값 → 행 제외+리포트(생성 SQL은 오류 안 남). 상세는 `README-협업.md` / 메모리 `bot-area-export`.
 
+## 자동봇 테스트 모드 (지역 탐사 체험)
+툴바 [🧭 테스트 모드]. `area-sim.js`가 **exoria_bot의 `mastodon_area_system.py`(지역 탐사 로직)를 JS로 이식**한 것 — 편집기 sheet1을 bot_area로 매핑해 채팅으로 탐사를 체험/테스트한다. 명령 `[지역/지역명/스탯/포션]`, 인카운터(00·02/03/04_IG·II·GI/99), 주사위(stat개 D6, 하나라도 target 이상이면 성공), extract_cn 태그({name}/{XdY}/{a/b/c}), 아이템/골드/경험치를 원본대로 재현. **단일 플레이어 근사**(팀/동행·선행완료·일일한도·급여 등은 단순화, 최초탐사는 토글). ⚠ 봇의 `hp`는 누적 피해량(0=만전, hp_left=max_hp-hp). 원본 수정 시 `area-sim.js`도 맞춰야 함. 검증: `area-sim-selftest.html`(SIM OK).
+
 ## 배포/설정
 `index.html` 상단 `SUPABASE_CONFIG`(anon key). `supabase_협업_전체설정.sql` 실행. http로 배포(Pages). 공유 워크스페이스 RLS라 **가입 잠그기 권장**(로그인한 누구나 전체 열람).
