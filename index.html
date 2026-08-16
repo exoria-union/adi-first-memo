@@ -393,6 +393,34 @@
   .requiredMark{color:#c0392b;font-weight:800;margin-left:2px;}
 
   .requiredMark{color:#c0392b;font-weight:800;margin-left:2px;}
+  /* 필수인데 비어 있는 칸: 저장 시 어느 칸이 빠졌는지 바로 짚어 준다 */
+  .field.missingRequired > label{color:#c0392b;font-weight:700;}
+  .field.missingRequired input,
+  .field.missingRequired textarea,
+  .field.missingRequired select{
+    border-color:#c0392b !important;background:#fdecea;
+    box-shadow:0 0 0 2px rgba(192,57,43,.12);
+  }
+  .field.missingRequired .missingWhy{
+    font-size:10px;color:#c0392b;margin-top:3px;line-height:1.45;font-weight:600;
+  }
+  @keyframes missingFlash{
+    0%,100%{box-shadow:0 0 0 2px rgba(192,57,43,.12);}
+    50%{box-shadow:0 0 0 5px rgba(192,57,43,.32);}
+  }
+  .field.missingRequired.justFlagged input,
+  .field.missingRequired.justFlagged textarea,
+  .field.missingRequired.justFlagged select{animation:missingFlash .5s ease-in-out 2;}
+  #npMissingBanner{
+    background:#fdecea;border:1px solid #e8a49b;color:#a5291c;border-radius:3px;
+    padding:9px 11px;font-size:11.5px;line-height:1.6;margin-bottom:4px;
+  }
+  #npMissingBanner b{color:#8f2318;}
+  #npMissingBanner .npMissJump{
+    display:inline-block;margin:3px 4px 0 0;padding:2px 7px;border:1px solid #e8a49b;border-radius:999px;
+    background:#fff;color:#a5291c;font-size:10.5px;font-weight:700;cursor:pointer;
+  }
+  #npMissingBanner .npMissJump:hover{background:#c0392b;color:#fff;border-color:#c0392b;}
   .fieldRow2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
   .canvasNode{
     position:absolute;width:150px;background:var(--surface);border:1px solid var(--border-strong);
@@ -1664,6 +1692,9 @@ function persist(){
     saveState(false);
     scheduleCloudSave();
   }catch(e){ toast('로컬 저장 실패: ' + e.message); }
+  // 저장은 막지 않는다(작업 중인 내용을 잃는 게 더 나쁘다). 대신 저장된 시점에
+  // 어느 필수 칸이 비어 있는지 편집기에서 바로 짚어 준다.
+  try{ flagMissingRequiredOnSave(); }catch(e){ console.error(e); }
 }
 function scheduleCloudSave(){
   if(COLLAB){ try{ COLLAB.push(DATA); }catch(e){ console.error(e); } return; }
@@ -3475,26 +3506,46 @@ function itemExistsById(id){
   var rows=(DATA.items.rows||[]).concat(DATA.keyItems.rows||[]);
   return rows.some(function(r){ return String(r[0]||'').trim()===v; });
 }
-function nodeValidation(row){
+/* 필수 항목 검사. 어느 "칸"이 비었는지까지 같이 돌려줘야 편집기에서 그 칸을 짚어 줄 수 있다.
+   col은 시트 헤더명이며, 노드 편집기의 각 필드에 붙여 둔 data-col 과 짝이 된다. */
+function nodeValidationDetailed(row){
   var code=String(row[C['종류 코드']]||''), missing=[];
-  if(isDiceType(code)&&!String(row[C['주사위 목표치']]||'').trim())missing.push('주사위 목표치');
+  function need(cond, label, col){ if(cond) missing.push({label:label, col:col}); }
+  var TRADE_ITEM='지역거래 시, 교단원이 낼 아이템ID';
+  var TRADE_GOLD='지역거래 시, 교단원이 낼 골드 상한가';
+
+  need(isDiceType(code)&&!String(row[C['주사위 목표치']]||'').trim(), '주사위 목표치', '주사위 목표치');
   if(is04IGGI(code)){
-    var tradeItem=String(row[C['지역거래 시, 교단원이 낼 아이템ID']]||'').trim();
-    if(!tradeItem) missing.push('교단원이 낼 아이템');
-    else if(!itemExistsById(tradeItem)) missing.push('존재하지 않는 교단원 거래 아이템');
-    if(!String(row[C['지역거래 시, 교단원이 낼 골드 상한가']]||'').trim())missing.push('교단원이 낼 골드 상한가');
+    var tradeItem=String(row[C[TRADE_ITEM]]||'').trim();
+    if(!tradeItem) need(true, '교단원이 낼 아이템', TRADE_ITEM);
+    else need(!itemExistsById(tradeItem), '존재하지 않는 교단원 거래 아이템', TRADE_ITEM);
+    need(!String(row[C[TRADE_GOLD]]||'').trim(), '교단원이 낼 골드 상한가', TRADE_GOLD);
   }
   if(is04II(code)){
     var farmItem=String(row[C['파밍 아이템 ID']]||'').trim();
-    if(!farmItem) missing.push('파밍 아이템');
-    else if(!itemExistsById(farmItem)) missing.push('존재하지 않는 파밍 아이템');
-    var tradeItem2=String(row[C['지역거래 시, 교단원이 낼 아이템ID']]||'').trim();
-    if(!tradeItem2) missing.push('교단원이 낼 아이템');
-    else if(!itemExistsById(tradeItem2)) missing.push('존재하지 않는 교단원 거래 아이템');
+    if(!farmItem) need(true, '파밍 아이템', '파밍 아이템 ID');
+    else need(!itemExistsById(farmItem), '존재하지 않는 파밍 아이템', '파밍 아이템 ID');
+    var tradeItem2=String(row[C[TRADE_ITEM]]||'').trim();
+    if(!tradeItem2) need(true, '교단원이 낼 아이템', TRADE_ITEM);
+    else need(!itemExistsById(tradeItem2), '존재하지 않는 교단원 거래 아이템', TRADE_ITEM);
   }
-  if(isFirstExploration(row)&&!String(row[C['최초 탐사가 아닐 시 실패 스크립트']]||'').trim())missing.push('최초 탐사가 아닐 시 실패 스크립트');
-  if(raceCode(row)&&!String(row[C['종족이 아닐 때 스크립트']]||'').trim())missing.push('종족이 아닐 때 스크립트');
-  return missing;
+  need(isFirstExploration(row)&&!String(row[C['최초 탐사가 아닐 시 실패 스크립트']]||'').trim(),
+       '최초 탐사가 아닐 시 실패 스크립트', '최초 탐사가 아닐 시 실패 스크립트');
+  need(raceCode(row)&&!String(row[C['종족이 아닐 때 스크립트']]||'').trim(),
+       '종족이 아닐 때 스크립트', '종족이 아닐 때 스크립트');
+  // 편집기에서 * 로 필수 표시하던 항목인데 검사에서 빠져 있었다. 표시와 검사를 일치시킨다.
+  if(C['최초 유일 지급 여부']!==undefined){
+    need(String(row[C['최초 유일 지급 여부']]||'').trim().toUpperCase()==='Y'
+         && !String(row[C['유일 아이템 소진 스크립트']]||'').trim(),
+         '유일 아이템 소진 스크립트', '유일 아이템 소진 스크립트');
+  }
+  // 같은 칸이 두 번 걸리면(04_I_GGI + 04_II 동시) 한 번만 남긴다
+  var seen={}, out=[];
+  missing.forEach(function(m){ var k=m.col+'|'+m.label; if(!seen[k]){ seen[k]=1; out.push(m); } });
+  return out;
+}
+function nodeValidation(row){
+  return nodeValidationDetailed(row).map(function(m){ return m.label; });
 }
 function typeTagsForRow(row){
   var tags=[],code=String(row[C['종류 코드']]||'');
@@ -3527,7 +3578,93 @@ function raceSpecificField(row){
   w.appendChild(sel);var h=document.createElement('div');h.style.cssText='font-size:10px;color:var(--text-faint);margin-top:3px;';h.textContent='값이 있으면 「종족이 아닐 때 스크립트」가 필수입니다.';w.appendChild(h);return w;
 }
 function multiTypeCodeField(row){ var w=document.createElement('div');w.className='field';var l=document.createElement('label');l.textContent='종류 코드';w.appendChild(l);var cur=typeCodesArray(row[C['종류 코드']]),sel=document.createElement('select');sel.multiple=true;sel.size=7;sel.style.cssText='border:1px solid var(--border-strong);border-radius:2px;padding:5px;background:var(--bg);font-family:var(--mono);font-size:12px;width:100%;box-sizing:border-box;';TYPE_CODES.forEach(function(x){var o=document.createElement('option');o.value=x;o.textContent=x;if(cur.indexOf(x)!==-1)o.selected=true;sel.appendChild(o);});sel.addEventListener('change',function(){var v=Array.prototype.map.call(sel.selectedOptions,function(o){return o.value;}),d=v.filter(function(x){return x.indexOf('INCUNTR_03_')===0;});if(d.length)v=v.filter(function(x){return x.indexOf('INCUNTR_03_')!==0;}).concat(d);row[C['종류 코드']]=v.join(',');markDirty();refreshNodeEditorTags(row);});w.appendChild(sel);var h=document.createElement('div');h.style.cssText='font-size:10px;color:var(--text-faint);margin-top:3px;';h.textContent='03 계열은 여러 능력치를 동시에 선택할 수 있습니다.';w.appendChild(h);return w;}
-function refreshNodeEditorTags(row){var e=document.getElementById('nodeValidationTags');if(!e)return;e.innerHTML='';typeTagsForRow(row).forEach(function(t){var b=document.createElement('span');b.className='badge typeTag '+t.cls;b.textContent=t.text;if(t.title)b.title=t.title;e.appendChild(b);});}
+// 필드 wrap에 "이 칸이 시트의 어느 컬럼인지"를 새겨 둔다. 필수 항목 하이라이트가 이걸로 칸을 찾는다.
+function markFieldCol(wrap, colName){ if(wrap) wrap.setAttribute('data-col', colName); return wrap; }
+var __missingBannerArmed = false;   // 이 편집기 세션에서 저장이 한 번이라도 일어났는지
+var __lastMissingSignature = null;  // 마지막으로 알린 누락 항목 구성(중복 알림 방지)
+function refreshNodeEditorTags(row){
+  var e=document.getElementById('nodeValidationTags');
+  if(e){
+    e.innerHTML='';
+    typeTagsForRow(row).forEach(function(t){var b=document.createElement('span');b.className='badge typeTag '+t.cls;b.textContent=t.text;if(t.title)b.title=t.title;e.appendChild(b);});
+  }
+  applyRequiredHighlights(row);
+}
+/* 필수인데 비어 있는 칸을 편집기에서 직접 짚어 준다.
+   각 필드 wrap에 붙여 둔 data-col 로 찾아 표시하고, 채워지면 즉시 표시가 걷힌다.
+   flash=true 면(저장 시점) 잠깐 깜빡여서 새로 생긴 문제라는 것을 알린다. */
+function applyRequiredHighlights(row, flash){
+  var panel = document.getElementById('nodePanel');
+  if(!panel || !row) return [];
+  var missing = nodeValidationDetailed(row);
+  var byCol = {};
+  missing.forEach(function(m){ (byCol[m.col] = byCol[m.col] || []).push(m.label); });
+
+  panel.querySelectorAll('.field[data-col]').forEach(function(f){
+    var labels = byCol[f.getAttribute('data-col')];
+    var why = f.querySelector('.missingWhy');
+    if(labels){
+      f.classList.add('missingRequired');
+      if(!why){ why = document.createElement('div'); why.className='missingWhy'; f.appendChild(why); }
+      why.textContent = '⚠ ' + labels.join(' · ') + ' — 필수 항목이에요';
+      if(flash){
+        f.classList.remove('justFlagged');
+        void f.offsetWidth;              // 애니메이션 재시작
+        f.classList.add('justFlagged');
+      }
+    } else {
+      f.classList.remove('missingRequired','justFlagged');
+      if(why) why.remove();
+    }
+  });
+
+  var banner = document.getElementById('npMissingBanner');
+  if(banner){
+    // 칸 하이라이트는 늘 보여주되(빈 필수 칸은 언제나 빈 것이므로), 상단 요약 배너는
+    // "저장됐는데 비어 있다"는 뜻이므로 실제 저장이 한 번 일어난 뒤에만 띄운다.
+    if(!missing.length || !__missingBannerArmed){ banner.style.display='none'; banner.innerHTML=''; }
+    else {
+      banner.style.display='';
+      banner.innerHTML = '';
+      var head = document.createElement('div');
+      head.innerHTML = '⚠ 필수 항목 <b>'+missing.length+'건</b>이 비어 있는 채로 저장됐어요. 아래 칸을 채워주세요.';
+      banner.appendChild(head);
+      var seenCol = {};
+      missing.forEach(function(m){
+        if(seenCol[m.col]) return;
+        seenCol[m.col] = true;
+        var jump = document.createElement('span'); jump.className='npMissJump';
+        jump.textContent = m.label;
+        jump.addEventListener('click', function(){
+          var f = panel.querySelector('.field[data-col="'+m.col.replace(/"/g,'\\"')+'"]');
+          if(!f) return;
+          f.scrollIntoView({behavior:'smooth', block:'center'});
+          var inp = f.querySelector('input,textarea,select');
+          if(inp) setTimeout(function(){ inp.focus(); }, 250);
+        });
+        banner.appendChild(jump);
+      });
+    }
+  }
+  return missing;
+}
+// 저장 시점에 열려 있는 노드 편집기의 누락 필수 항목을 짚어 준다.
+function flagMissingRequiredOnSave(){
+  if(!__collabPanel || !__collabPanel.rowId) return;
+  var overlay = document.getElementById('nodePanelOverlay');
+  if(!overlay || !overlay.classList.contains('open')) return;
+  var idx = rowById[__collabPanel.rowId];
+  var row = (idx===undefined) ? null : DATA.sheet1.rows[idx];
+  if(!row) return;
+  // 자동 저장은 편집 중 수시로 일어난다. 매번 토스트를 띄우면 소음이 되므로,
+  // 빠진 항목의 구성이 실제로 달라졌을 때만 알리고 깜빡인다(하이라이트 자체는 항상 최신).
+  var sig = nodeValidationDetailed(row).map(function(m){ return m.col+'|'+m.label; }).join(',');
+  var changed = (sig !== __lastMissingSignature);
+  __lastMissingSignature = sig;
+  __missingBannerArmed = true;
+  var missing = applyRequiredHighlights(row, changed);
+  if(missing.length && changed) toast('필수 항목 '+missing.length+'건이 비어 있어요 — 빨간 칸을 확인해주세요');
+}
 
 function fieldSelect(label, value, options, onChange){
   var wrap = document.createElement('div'); wrap.className='field';
@@ -3643,6 +3780,8 @@ function renderNodePanel(topId, rowId){
   panel.innerHTML='';
   ensureBotAreaColumns();
   collabClearPanelBindings(); __collabPanel = {topId:topId, rowId:rowId};
+  __missingBannerArmed = false;
+  __lastMissingSignature = null;
   var idx = rowById[rowId];
   var r = DATA.sheet1.rows[idx];
 
@@ -3683,30 +3822,31 @@ function renderNodePanel(topId, rowId){
     var lockedNote = document.createElement('div'); lockedNote.style.cssText='font-size:10px;color:var(--text-faint);margin-top:2px;';
     lockedNote.textContent=isLockedHeader?'지역 시작 노드는 항상 INCUNTR_00으로 고정돼요':'이동한다 노드는 항상 INCUNTR_99로 고정돼요'; lockedField.appendChild(lockedNote); diceRow.appendChild(lockedField);
   } else { diceRow.appendChild(multiTypeCodeField(r)); }
-  diceRow.appendChild(fieldInput('주사위 목표치'+(isDiceType(r[C['종류 코드']])?' *':''), r[C['주사위 목표치']], function(v){r[C['주사위 목표치']]=v;refreshNodeEditorTags(r);}));
+  diceRow.appendChild(markFieldCol(fieldInput('주사위 목표치'+(isDiceType(r[C['종류 코드']])?' *':''), r[C['주사위 목표치']], function(v){r[C['주사위 목표치']]=v;refreshNodeEditorTags(r);}), '주사위 목표치'));
   body.appendChild(diceRow);
   var validationTags=document.createElement('div');validationTags.id='nodeValidationTags';validationTags.style.cssText='display:flex;gap:5px;flex-wrap:wrap;align-items:center;';body.appendChild(validationTags);
+  var missingBanner=document.createElement('div');missingBanner.id='npMissingBanner';missingBanner.style.display='none';body.appendChild(missingBanner);
 
   body.appendChild(scriptFieldEditor('성공 스크립트', topId, r, '성공 스크립트'));
   body.appendChild(scriptFieldEditor('실패 스크립트', topId, r, '실패 스크립트'));
 
   var farmRow1=document.createElement('div');farmRow1.className='fieldRow';
-  farmRow1.appendChild(itemSelectField('파밍 아이템',r[C['파밍 아이템 ID']],function(v){r[C['파밍 아이템 ID']]=v;refreshNodeEditorTags(r);},is04II(r[C['종류 코드']])));
+  farmRow1.appendChild(markFieldCol(itemSelectField('파밍 아이템',r[C['파밍 아이템 ID']],function(v){r[C['파밍 아이템 ID']]=v;refreshNodeEditorTags(r);},is04II(r[C['종류 코드']])), '파밍 아이템 ID'));
   farmRow1.appendChild(fieldInput('파밍 아이템 수',r[C['파밍 아이템 수']],function(v){r[C['파밍 아이템 수']]=v;}));body.appendChild(farmRow1);
   var farmRow2=document.createElement('div');farmRow2.className='fieldRow2';
   farmRow2.appendChild(fieldInput('파밍 골드',r[C['파밍 골드']],function(v){r[C['파밍 골드']]=v;}));
   farmRow2.appendChild(fieldInput('파밍 경험치',r[C['파밍 경험치']],function(v){r[C['파밍 경험치']]=v;}));body.appendChild(farmRow2);
   var tradeRow=document.createElement('div');tradeRow.className='fieldRow';
-  tradeRow.appendChild(itemSelectField('지역거래 시, 교단원이 낼 아이템',r[C['지역거래 시, 교단원이 낼 아이템ID']],function(v){r[C['지역거래 시, 교단원이 낼 아이템ID']]=v;refreshNodeEditorTags(r);},isTradeType(r[C['종류 코드']])));
-  tradeRow.appendChild(fieldInput('지역거래 시, 교단원이 낼 골드 상한가'+(is04IGGI(r[C['종류 코드']])?' *':''),r[C['지역거래 시, 교단원이 낼 골드 상한가']],function(v){r[C['지역거래 시, 교단원이 낼 골드 상한가']]=v;refreshNodeEditorTags(r);}));body.appendChild(tradeRow);
+  tradeRow.appendChild(markFieldCol(itemSelectField('지역거래 시, 교단원이 낼 아이템',r[C['지역거래 시, 교단원이 낼 아이템ID']],function(v){r[C['지역거래 시, 교단원이 낼 아이템ID']]=v;refreshNodeEditorTags(r);},isTradeType(r[C['종류 코드']])), '지역거래 시, 교단원이 낼 아이템ID'));
+  tradeRow.appendChild(markFieldCol(fieldInput('지역거래 시, 교단원이 낼 골드 상한가'+(is04IGGI(r[C['종류 코드']])?' *':''),r[C['지역거래 시, 교단원이 낼 골드 상한가']],function(v){r[C['지역거래 시, 교단원이 낼 골드 상한가']]=v;refreshNodeEditorTags(r);}), '지역거래 시, 교단원이 낼 골드 상한가'));body.appendChild(tradeRow);
 
   var conditionRow = document.createElement('div'); conditionRow.className='fieldRow';
   conditionRow.appendChild(firstExplorationField(r));
   conditionRow.appendChild(raceSpecificField(r));
   body.appendChild(conditionRow);
 
-  body.appendChild(fieldTextarea('최초 탐사가 아닐 시 실패 스크립트'+(isFirstExploration(r)?' *':''), r[C['최초 탐사가 아닐 시 실패 스크립트']], function(v){ r[C['최초 탐사가 아닐 시 실패 스크립트']]=v; refreshNodeEditorTags(r); }, 3));
-  body.appendChild(fieldTextarea('종족이 아닐 때 스크립트'+(raceCode(r)?' *':''), r[C['종족이 아닐 때 스크립트']], function(v){ r[C['종족이 아닐 때 스크립트']]=v; refreshNodeEditorTags(r); }, 3));
+  body.appendChild(markFieldCol(fieldTextarea('최초 탐사가 아닐 시 실패 스크립트'+(isFirstExploration(r)?' *':''), r[C['최초 탐사가 아닐 시 실패 스크립트']], function(v){ r[C['최초 탐사가 아닐 시 실패 스크립트']]=v; refreshNodeEditorTags(r); }, 3), '최초 탐사가 아닐 시 실패 스크립트'));
+  body.appendChild(markFieldCol(fieldTextarea('종족이 아닐 때 스크립트'+(raceCode(r)?' *':''), r[C['종족이 아닐 때 스크립트']], function(v){ r[C['종족이 아닐 때 스크립트']]=v; refreshNodeEditorTags(r); }, 3), '종족이 아닐 때 스크립트'));
 
   var keyRow = document.createElement('div'); keyRow.className='fieldRow';
   keyRow.appendChild(ynSelectField('키아이템 필요 여부', r[C['키아이템 필요 여부']], function(v){ r[C['키아이템 필요 여부']]=v; }, 'N — 필요 없음', 'Y — 필요'));
@@ -3718,7 +3858,7 @@ function renderNodePanel(topId, rowId){
   uniqueRow.appendChild(ynSelectField('최초 유일 지급 여부', r[C['최초 유일 지급 여부']], function(v){ r[C['최초 유일 지급 여부']]=v; refreshNodeEditorTags(r); }, 'N — 일반 지급', 'Y — 최초 1인만 지급'));
   uniqueRow.appendChild(fieldInput('갈림길 그룹', r[C['갈림길 그룹']], function(v){ r[C['갈림길 그룹']]=v; }));
   body.appendChild(uniqueRow);
-  body.appendChild(fieldTextarea('유일 아이템 소진 스크립트'+(String(r[C['최초 유일 지급 여부']]||'').trim().toUpperCase()==='Y'?' *':''), r[C['유일 아이템 소진 스크립트']], function(v){ r[C['유일 아이템 소진 스크립트']]=v; }, 3));
+  body.appendChild(markFieldCol(fieldTextarea('유일 아이템 소진 스크립트'+(String(r[C['최초 유일 지급 여부']]||'').trim().toUpperCase()==='Y'?' *':''), r[C['유일 아이템 소진 스크립트']], function(v){ r[C['유일 아이템 소진 스크립트']]=v; refreshNodeEditorTags(r); }, 3), '유일 아이템 소진 스크립트'));
 
   var bigoField = fieldTextarea('비고', r[C['비고']], function(v){ r[C['비고']]=v; }, 2);
   body.appendChild(bigoField);
