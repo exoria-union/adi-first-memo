@@ -46,7 +46,13 @@ ES 모듈이라 **http로 서빙 필수**: `py -m http.server 8000`(또는 `pyth
 툴바 [SQL 내보내기]. 시트 컬럼→`bot_area` 매핑, up_area_id/start_point는 모달 입력. 검증: 길이 초과·**4바이트 문자(테이블이 utf8mb3라 이모지 불가)**·INT 칸 비숫자값 → 행 제외+리포트(생성 SQL은 오류 안 남). 상세는 `README-협업.md` / 메모리 `bot-area-export`.
 
 ## 자동봇 테스트 모드 (지역 탐사 체험)
-툴바 [🧭 테스트 모드]. `area-sim.js`가 **exoria_bot의 `mastodon_area_system.py`(지역 탐사 로직)를 JS로 이식**한 것 — 편집기 sheet1을 bot_area로 매핑해 채팅으로 탐사를 체험/테스트한다. 명령 `[지역/지역명/스탯/포션]`, 인카운터(00·02/03/04_IG·II·GI/99), 주사위(stat개 D6, 하나라도 target 이상이면 성공), extract_cn 태그({name}/{XdY}/{a/b/c}), 아이템/골드/경험치를 원본대로 재현. **단일 플레이어 근사**(팀/동행·선행완료·일일한도·급여 등은 단순화, 최초탐사는 토글). ⚠ 봇의 `hp`는 누적 피해량(0=만전, hp_left=max_hp-hp). 원본 수정 시 `area-sim.js`도 맞춰야 함. 검증: `area-sim-selftest.html`(SIM OK).
+툴바 [🧭 테스트 모드]. `area-sim.js`가 **exoria_bot의 `mastodon_area_system.py`(지역 탐사 로직)를 JS로 이식**한 것 — 편집기 sheet1을 bot_area로 매핑해 채팅으로 탐사를 체험/테스트한다. 명령 `[지역/지역명/스탯/포션]`, 인카운터(00·02/03/04_IG·II·GI/99), 주사위(stat개 D6, 하나라도 target 이상이면 성공), extract_cn 태그({name}/{XdY}/{a/b/c}), 아이템/골드/경험치를 원본대로 재현. **단일 플레이어 근사**(팀/동행·선행완료·일일한도·급여 등은 단순화, 최초탐사는 토글). ⚠ 봇의 `hp`는 누적 피해량(0=만전, hp_left=max_hp-hp)이라 캐릭터 기본 `hp:0`. 원본 수정 시 `area-sim.js`도 맞춰야 함. 검증: `area-sim-selftest.html`(**SIM OK**, http로 서빙).
+
+### ⚠ area-sim.js 함정 (감사로 이미 터진 것들 — 다시 밟지 말 것)
+1. **입력 마커 껍데기**: 사용자가 `[진입/정문 홀]`·`▶[지역/X]`를 붙여넣어도 `parseAreaInput`이 `^▶`+`[지역|진입|동행/…]` 껍데기를 벗겨 이중 래핑(`[지역/[진입/…]]`)을 막는다.
+2. **선택지는 "표시된 메시지"에서만**: `choicesFromText(msg)`로 실제 보여준 스크립트의 ▶마커만 추출. area_cn+성공+실패를 통째로 훑으면(옛 `choicesOf`) 성공 시 실패 스크립트 선택지까지 새어나온다.
+3. **status는 sticky 아님**: `command`는 진행-판정을 **"미션 존재 여부"**로 하고(예전 `mission.result==='ING'` 고착이 스킬 실패·완료 뒤 신규-시작 경로로 오도했다), `status`(ING/SUCC/FAIL)는 **매 스텝 핸들러가 반환**한다. 핸들러(handlePass/Trade*/Skill/Complete)는 `{ msg, status }` 반환. → 스킬 실패 후 같은 명령 재입력=인-컨텍스트 재도전, 완료(SUCC) 후 인접 이동=계속 진행(status ING). **매 스텝 `mission.root=area._root` 동기화**(트리 간/완료후 이동 대응).
+4. **태그는 스크립트당 첫 `{…}` 하나만**(봇과 동일). `{name}`이 먼저 오면 뒤 태그는 리터럴로 남으니, 한 스크립트에 태그 하나만 쓴다.
 
 ## 배포/설정
 `index.html` 상단 `SUPABASE_CONFIG`(anon key). `supabase_협업_전체설정.sql` 실행. http로 배포(Pages). 공유 워크스페이스 RLS라 **가입 잠그기 권장**(로그인한 누구나 전체 열람).
