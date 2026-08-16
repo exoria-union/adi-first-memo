@@ -69,6 +69,11 @@
   .projectRow .prBody{flex:1;min-width:0;}
   .projectRow .prName{font-weight:600;}
   .projectRow .prMeta{font-size:10px;color:var(--text-faint);margin-top:2px;}
+  .projectRow .prDel{
+    flex:0 0 auto;border:1px solid var(--border);background:#fff;color:var(--text-faint);
+    border-radius:3px;font-size:12px;line-height:1;padding:5px 8px;cursor:pointer;
+  }
+  .projectRow .prDel:hover{border-color:#c0392b;color:#c0392b;background:#fdecea;}
   #savestate{font-size:12px;color:var(--text-faint);display:flex;align-items:center;gap:5px;white-space:nowrap;}
   #savestate .dot{width:6px;height:6px;border-radius:50%;background:var(--text-faint);}
   #savestate.saved .dot{background:var(--success);}
@@ -264,6 +269,20 @@
   /* ============ LIST SCREENS (items/subquests) ============ */
   #main.listscreen{max-width:1240px;margin:0 auto;}
   .listToolbar{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;}
+  .regionPick{
+    width:100%;font-size:10.5px;padding:3px 5px;border:1px solid var(--border);border-radius:2px;
+    background:var(--surface);color:var(--text);font-family:inherit;cursor:pointer;margin-top:6px;
+  }
+  .regionPick:hover{border-color:var(--accent);}
+  .regionPick.noRegion{color:var(--text-faint);border-style:dashed;}
+  .itemCard.bulkSelected{outline:2px solid var(--accent);outline-offset:-2px;background:var(--accent-soft);}
+  .icBulkCheck{position:absolute;top:6px;right:6px;width:15px;height:15px;accent-color:var(--accent);cursor:pointer;z-index:3;}
+  .bulkBar{
+    display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%;
+    background:var(--accent-soft);border:1px solid var(--accent-soft-border);border-radius:3px;padding:8px 10px;
+  }
+  .bulkBar .bulkCount{font-size:12px;font-weight:700;color:var(--accent);}
+  .bulkBar select{font-size:12px;padding:4px 6px;border:1px solid var(--border-strong);border-radius:2px;font-family:inherit;}
   .viewModeGroup{display:flex;gap:2px;background:var(--bg);border:1px solid var(--border-strong);padding:2px;border-radius:2px;}
   .viewModeBtn{padding:5px 12px;font-size:11.5px;border:none;background:transparent;color:var(--text-dim);cursor:pointer;border-radius:0;}
   .viewModeBtn.active{background:var(--surface);color:var(--accent);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.08);}
@@ -382,9 +401,20 @@
   }
   .canvasNode:hover{border-color:var(--accent);box-shadow:0 3px 10px rgba(0,0,0,.14);z-index:5;}
   .canvasNode.dragging{cursor:grabbing;box-shadow:0 8px 20px rgba(0,0,0,.2);z-index:20;}
-  .canvasNode.swapTarget{outline:2px dashed var(--accent);outline-offset:2px;background:var(--accent-soft);}
   .canvasNode.hierarchySwapSelected{outline:3px solid var(--purple);outline-offset:3px;background:var(--purple-soft);box-shadow:0 0 0 1px rgba(107,70,193,.15),0 5px 16px rgba(107,70,193,.2);}
   .canvasToolbar button.swapModeActive{background:var(--purple-soft);border-color:var(--purple);color:var(--purple);font-weight:700;}
+  .canvasToolbar button.lockModeActive{background:#fdf6e8;border-color:#d99a1f;color:#a5730f;font-weight:700;}
+  /* 선택 노드 + 앞(들어오는)/뒤(나가는) 연결 노드 강조. 나머지는 흐리게 눌러 흐름만 남긴다. */
+  .canvasNode.selectedNode{outline:3px solid var(--accent);outline-offset:2px;box-shadow:0 0 0 1px rgba(52,87,213,.18),0 6px 18px rgba(52,87,213,.22);z-index:15;}
+  .canvasNode.neighborOut{outline:2px solid var(--success);outline-offset:2px;background:var(--success-soft);z-index:12;}
+  .canvasNode.neighborIn{outline:2px solid #d9822b;outline-offset:2px;background:#fdf1e3;z-index:12;}
+  .canvasNode.neighborBoth{outline:2px solid var(--purple);outline-offset:2px;background:var(--purple-soft);z-index:12;}
+  .canvasNode.dimmedNode{opacity:.32;}
+  .canvasNode.dragLocked{cursor:pointer;}
+  .canvasEdge.edgeHighlight{stroke-width:2.6;opacity:1;}
+  .canvasEdge.edgeDimmed{opacity:.15;}
+  .canvasLegend{display:flex;align-items:center;gap:10px;font-size:11px;color:var(--text-faint);}
+  .canvasLegend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px;}
   .canvasNode.moveNode{border-style:dashed;background:#fbfbfc;color:var(--text-dim);}
   .canvasNode.rootNode{border-color:var(--accent);background:var(--accent-soft);}
   .canvasNode.orphanNode{border-color:#d99a1f;border-style:dashed;background:#fdf6e8;}
@@ -692,6 +722,10 @@ var LS_KEY = 'lumkingdom_map_editor_v1';
 var PREFS_KEY = 'lumkingdom_map_editor_prefs_v1';
 var PROJECTS_KEY = 'lumkingdom_map_editor_projects_v1';
 var ACTIVE_PROJECT_KEY = 'lumkingdom_map_editor_active_project_v1';
+// 제목 기본값은 단 한 곳에서만 정의한다. 예전에는 '빛의왕국 탐사맵'과 '빛의왕국 탐사맵 편집기'가
+// 여러 곳에 따로 하드코딩돼 있어서, 제목을 바꿔도 프로젝트 목록/재빌드 과정에서 옛 고정 문자열로
+// 되돌아가는 문제가 있었다.
+var DEFAULT_PROJECT_TITLE = '빛의왕국 탐사맵 편집기';
 var DATA;
 var PROJECT_ID = null;
 var PROJECTS = {};
@@ -711,7 +745,7 @@ try{
 function makeProjectId(){ return 'proj_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8); }
 if(!Object.keys(PROJECTS).length && savedParsed){
   var migratedId = 'proj_default';
-  PROJECTS[migratedId] = {id:migratedId,name:savedParsed.toolTitle||'빛의왕국 탐사맵',data:savedParsed,updatedAt:Date.now()};
+  PROJECTS[migratedId] = {id:migratedId,name:savedParsed.toolTitle||DEFAULT_PROJECT_TITLE,data:savedParsed,updatedAt:Date.now()};
   ACTIVE_PROJECT_ID = migratedId;
   try{ localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS)); localStorage.setItem(ACTIVE_PROJECT_KEY,ACTIVE_PROJECT_ID); }catch(e){}
 }
@@ -724,13 +758,18 @@ if(ACTIVE_PROJECT_ID && PROJECTS[ACTIVE_PROJECT_ID] && PROJECTS[ACTIVE_PROJECT_I
 } else if(savedParsed && savedParsed.__buildStamp === RAW.__buildStamp){
   PROJECT_ID = 'proj_default';
   DATA = savedParsed;
-  PROJECTS[PROJECT_ID] = {id:PROJECT_ID,name:DATA.toolTitle||'빛의왕국 탐사맵',data:DATA,updatedAt:Date.now()};
+  PROJECTS[PROJECT_ID] = {id:PROJECT_ID,name:DATA.toolTitle||DEFAULT_PROJECT_TITLE,data:DATA,updatedAt:Date.now()};
 } else {
   PROJECT_ID = 'proj_default';
   DATA = JSON.parse(JSON.stringify(RAW));
-  PROJECTS[PROJECT_ID] = {id:PROJECT_ID,name:DATA.toolTitle||'빛의왕국 탐사맵',data:DATA,updatedAt:Date.now()};
+  PROJECTS[PROJECT_ID] = {id:PROJECT_ID,name:DATA.toolTitle||DEFAULT_PROJECT_TITLE,data:DATA,updatedAt:Date.now()};
 }
 ACTIVE_PROJECT_ID = PROJECT_ID;
+// DATA에 toolTitle이 없으면(원본 export에는 없다) 목록 이름과 문서 제목이 서로 다른 출처를
+// 갖게 되어 재빌드 때마다 제목이 옛 이름으로 되돌아간다. 최초 1회 정규화해 둔다.
+if(DATA && !DATA.toolTitle){
+  DATA.toolTitle = (PROJECTS[PROJECT_ID] && PROJECTS[PROJECT_ID].name) || DEFAULT_PROJECT_TITLE;
+}
 
 function extractUserPrefs(source){
   if(!source) return null;
@@ -872,14 +911,51 @@ function allRegionNames(){
   Object.keys(DATA.regionsTree).forEach(function(topId){ out[topId] = regionName(topId); });
   return out;
 }
+/* 획득처 텍스트의 맨 앞 지역명 = 지도에서 그 아이템이 놓인 칸. 즉 이 접두사가 위치의 원본이다.
+   지역명끼리 앞부분이 겹칠 수 있으므로("숲" vs "숲속마을") 반드시 "가장 긴 이름 먼저" 매칭한다.
+   짧은 쪽이 먼저 걸리면 아이템이 엉뚱한 칸에 붙는다. */
+function regionNamesByLengthDesc(){
+  var names = allRegionNames();
+  return Object.keys(names)
+    .map(function(topId){ return {topId:topId, name:String(names[topId]||'')}; })
+    .filter(function(e){ return e.name; })
+    .sort(function(a,b){ return b.name.length - a.name.length; });
+}
+// 텍스트가 어느 지역명으로 시작하는지 찾는다. 없으면 null.
+function matchRegionPrefix(text){
+  var src = String(text||'');
+  var list = regionNamesByLengthDesc();
+  for(var i=0;i<list.length;i++){
+    if(src.indexOf(list[i].name)===0) return list[i];
+  }
+  return null;
+}
+// 획득처를 {지역명, 나머지}로 쪼갠다. 지역명이 안 붙어 있으면 region은 null.
+function splitAcquisition(text){
+  var src = String(text||'');
+  var hit = matchRegionPrefix(src);
+  if(!hit) return {topId:null, region:null, rest:src};
+  return {topId:hit.topId, region:hit.name, rest:src.slice(hit.name.length)};
+}
+// 획득처의 지역명만 갈아끼우고 뒤의 세부 경로 메모는 그대로 둔다.
+// (지도 드래그·지역 이름 변경 양쪽에서 쓰는 단일 경로)
+function withRegionPrefix(text, newRegionName){
+  var parts = splitAcquisition(text);
+  if(parts.region === null){
+    var rest = String(text||'').trim();
+    return rest ? (newRegionName + ' - ' + rest) : newRegionName;
+  }
+  return newRegionName + parts.rest;
+}
 function rebuildRegionItemIds(){
   var names = allRegionNames();
   var result = {};
   Object.keys(names).forEach(function(topId){ result[topId] = []; });
+  var list = regionNamesByLengthDesc();
   DATA.items.rows.concat(DATA.keyItems.rows).forEach(function(r){
     var src = r[3] || '';
-    for(var topId in names){
-      if(src.indexOf(names[topId]) === 0){ result[topId].push(r[0]); break; }
+    for(var i=0;i<list.length;i++){
+      if(src.indexOf(list[i].name) === 0){ result[list[i].topId].push(r[0]); break; }
     }
   });
   DATA.regionItemIds = result;
@@ -1142,6 +1218,63 @@ function statCols(){
   SP_COL = DATA.items.headers.indexOf('SP 회복량');
 }
 
+/* ---------------- 획득처 ↔ 지도 위치 연동 ----------------
+   획득처의 맨 앞 지역명이 지도상의 위치를 결정한다. 그래서 "(배치 예정)", "(기존 유지)" 같은
+   진행 상황 메모가 획득처에 섞여 있으면 위치 정보와 작업 메모가 한 칸에 뒤엉킨다.
+   메모는 버리지 않고 별도 '메모' 칸으로 옮겨 두고, 획득처는 위치만 담게 한다. */
+function ensureItemMemoColumns(){
+  [DATA.items, DATA.keyItems].forEach(function(t){
+    if(t && t.headers && t.headers.indexOf('메모')===-1) t.headers.push('메모');
+  });
+}
+function itemMemoCol(isKey){
+  ensureItemMemoColumns();
+  return (isKey ? DATA.keyItems : DATA.items).headers.indexOf('메모');
+}
+// 위치가 아니라 "작업 진행 상황"을 적어둔 괄호 주석들. 획득처에서 빼내 메모로 옮긴다.
+var PLACEMENT_NOTE_RE = /^(배치\s*예정|기존\s*유지|수동\s*이동됨.*|아직\s*어디서.*|획득처\s*재검토.*|미배치|배치\s*필요)$/;
+// 획득처에서 배치 관련 주석만 떼어낸다. 지역명 뒤쪽만 훑으므로 "왕성(핵심성소)"처럼
+// 지역명 자체에 들어 있는 괄호는 건드리지 않는다.
+function extractPlacementNotes(acquisition){
+  var parts = splitAcquisition(acquisition);
+  var moved = [];
+  var rest = parts.rest.replace(/\(([^)]*)\)/g, function(full, inner){
+    var keep = [];
+    String(inner).split(',').forEach(function(piece){
+      var t = piece.trim();
+      if(!t) return;
+      if(PLACEMENT_NOTE_RE.test(t)) moved.push(t);
+      else keep.push(t);
+    });
+    return keep.length ? '('+keep.join(', ')+')' : '';
+  });
+  rest = rest.replace(/\s{2,}/g,' ').replace(/\s+$/,'');
+  rest = rest.replace(/[\s-]+$/,'');   // 주석만 있던 자리에 남은 " - " 꼬리 정리
+  var cleaned = parts.region === null ? rest.trim() : (parts.region + rest);
+  return {acquisition: cleaned, notes: moved};
+}
+// 최초 1회만 수행. 이미 옮긴 메모를 다시 덧붙이지 않도록 플래그로 막는다.
+function migratePlacementNotesToMemo(){
+  if(!DATA || !DATA.items || !DATA.keyItems) return 0;
+  ensureItemMemoColumns();
+  if(DATA.__placementNotesMigrated) return 0;
+  var moved = 0;
+  [[DATA.items,false],[DATA.keyItems,true]].forEach(function(pair){
+    var table = pair[0], memoCol = itemMemoCol(pair[1]);
+    table.rows.forEach(function(r){
+      var res = extractPlacementNotes(r[3]);
+      if(!res.notes.length) return;
+      r[3] = res.acquisition;
+      var prev = String(r[memoCol]||'').trim();
+      var add = res.notes.join(', ');
+      r[memoCol] = prev ? (prev + ' · ' + add) : add;
+      moved++;
+    });
+  });
+  DATA.__placementNotesMigrated = true;
+  return moved;
+}
+
 /* ---------------- map cell "더보기" in-place expansion ---------------- */
 /* map cell "더보기" toggle removed — cells now expand on hover via CSS (see .mapcell:hover) */
 
@@ -1374,10 +1507,29 @@ function findClusterOfNode(topId, rowId){
   }
   return null;
 }
+// 이름으로 노드를 가리키는 모든 링크 줄을 지운다(지역/진입 양쪽 표기 모두).
+function stripLinksToNodeName(topId, name){
+  DATA.sheet1.rows.forEach(function(r){
+    var top = r[C['상위지역ID(부모ID)']] || r[C['지역ID']];
+    if(top!==topId) return;
+    ['스크립트(내용)','성공 스크립트','실패 스크립트'].forEach(function(col){
+      var v = r[C[col]];
+      if(!v) return;
+      if(v.indexOf('▶[지역/'+name+']')===-1 && v.indexOf('▶[진입/'+name+']')===-1) return;
+      r[C[col]] = v.split('\n').filter(function(line){
+        var t = line.trim();
+        return t !== '▶[지역/'+name+']' && t !== '▶[진입/'+name+']';
+      }).join('\n');
+    });
+  });
+}
 // Disconnects a node without destroying its row or its descendants.
 // The disconnected node remains in its cluster and is rendered as an orphan, so no
 // downstream content disappears when an upstream node is removed.
-function deleteNode(topId, rowId){
+// opts.hard: 이미 고아가 된 노드에 대해서는 "연결 해제"가 아무것도 바꾸지 못하므로(끊을 연결이
+// 이미 없다) 삭제 버튼이 먹통처럼 보였다. 이 경우에는 행 자체를 완전히 제거한다.
+function deleteNode(topId, rowId, opts){
+  opts = opts || {};
   var row = DATA.sheet1.rows[rowById[rowId]];
   if(!row) return false;
   var name = row[C['지역명']];
@@ -1385,28 +1537,30 @@ function deleteNode(topId, rowId){
   if(rowId===tree.headerRowId){ alert('지역 시작 노드는 삭제할 수 없어요.'); return false; }
   if(rowId===tree.moveRowId){ alert('이동한다 노드는 삭제할 수 없어요.'); return false; }
 
+  if(opts.hard){
+    if(!confirm('고아 노드 "'+name+'"를 완전히 삭제할까요?\n연결이 이미 끊긴 노드라 이번에는 행 데이터까지 지웁니다. 되돌릴 수 없어요.')) return false;
+    stripLinksToNodeName(topId, name);   // 혹시 남아 있는 참조가 있으면 함께 정리
+    var rowIdx = rowById[rowId];
+    if(rowIdx !== undefined && DATA.sheet1.rows[rowIdx] === row) DATA.sheet1.rows.splice(rowIdx, 1);
+    else DATA.sheet1.rows = DATA.sheet1.rows.filter(function(r){ return r[C['지역ID']] !== rowId; });
+    (tree.clusters||[]).forEach(function(c){
+      var i = (c.nodeIds||[]).indexOf(rowId);
+      if(i!==-1) c.nodeIds.splice(i, 1);
+    });
+    if(DATA.nodeCanvasPos) delete DATA.nodeCanvasPos[canvasPosKey(topId, rowId)];
+    rebuildIndexes();
+    markDirty();
+    toast('고아 노드 "'+name+'"를 완전히 삭제했어요');
+    return true;
+  }
+
   var ownerCluster = findClusterOfNode(topId, rowId);
   if(ownerCluster && ownerCluster.root === name){
     return deleteCluster(topId, tree.clusters.indexOf(ownerCluster));
   }
-  if(!confirm('"'+name+'" 노드를 삭제할까요? 연결만 해제하고 노드와 하위 선택지는 고아 노드로 보존됩니다.')) return false;
+  if(!confirm('"'+name+'" 노드를 삭제할까요? 연결만 해제하고 노드와 하위 선택지는 고아 노드로 보존됩니다.\n(고아 노드가 된 뒤 × 를 한 번 더 누르면 완전히 삭제할 수 있어요.)')) return false;
 
-  DATA.sheet1.rows.forEach(function(r){
-    var top = r[C['상위지역ID(부모ID)']] || r[C['지역ID']];
-    if(top!==topId) return;
-    ['스크립트(내용)','성공 스크립트','실패 스크립트'].forEach(function(col){
-      var v = r[C[col]];
-      if(!v) return;
-      var before = v;
-      if(v.indexOf('▶[지역/'+name+']')!==-1 || v.indexOf('▶[진입/'+name+']')!==-1){
-        v = v.split('\n').filter(function(line){
-          var t = line.trim();
-          return t !== '▶[지역/'+name+']' && t !== '▶[진입/'+name+']';
-        }).join('\n');
-      }
-      if(v!==before) r[C[col]] = v;
-    });
-  });
+  stripLinksToNodeName(topId, name);
 
   // Keep the row and its cluster membership. It becomes unreachable from the root,
   // and is therefore surfaced as an orphan instead of disappearing from the graph.
@@ -1582,13 +1736,26 @@ var authBrandTitle = document.getElementById('authBrandTitle');
 function currentProjectName(){
   var name = (DATA && DATA.toolTitle) ? String(DATA.toolTitle).trim() : '';
   if(!name && PROJECT_ID && PROJECTS[PROJECT_ID] && PROJECTS[PROJECT_ID].name) name = String(PROJECTS[PROJECT_ID].name).trim();
-  return name || '빛의왕국 탐사맵 편집기';
+  return name || DEFAULT_PROJECT_TITLE;
 }
 function syncBranding(name){
-  name = String(name || currentProjectName()).trim() || '빛의왕국 탐사맵 편집기';
+  name = String(name || currentProjectName()).trim() || DEFAULT_PROJECT_TITLE;
   if(titleInput && document.activeElement!==titleInput) titleInput.value = name;
   document.title = name;
   if(authBrandTitle) authBrandTitle.textContent = name;
+}
+// 최상단 제목은 곧 "이 프로젝트의 이름"이다. 클라우드 왕복(pushProjectNameToCloud)을 기다리지 않고
+// 로컬 프로젝트 목록 캐시에 바로 반영해야, 목록을 열었을 때 옛 이름이 보이지 않는다.
+function applyProjectNameLocally(name){
+  name = String(name || '').trim() || DEFAULT_PROJECT_TITLE;
+  if(!PROJECT_ID) return name;
+  PROJECTS[PROJECT_ID] = PROJECTS[PROJECT_ID] || {id:PROJECT_ID};
+  PROJECTS[PROJECT_ID].name = name;
+  PROJECTS[PROJECT_ID].updatedAt = Date.now();
+  try{ localStorage.setItem(PROJECTS_KEY, JSON.stringify(PROJECTS)); }catch(e){}
+  var modal = document.getElementById('projectModal');
+  if(modal && modal.classList.contains('open')) renderProjectRows();
+  return name;
 }
 // 프로젝트 "이름"은 Yjs 본문과 별개로 projects 테이블(목록 표시용)에도 반영해야
 // 다른 사용자의 프로젝트 목록에 실시간으로 나타난다. DB 반영이 실패해도 broadcast는
@@ -1620,6 +1787,7 @@ syncBranding(currentProjectName());
 titleInput.addEventListener('input', function(){
   var name = String(titleInput.value || '').trim() || '새 프로젝트';
   DATA.toolTitle = name;
+  applyProjectNameLocally(name);
   syncBranding(name);
   if(COLLAB){ try{ COLLAB.push(DATA); }catch(e){ console.error(e); } }
   scheduleProjectNameSync();   // 이름 변경을 다른 사용자 프로젝트 목록에 실시간 반영
@@ -1791,6 +1959,7 @@ function renderMapScreen(main, crumb){
             other[C['스크립트(내용)']] = other[C['스크립트(내용)']].split('▶[지역/'+oldName+']').join('▶[지역/'+newName+']');
           }
         });
+        renameRegionInLinks(oldName, newName);
       }
       markDirty();
     });
@@ -2014,20 +2183,47 @@ function openMoveTagModal(payload, toRegion){
   overlay.onclick = function(e){ if(e.target===overlay){ cleanup(); render(); } };
 }
 
+/* 지역 이름이 바뀌면 그 지역을 가리키던 획득처/의뢰지역 접두사도 같이 바꿔야 한다.
+   안 그러면 접두사가 더 이상 어떤 지역과도 맞지 않아, 아이템·서브퀘스트가 지도에서
+   조용히 사라진다(데이터는 남아 있는데 어느 칸에도 안 붙는 상태). */
+function renameRegionInLinks(oldName, newName){
+  if(!oldName || oldName===newName) return 0;
+  var changed = 0;
+  function swapPrefix(text){
+    var s = String(text||'');
+    if(s.indexOf(oldName)!==0) return null;
+    return newName + s.slice(oldName.length);
+  }
+  DATA.items.rows.concat(DATA.keyItems.rows).forEach(function(r){
+    var next = swapPrefix(r[3]);
+    if(next!==null){ r[3] = next; changed++; }
+  });
+  DATA.subquests.rows.forEach(function(sq){
+    [2,3,4].forEach(function(fi){
+      var next = swapPrefix(sq[fi]);
+      if(next!==null){ sq[fi] = next; changed++; }
+    });
+  });
+  return changed;
+}
+
 function moveTagToRegion(payload, toRegion, specificNode){
   var toName = regionName(toRegion);
   var fullTarget = specificNode ? (toName + ' - ' + specificNode) : toName;
   if(payload.type==='item'){
     var row = itemById[payload.id];
     if(!row) return;
-    var oldSrc = row[3] || '';
-    var fromName = regionName(payload.fromRegion);
-    if(oldSrc.indexOf(fromName)===0){
-      row[3] = fullTarget + oldSrc.slice(fromName.length);
+    // 획득처 = 위치. 예전에는 접두사가 안 맞으면 "(수동 이동됨 - 원래: …)"를 덧붙여
+    // 획득처를 계속 오염시켰다. 이제는 지역명 부분만 정확히 갈아끼운다.
+    if(specificNode){
+      // 특정 노드를 골랐다면 세부 경로를 새로 지정한 것이므로 옛 경로는 대체하고,
+      // "(보상)" 같은 뒤쪽 부가 표기만 남긴다.
+      var tailNotes = (splitAcquisition(row[3]).rest.match(/\([^)]*\)\s*$/)||[''])[0].trim();
+      row[3] = fullTarget + (tailNotes ? ' ' + tailNotes : '');
     } else {
-      row[3] = fullTarget + ' (수동 이동됨 - 원래: ' + oldSrc + ')';
+      row[3] = withRegionPrefix(row[3], toName);
     }
-    toast(row[1] + ' → ' + fullTarget + '(으)로 배치 지역 변경');
+    toast(row[1] + ' → ' + fullTarget + '(으)로 획득처를 옮겼어요');
   } else if(payload.type==='subquest'){
     var sq = sqById[payload.id];
     if(!sq) return;
@@ -2208,13 +2404,9 @@ function getExclusiveDescendants(topId, startRid, idSet, indeg){
   return result;
 }
 
-// swaps EVERYTHING about two nodes (name, script, choices, dice check, farming, notes...)
-// except their own row ID and parent region - since every reference elsewhere is by NAME,
-// this is what actually changes which content plays at which point in the flow, and other
-// nodes' "다음 노드" links to either name resolve correctly afterward with no extra bookkeeping
 // BFS reachability from a cluster root, following the same "▶[지역/…]"/"▶[진입/…]" edges the
-// canvas itself uses - returns a Set-like object of reachable row IDs (not names, since names
-// can move between rows during a content swap while IDs stay put)
+// canvas itself uses - returns a Set-like object of reachable row IDs (not names, since a
+// hierarchy swap moves links between rows while each row's own ID stays put)
 function getReachableRowIds(topId, rootId, moveRowId){
   var nameToId = nameToIdByRegion[topId];
   var visited = {};
@@ -2253,7 +2445,10 @@ function joinScriptLinksDetailed(narrative, links){
   if(valid.length){
     if(out) out += '\n\n';
     out += valid.map(function(link){
-      return '▶['+(link.keyword||'지역')+'/'+String(link.name).trim()+']';
+      // 이름을 trim하면 안 된다. 링크는 지역명과 "완전히 같은 문자열"로만 연결되는데,
+      // 끝에 공백이 있는 지역명(예: "촛불을 밝혀줘! :SQ: ")을 다듬어 버리면 상하위 교체만으로
+      // 멀쩡하던 연결이 끊겨 해당 노드가 고아가 된다. 여기서는 있는 그대로 옮긴다.
+      return '▶['+(link.keyword||'지역')+'/'+String(link.name)+']';
     }).join('\n');
   }
   return out;
@@ -2297,6 +2492,27 @@ function swapNodeHierarchy(topId, ridA, ridB){
     bParts[col] = splitScriptLinksDetailed(rowB[C[col]]);
   });
 
+  // 상하위 교체는 "선택지(▶[...] 링크)"만 옮기는 연산이다. 지역ID·지역명·종류 코드·주사위·
+  // 파밍·키아이템·비고 등 노드의 고유값과 각 스크립트의 서술부는 원래 노드에 그대로 남아야 한다.
+  // 아래 스냅샷을 교체 직후 대조해, 다른 컬럼이 섞여 바뀌는 회귀를 즉시 잡아낸다.
+  function identitySnapshot(row){
+    var snap = {};
+    DATA.sheet1.headers.forEach(function(h, i){
+      if(cols.indexOf(h)!==-1) return;   // 스크립트 3종은 링크가 이동하므로 서술부만 따로 검증
+      snap[h] = row[i];
+    });
+    return snap;
+  }
+  var identityBefore = {A: identitySnapshot(rowA), B: identitySnapshot(rowB)};
+
+  // A/B가 서로 다른 세부지역에 속해 있었다면, 구조상의 자리를 맞바꾸는 만큼
+  // 세부지역 소속도 함께 맞바꿔야 그래프가 두 노드를 계속 올바른 클러스터에서 그린다.
+  var clusterOfA = null, clusterOfB = null;
+  (tree.clusters||[]).forEach(function(c){
+    if((c.nodeIds||[]).indexOf(ridA)!==-1) clusterOfA = c;
+    if((c.nodeIds||[]).indexOf(ridB)!==-1) clusterOfB = c;
+  });
+
   // 다른 노드가 A/B를 가리키는 링크는 서로 교환한다.
   DATA.sheet1.rows.forEach(function(r){
     var rid = r[C['지역ID']];
@@ -2325,34 +2541,29 @@ function swapNodeHierarchy(topId, ridA, ridB){
     if(cluster.root===nameA) cluster.root = nameB;
     else if(cluster.root===nameB) cluster.root = nameA;
   });
+  // 소속 세부지역도 자리와 함께 맞바꾼다(같은 클러스터면 바꿀 것이 없다).
+  if(clusterOfA && clusterOfB && clusterOfA!==clusterOfB){
+    clusterOfA.nodeIds[clusterOfA.nodeIds.indexOf(ridA)] = ridB;
+    clusterOfB.nodeIds[clusterOfB.nodeIds.indexOf(ridB)] = ridA;
+  }
 
-  rebuildIndexes();
-  return true;
-}
+  // 고유값 보존 검증: 선택지(링크)를 뺀 모든 컬럼과 각 스크립트의 서술부는 교체 전과 같아야 한다.
+  var identityAfter = {A: identitySnapshot(rowA), B: identitySnapshot(rowB)};
+  var drifted = [];
+  ['A','B'].forEach(function(side){
+    Object.keys(identityBefore[side]).forEach(function(h){
+      if(identityBefore[side][h] !== identityAfter[side][h]) drifted.push(side+'.'+h);
+    });
+  });
+  cols.forEach(function(col){
+    if(splitScriptLinksDetailed(rowA[C[col]]).narrative !== aParts[col].narrative) drifted.push('A.'+col+'(서술)');
+    if(splitScriptLinksDetailed(rowB[C[col]]).narrative !== bParts[col].narrative) drifted.push('B.'+col+'(서술)');
+  });
+  if(drifted.length){
+    console.error('상하위 교체 중 선택지가 아닌 고유값이 변경됨', drifted);
+    toast('상하위 교체 경고: 선택지 외 값이 바뀌었습니다 (' + drifted.join(', ') + ')');
+  }
 
-function swapNodeContent(topId, ridA, ridB){
-  var tree = DATA.regionsTree[topId];
-  if(ridA===tree.headerRowId || ridB===tree.headerRowId){
-    alert('지역 시작 노드는 다른 노드와 바꿀 수 없어요.');
-    return false;
-  }
-  if(ridA===tree.moveRowId || ridB===tree.moveRowId){
-    alert('이동한다 노드는 다른 노드와 바꿀 수 없어요.');
-    return false;
-  }
-  var rowA = DATA.sheet1.rows[rowById[ridA]];
-  var rowB = DATA.sheet1.rows[rowById[ridB]];
-  var idIdx = C['지역ID'], topIdx = C['상위지역ID(부모ID)'];
-  // everything about the node moves TOGETHER as one bound package here - name, script, type
-  // code, dice check, success/fail scripts, farming, key item requirements, trade info, notes,
-  // all of it - except the row's own ID and which region it belongs to. because the WHOLE
-  // package (including the name) relocates as a unit, this never changes which name points to
-  // which name anywhere in the graph, only which physical row that whole package happens to
-  // live on - so it can never orphan anything and needs no safety check.
-  for(var i=0;i<DATA.sheet1.headers.length;i++){
-    if(i===idIdx || i===topIdx) continue;
-    var tmp = rowA[i]; rowA[i] = rowB[i]; rowB[i] = tmp;
-  }
   rebuildIndexes();
   return true;
 }
@@ -2398,6 +2609,14 @@ function autoLayoutNodes(topId, rootId, idSet, moveRowId){
   });
   return { positions: positions, order: order };
 }
+
+/* 그래프 화면 상태(다시 그려도 유지돼야 하는 것들).
+   - canvasSelectedId: 선택한 노드. 선택 노드와 그 앞/뒤 노드를 강조하는 데 쓴다.
+   - canvasDragLocked: 드래그 잠금. 켜 두면 클릭(선택/편집)만 되고 위치는 움직이지 않는다. */
+var canvasSelectedId = null;
+var CANVAS_LOCK_KEY = 'lumkingdom_map_editor_graph_drag_lock_v1';
+var canvasDragLocked = false;
+try{ canvasDragLocked = localStorage.getItem(CANVAS_LOCK_KEY)==='1'; }catch(e){}
 
 function renderClusterCanvasScreen(main, crumb){
   ensureGraphDataShape();
@@ -2447,21 +2666,39 @@ function renderClusterCanvasScreen(main, crumb){
   });
   var hierarchySwapBtn = document.createElement('button'); hierarchySwapBtn.className='ghost'; hierarchySwapBtn.textContent='↕ 상하위 교체';
   hierarchySwapBtn.title = '켜고 노드 두 개를 차례로 클릭하면 두 노드의 연결상 위치(상위/하위)를 교체합니다. 노드 자체의 내용은 유지됩니다.';
+  var lockBtn = document.createElement('button'); lockBtn.className='ghost';
+  lockBtn.title = '켜 두면 노드가 드래그로 움직이지 않습니다. 클릭(선택·편집)은 그대로 동작해요.';
   var hint = document.createElement('span'); hint.style.cssText='font-size:11.5px;color:var(--text-faint);';
-  hint.textContent = '드래그: 위치 이동 · 다른 노드 위에 놓기: 내용 교체 · 클릭: 편집';
+  var IDLE_HINT = '클릭: 선택(앞뒤 연결 강조) + 편집 · 드래그: 위치 이동 · 빈 곳 클릭: 선택 해제';
+  var SWAP_HINT = '상하위를 바꿀 첫 번째 노드를 클릭하세요 · 다시 누르면 취소';
+  function baseHint(){ return hierarchySwapMode ? SWAP_HINT : IDLE_HINT; }
+  hint.textContent = baseHint();
+  function syncLockBtn(){
+    lockBtn.classList.toggle('lockModeActive', canvasDragLocked);
+    lockBtn.textContent = canvasDragLocked ? '🔒 드래그 잠금 중' : '🔓 드래그 잠금';
+  }
+  syncLockBtn();
+  lockBtn.addEventListener('click', function(){
+    canvasDragLocked = !canvasDragLocked;
+    try{ localStorage.setItem(CANVAS_LOCK_KEY, canvasDragLocked ? '1' : '0'); }catch(e){}
+    syncLockBtn();
+    Object.keys(nodeEls).forEach(function(id){ nodeEls[id].classList.toggle('dragLocked', canvasDragLocked); });
+    toast(canvasDragLocked ? '드래그를 잠갔어요 · 노드 위치가 고정됩니다' : '드래그 잠금을 풀었어요');
+  });
   hierarchySwapBtn.addEventListener('click', function(){
     hierarchySwapMode = !hierarchySwapMode;
     hierarchySwapSourceId = null;
     hierarchySwapBtn.classList.toggle('swapModeActive', hierarchySwapMode);
     hierarchySwapBtn.textContent = hierarchySwapMode ? '↕ 상하위 교체 중' : '↕ 상하위 교체';
-    if(typeof nodeEls==='object' && nodeEls){
-      Object.keys(nodeEls).forEach(function(id){ nodeEls[id].classList.remove('hierarchySwapSelected'); });
-    }
-    hint.textContent = hierarchySwapMode
-      ? '상하위를 바꿀 첫 번째 노드를 클릭하세요 · 다시 누르면 취소'
-      : '드래그: 위치 이동 · 다른 노드 위에 놓기: 내용 교체 · 클릭: 편집';
+    Object.keys(nodeEls).forEach(function(id){ nodeEls[id].classList.remove('hierarchySwapSelected'); });
+    hint.textContent = baseHint();
   });
-  toolbar.appendChild(backBtn); toolbar.appendChild(resetBtn); toolbar.appendChild(hierarchySwapBtn); toolbar.appendChild(hint);
+  var legend = document.createElement('span'); legend.className='canvasLegend';
+  legend.innerHTML = '<span><i style="background:var(--accent);"></i>선택</span>'
+    + '<span><i style="background:#d9822b;"></i>앞(들어옴)</span>'
+    + '<span><i style="background:var(--success);"></i>뒤(나감)</span>';
+  toolbar.appendChild(backBtn); toolbar.appendChild(resetBtn); toolbar.appendChild(hierarchySwapBtn);
+  toolbar.appendChild(lockBtn); toolbar.appendChild(legend); toolbar.appendChild(hint);
   wrap.appendChild(toolbar);
 
   var canvasWrap = document.createElement('div'); canvasWrap.id='clusterCanvasWrap';
@@ -2491,16 +2728,42 @@ function renderClusterCanvasScreen(main, crumb){
     inner.innerHTML = '<div style="padding:20px;color:var(--text-faint);">그래프로 표시할 노드가 없습니다.</div>';
     return;
   }
-  var indeg = computeInDegrees(topId, idSet);
-  var layout = autoLayoutNodes(topId, rootId, idSet, tree.moveRowId);
+  // 도달성 판정을 cl.nodeIds 안으로만 제한하면, 부모가 실제로 가리키고 있는데도 cl.nodeIds에
+  // 아직 등재되지 않은 노드(옛 데이터·엑셀 임포트·상하위 교체 뒤)가 "고아"로 잘못 표시된다.
+  // 그래서 탐색 대상을 "이 세부지역의 노드 + 아직 어느 세부지역에도 속하지 않은 이 지역의 노드"로
+  // 넓힌다. 다른 세부지역이 이미 소유한 노드는 그쪽 그래프의 것이므로 그대로 제외한다.
+  var claimedByOtherCluster = {};
+  tree.clusters.forEach(function(c, i){
+    if(i===clusterIdx) return;
+    (c.nodeIds||[]).forEach(function(id){ claimedByOtherCluster[id]=true; });
+  });
+  var traverseSet = {};
+  Object.keys(idSet).forEach(function(id){ traverseSet[id]=true; });
+  DATA.sheet1.rows.forEach(function(r){
+    var rid = r[C['지역ID']];
+    var t = r[C['상위지역ID(부모ID)']] || rid;
+    if(t!==topId) return;
+    if(claimedByOtherCluster[rid] || rid===tree.headerRowId) return;
+    traverseSet[rid] = true;
+  });
+
+  var layout = autoLayoutNodes(topId, rootId, traverseSet, tree.moveRowId);
   var reachableIds = layout.order;
   var reachableSet = {}; reachableIds.forEach(function(id){ reachableSet[id]=true; });
+
+  // 실제로 연결돼 있다고 판명된 노드는 세부지역 명단에 편입해, 다음 렌더부터는 판정이 흔들리지 않게 한다.
+  var healed = false;
+  reachableIds.forEach(function(rid){
+    if(rid===tree.headerRowId || rid===tree.moveRowId) return;
+    if(cl.nodeIds.indexOf(rid)===-1){ cl.nodeIds.push(rid); healed = true; }
+  });
+  if(healed) markDirty();
+
   // Surface both assigned-but-unreachable nodes and region-level unassigned nodes.
-  // A content swap can change graph topology while leaving cl.nodeIds untouched;
-  // those nodes must remain visible as yellow orphan nodes rather than vanishing.
+  // 연결이 실제로 끊긴 노드만 여기 남는다.
   var orphanIds = [];
   cl.nodeIds.forEach(function(id){
-    if(!reachableSet[id]) orphanIds.push(id);
+    if(!reachableSet[id] && orphanIds.indexOf(id)===-1) orphanIds.push(id);
   });
 
   var everyAssignedId = {};
@@ -2510,7 +2773,7 @@ function renderClusterCanvasScreen(main, crumb){
   DATA.sheet1.rows.forEach(function(r){
     var rid = r[C['지역ID']];
     var t = r[C['상위지역ID(부모ID)']] || rid;
-    if(t===topId && !everyAssignedId[rid] && orphanIds.indexOf(rid)===-1) orphanIds.push(rid);
+    if(t===topId && !everyAssignedId[rid] && !reachableSet[rid] && orphanIds.indexOf(rid)===-1) orphanIds.push(rid);
   });
   var allIds = reachableIds.concat(orphanIds);
 
@@ -2545,7 +2808,7 @@ function renderClusterCanvasScreen(main, crumb){
     if(hierarchySwapSourceId===rid){
       box.classList.remove('hierarchySwapSelected');
       hierarchySwapSourceId = null;
-      hint.textContent = '상하위를 바꿀 첫 번째 노드를 클릭하세요 · 다시 누르면 취소';
+      hint.textContent = SWAP_HINT;
       return;
     }
 
@@ -2571,13 +2834,13 @@ function renderClusterCanvasScreen(main, crumb){
     }
 
     hierarchySwapSourceId = null;
-    hint.textContent = '상하위를 바꿀 첫 번째 노드를 클릭하세요 · 다시 누르면 취소';
+    hint.textContent = SWAP_HINT;
   }
 
   if(orphanIds.length > 0){
     var orphanLabel = document.createElement('div'); orphanLabel.className = 'orphanSectionLabel';
     orphanLabel.style.left = '20px'; orphanLabel.style.top = (orphanBaseY - 26) + 'px';
-    orphanLabel.textContent = '⚠ 고아 노드 ' + orphanIds.length + '개 — 연결이 끊겼지만 데이터는 보존되어 있습니다';
+    orphanLabel.textContent = '⚠ 고아 노드 ' + orphanIds.length + '개 — 연결이 끊겼지만 데이터는 보존되어 있습니다 (× 를 누르면 완전히 삭제)';
     inner.appendChild(orphanLabel);
   }
 
@@ -2600,7 +2863,10 @@ function renderClusterCanvasScreen(main, crumb){
         var x2 = toPos.x, y2 = toPos.y + th/2;
         var mx = (x1+x2)/2;
         var d = 'M '+x1+' '+y1+' C '+mx+' '+y1+', '+mx+' '+y2+', '+x2+' '+y2;
-        parts.push('<path class="canvasEdge '+cls+'" d="'+d+'" marker-end="url(#arrowhead)"></path>');
+        // 선택된 노드에 닿는 간선만 진하게, 나머지는 눌러서 앞뒤 흐름이 한눈에 보이게 한다.
+        var sel = canvasSelectedId;
+        var selCls = !sel ? '' : ((rid===sel || tid===sel) ? ' edgeHighlight' : ' edgeDimmed');
+        parts.push('<path class="canvasEdge '+cls+selCls+'" d="'+d+'" marker-end="url(#arrowhead)"></path>');
       }
       parseChoices(row[C['스크립트(내용)']]).forEach(function(n){ edgeTo(n, ''); });
       parseChoices(row[C['성공 스크립트']]||'').forEach(function(n){ edgeTo(n, 'succEdge'); });
@@ -2612,6 +2878,65 @@ function renderClusterCanvasScreen(main, crumb){
     inner.style.width = (maxX+200)+'px';
     inner.style.height = (maxY+120)+'px';
   }
+
+  /* ---- 선택 노드 + 앞뒤 연결 노드 강조 ---- */
+  // 화면에 그려진 노드 중, rid가 선택지로 가리키는 노드들("뒤" 노드)
+  function outgoingIdsOf(rid){
+    var row = DATA.sheet1.rows[rowById[rid]];
+    if(!row) return [];
+    var names = parseChoices(row[C['스크립트(내용)']])
+      .concat(parseChoices(row[C['성공 스크립트']]||''))
+      .concat(parseChoices(row[C['실패 스크립트']]||''));
+    var out = [];
+    names.forEach(function(n){
+      var tid = n==='이동한다' ? tree.moveRowId : nameToId[n];
+      if(tid && nodeEls[tid] && tid!==rid && out.indexOf(tid)===-1) out.push(tid);
+    });
+    return out;
+  }
+  function applySelectionHighlight(){
+    if(canvasSelectedId && !nodeEls[canvasSelectedId]) canvasSelectedId = null;
+    var sel = canvasSelectedId;
+    var inSet = {}, outSet = {}, inCount = 0, outCount = 0;
+    if(sel){
+      outgoingIdsOf(sel).forEach(function(id){ if(!outSet[id]){ outSet[id]=true; outCount++; } });
+      Object.keys(nodeEls).forEach(function(id){
+        if(id===sel || inSet[id]) return;
+        if(outgoingIdsOf(id).indexOf(sel)!==-1){ inSet[id]=true; inCount++; }
+      });
+    }
+    Object.keys(nodeEls).forEach(function(id){
+      var el = nodeEls[id];
+      el.classList.remove('selectedNode','neighborIn','neighborOut','neighborBoth','dimmedNode');
+      if(!sel) return;
+      if(id===sel) el.classList.add('selectedNode');
+      else if(inSet[id] && outSet[id]) el.classList.add('neighborBoth');
+      else if(inSet[id]) el.classList.add('neighborIn');
+      else if(outSet[id]) el.classList.add('neighborOut');
+      else el.classList.add('dimmedNode');
+    });
+    if(!hierarchySwapMode){
+      if(sel){
+        var selRow = DATA.sheet1.rows[rowById[sel]];
+        hint.textContent = '선택: '+(selRow ? selRow[C['지역명']] : sel)
+          + ' · 앞 '+inCount+'개 / 뒤 '+outCount+'개 연결 · 빈 곳 클릭: 선택 해제';
+      } else {
+        hint.textContent = IDLE_HINT;
+      }
+    }
+    drawEdges();
+  }
+  function selectCanvasNode(rid){
+    canvasSelectedId = rid;
+    applySelectionHighlight();
+  }
+  // 빈 캔버스를 클릭하면 선택 해제(노드 클릭은 stopPropagation 없이도 pointerup에서 먼저 처리된다)
+  canvasWrap.addEventListener('click', function(e){
+    if(e.target!==canvasWrap && e.target!==inner && e.target!==svg) return;
+    if(!canvasSelectedId) return;
+    canvasSelectedId = null;
+    applySelectionHighlight();
+  });
 
   allIds.forEach(function(rid){
     var row = DATA.sheet1.rows[rowById[rid]];
@@ -2647,11 +2972,21 @@ function renderClusterCanvasScreen(main, crumb){
       cnToolbar.appendChild(addBtn);
     }
     if(!isMove && !isHeader){
+      // 고아 노드는 이미 끊을 연결이 없어서 "연결 해제" 삭제가 아무 효과도 내지 못한다.
+      // 이 경우에만 행까지 지우는 완전 삭제로 넘긴다.
+      var isOrphanNode = !reachableSet[rid];
       var delBtn2 = document.createElement('button'); delBtn2.className='cnIconBtn cnIconDel'; delBtn2.textContent='×';
-      delBtn2.title = '이 노드 삭제';
+      delBtn2.title = isOrphanNode ? '이 고아 노드를 완전히 삭제' : '이 노드 삭제(연결 해제 · 고아 노드로 보존)';
       delBtn2.addEventListener('pointerdown', function(e){ e.stopPropagation(); });
       delBtn2.addEventListener('click', function(e){
         e.stopPropagation();
+        if(isOrphanNode){
+          if(deleteNode(topId, rid, {hard:true})){
+            if(canvasSelectedId===rid) canvasSelectedId = null;
+            render();
+          }
+          return;
+        }
         if(rid === rootId){
           if(deleteCluster(topId, nav.clusterIdx)) go({view:'region'});
           return;
@@ -2675,36 +3010,23 @@ function renderClusterCanvasScreen(main, crumb){
     nodeEls[rid] = box;
     inner.appendChild(box);
 
+    if(canvasDragLocked) box.classList.add('dragLocked');
+
     var dragged = false;
     box.addEventListener('pointerdown', function(e){
       var startX=e.clientX, startY=e.clientY;
       var origLeft = parseInt(box.style.left,10), origTop = parseInt(box.style.top,10);
+      // 잠금 여부는 누른 시점에 고정한다(드래그 도중 토글돼도 이번 제스처는 일관되게 동작).
+      var lockedForThisDrag = canvasDragLocked;
       dragged = false;
       box.setPointerCapture(e.pointerId);
-      var swapTargetId = null;
-      function findOverlap(){
-        var bw = box.offsetWidth, bh = box.offsetHeight;
-        var bx = parseInt(box.style.left,10), by = parseInt(box.style.top,10);
-        var bcx = bx+bw/2, bcy = by+bh/2;
-        for(var otherId in nodeEls){
-          if(otherId===rid) continue;
-          var otherEl = nodeEls[otherId];
-          var ox = parseInt(otherEl.style.left,10), oy = parseInt(otherEl.style.top,10);
-          var ow = otherEl.offsetWidth, oh = otherEl.offsetHeight;
-          if(bcx>=ox && bcx<=ox+ow && bcy>=oy && bcy<=oy+oh) return otherId;
-        }
-        return null;
-      }
       function onMove(ev){
+        if(lockedForThisDrag) return;   // 드래그 잠금: 위치를 바꾸지 않고 클릭으로만 취급
         var dx=ev.clientX-startX, dy=ev.clientY-startY;
         if(!dragged && (Math.abs(dx)>4||Math.abs(dy)>4)){ dragged=true; box.classList.add('dragging'); }
         if(dragged){
           box.style.left = Math.max(0,origLeft+dx)+'px';
           box.style.top = Math.max(0,origTop+dy)+'px';
-          var overlap = findOverlap();
-          if(swapTargetId && swapTargetId!==overlap) nodeEls[swapTargetId].classList.remove('swapTarget');
-          swapTargetId = overlap;
-          if(swapTargetId) nodeEls[swapTargetId].classList.add('swapTarget');
           drawEdges();
         }
       }
@@ -2714,41 +3036,18 @@ function renderClusterCanvasScreen(main, crumb){
         box.removeEventListener('pointerup', onUp);
         if(dragged){
           box.classList.remove('dragging');
-          if(swapTargetId){
-            var targetEl = nodeEls[swapTargetId];
-            targetEl.classList.remove('swapTarget');
-            // this box's own screen position never changes visually - only the underlying
-            // CONTENT (name+script) of the two rows swaps. but if neither node has ever had
-            // a manually-saved canvas position, auto-layout recomputes both from scratch on
-            // every render by walking the parent's own choice list *by name* - which is
-            // unchanged by this swap, so it silently reassigns each row right back to the
-            // slot matching its (now-different) name, making the swap visually disappear even
-            // though the data is correct. pin BOTH nodes' current on-screen positions first so
-            // auto-layout can never quietly undo what the user just did.
-            var targetLeft = parseInt(targetEl.style.left,10), targetTop = parseInt(targetEl.style.top,10);
-            box.style.left = origLeft+'px';
-            box.style.top = origTop+'px';
-            setCanvasPos(topId, rid, origLeft, origTop);
-            setCanvasPos(topId, swapTargetId, targetLeft, targetTop);
-            if(swapNodeContent(topId, rid, swapTargetId)){
-              markDirty();
-              toast('두 노드의 이름과 스크립트를 서로 바꿨어요');
-              render();
-              return;
-            }
-          } else {
-            var GRID = 20;
-            var snappedLeft = Math.round(parseInt(box.style.left,10)/GRID)*GRID;
-            var snappedTop = Math.round(parseInt(box.style.top,10)/GRID)*GRID;
-            box.style.left = snappedLeft+'px';
-            box.style.top = snappedTop+'px';
-            setCanvasPos(topId, rid, snappedLeft, snappedTop);
-          }
+          var GRID = 20;
+          var snappedLeft = Math.round(parseInt(box.style.left,10)/GRID)*GRID;
+          var snappedTop = Math.round(parseInt(box.style.top,10)/GRID)*GRID;
+          box.style.left = snappedLeft+'px';
+          box.style.top = snappedTop+'px';
+          setCanvasPos(topId, rid, snappedLeft, snappedTop);
           drawEdges();
           markDirty();
         } else {
-          if(hierarchySwapMode) handleHierarchySwapClick(rid, box);
-          else openNodePanel(topId, rid);
+          if(hierarchySwapMode){ handleHierarchySwapClick(rid, box); return; }
+          selectCanvasNode(rid);     // 강조는 편집 패널을 닫은 뒤에도 그대로 남는다
+          openNodePanel(topId, rid);
         }
       }
       box.addEventListener('pointermove', onMove);
@@ -2757,6 +3056,7 @@ function renderClusterCanvasScreen(main, crumb){
   });
 
   drawEdges();
+  applySelectionHighlight();
 }
 
 function renderClusterScreen(main, crumb){
@@ -3389,6 +3689,58 @@ function renameNodeCascade(topId, oldName, newName){
    ITEMS SCREEN
    ========================================================= */
 var ITEM_CATS = ['전체','재료','레시피','소모품(완제)','재료(거래품)','소모품(완제, 거래품)'];
+
+/* ---------------- 목록에서 지역 지정 (개별 + 일괄) ----------------
+   획득처의 지역명 접두사가 지도 위치이므로, 지역 선택은 결국 그 접두사를 바꾸는 일이다.
+   세부 경로("- 지하 납골당 → …")는 건드리지 않고 지역명만 교체한다. */
+function sortedRegionNames(){
+  return regionNamesByLengthDesc()
+    .map(function(e){ return e.name; })
+    .sort(function(a,b){ return a.localeCompare(b,'ko'); });
+}
+function buildRegionSelect(currentName, onPick){
+  var sel = document.createElement('select');
+  sel.className = 'regionPick' + (currentName ? '' : ' noRegion');
+  var none = document.createElement('option');
+  none.value = ''; none.textContent = '— 지역 없음 —';
+  sel.appendChild(none);
+  sortedRegionNames().forEach(function(n){
+    var o = document.createElement('option'); o.value = n; o.textContent = n;
+    sel.appendChild(o);
+  });
+  // 현재 지역명이 목록에 없으면(지역이 지워졌거나 오타) 그 값도 옵션으로 넣어 보여준다
+  if(currentName && sortedRegionNames().indexOf(currentName)===-1){
+    var extra = document.createElement('option');
+    extra.value = currentName; extra.textContent = currentName + ' (없는 지역)';
+    sel.appendChild(extra);
+  }
+  sel.value = currentName || '';
+  // 카드 클릭(=상세 열기)과 드래그로 번지지 않게 막는다
+  sel.addEventListener('click', function(e){ e.stopPropagation(); });
+  sel.addEventListener('pointerdown', function(e){ e.stopPropagation(); });
+  sel.addEventListener('change', function(e){
+    e.stopPropagation();
+    sel.classList.toggle('noRegion', !sel.value);
+    onPick(sel.value);
+  });
+  return sel;
+}
+// 아이템 한 건의 지역을 바꾼다. 빈 값이면 지역명 접두사만 떼어낸다(지도에서 내려놓기).
+function setItemRegionByName(row, newName){
+  var before = row[3];
+  if(!newName){
+    var parts = splitAcquisition(row[3]);
+    if(parts.region===null) return false;
+    row[3] = parts.rest.replace(/^\s*[-–]\s*/,'').trim();
+  } else {
+    row[3] = withRegionPrefix(row[3], newName);
+  }
+  return row[3] !== before;
+}
+var itemBulkMode = false;
+var itemBulkSelection = {};
+function bulkKey(id, isKey){ return (isKey?'K':'I') + id; }
+
 function renderItemsScreen(main, crumb){
   // defensive: always clear own target, so this function is safe to call directly too
   main.innerHTML=''; crumb.innerHTML='';
@@ -3433,19 +3785,81 @@ function renderItemsScreen(main, crumb){
   addBtn.addEventListener('click', function(){ addNewItem(false); });
   var addKeyBtn = document.createElement('button'); addKeyBtn.textContent='+ 새 키아이템';
   addKeyBtn.addEventListener('click', function(){ addNewItem(true); });
+  var bulkStartBtn = document.createElement('button'); bulkStartBtn.className='ghost';
+  bulkStartBtn.textContent='여러 아이템 지역 한번에 바꾸기';
+  bulkStartBtn.addEventListener('click', function(){
+    itemBulkMode = true; itemBulkSelection = {};
+    render();
+  });
+  if(!itemBulkMode) toolbar.appendChild(bulkStartBtn);
   toolbar.appendChild(addKeyBtn);
   toolbar.appendChild(addBtn);
   wrap.appendChild(toolbar);
 
-  var grid = document.createElement('div'); grid.className='itemGrid' + (nav.itemView!=='grid' ? ' view'+nav.itemView.charAt(0).toUpperCase()+nav.itemView.slice(1) : '');
   var cat = nav.itemCat || '전체';
   var all = DATA.items.rows.map(function(r){ return {row:r, key:false}; })
     .concat(DATA.keyItems.rows.map(function(r){ return {row:r, key:true}; }));
+  var visible = all.filter(function(entry){
+    var rcat = entry.key ? '키아이템' : entry.row[2];
+    return cat==='전체' || rcat===cat;
+  });
+
+  if(itemBulkMode){
+    var bar = document.createElement('div'); bar.className='bulkBar';
+    // 선택은 분류 탭을 넘어 유지되므로, 개수와 적용 범위 모두 "지금 보이는 목록"이 아니라
+    // 전체 선택분을 기준으로 삼아야 한다. 안 그러면 다른 탭에서 고른 것이 조용히 빠진다.
+    var allByKey = {};
+    all.forEach(function(e){ allByKey[bulkKey(e.row[0], e.key)] = e; });
+    var selectedKeys = Object.keys(itemBulkSelection).filter(function(k){ return allByKey[k]; });
+    var visibleSelected = visible.filter(function(e){ return itemBulkSelection[bulkKey(e.row[0], e.key)]; }).length;
+    var countEl = document.createElement('span'); countEl.className='bulkCount';
+    countEl.textContent = selectedKeys.length + '개 선택됨'
+      + (selectedKeys.length > visibleSelected ? ' (이 목록 밖 ' + (selectedKeys.length - visibleSelected) + '개 포함)' : '');
+    var selAllBtn = document.createElement('button'); selAllBtn.className='ghost'; selAllBtn.textContent='이 목록 전체 선택';
+    selAllBtn.addEventListener('click', function(){
+      visible.forEach(function(e){ itemBulkSelection[bulkKey(e.row[0], e.key)] = true; });
+      render();
+    });
+    var clearBtn = document.createElement('button'); clearBtn.className='ghost'; clearBtn.textContent='선택 해제';
+    clearBtn.addEventListener('click', function(){ itemBulkSelection = {}; render(); });
+    var bulkSel = document.createElement('select');
+    var ph = document.createElement('option'); ph.value=''; ph.textContent='옮길 지역 선택…';
+    bulkSel.appendChild(ph);
+    sortedRegionNames().forEach(function(n){
+      var o = document.createElement('option'); o.value=n; o.textContent=n; bulkSel.appendChild(o);
+    });
+    var noneOpt = document.createElement('option'); noneOpt.value='__none__'; noneOpt.textContent='— 지역 없음으로 —';
+    bulkSel.appendChild(noneOpt);
+    var applyBtn2 = document.createElement('button'); applyBtn2.className='primary'; applyBtn2.textContent='선택한 아이템에 적용';
+    applyBtn2.addEventListener('click', function(){
+      if(!bulkSel.value){ toast('옮길 지역을 먼저 고르세요'); return; }
+      var targets = selectedKeys.map(function(k){ return allByKey[k]; });
+      if(!targets.length){ toast('아이템을 먼저 선택하세요'); return; }
+      var toName = bulkSel.value==='__none__' ? '' : bulkSel.value;
+      var changed = 0;
+      targets.forEach(function(e){ if(setItemRegionByName(e.row, toName)) changed++; });
+      rebuildItemIndex(); rebuildAllCrossRefs(); markDirty();
+      toast(changed + '개 아이템의 지역을 ' + (toName ? '"'+toName+'"(으)로' : '없음으로') + ' 바꿨어요');
+      itemBulkMode = false; itemBulkSelection = {};
+      render();
+    });
+    var cancelBtn2 = document.createElement('button'); cancelBtn2.className='ghost'; cancelBtn2.textContent='취소';
+    cancelBtn2.addEventListener('click', function(){ itemBulkMode=false; itemBulkSelection={}; render(); });
+    bar.appendChild(countEl); bar.appendChild(selAllBtn); bar.appendChild(clearBtn);
+    var barSpacer = document.createElement('div'); barSpacer.style.flex='1'; bar.appendChild(barSpacer);
+    bar.appendChild(bulkSel); bar.appendChild(applyBtn2); bar.appendChild(cancelBtn2);
+    wrap.appendChild(bar);
+    var bulkHint = document.createElement('div');
+    bulkHint.style.cssText='font-size:11px;color:var(--text-faint);margin:6px 0 12px;';
+    bulkHint.textContent='카드를 클릭해서 선택/해제하세요 · 분류 탭을 바꿔가며 골라도 선택은 그대로 쌓이고, 적용은 고른 전체에 한 번에 들어갑니다';
+    wrap.appendChild(bulkHint);
+  }
+
+  var grid = document.createElement('div'); grid.className='itemGrid' + (nav.itemView!=='grid' ? ' view'+nav.itemView.charAt(0).toUpperCase()+nav.itemView.slice(1) : '');
   var anyShown = false;
-  all.forEach(function(entry){
+  visible.forEach(function(entry){
     var r = entry.row;
     var rcat = entry.key ? '키아이템' : r[2];
-    if(cat!=='전체' && rcat!==cat) return;
     anyShown = true;
     var card = document.createElement('div'); card.className='itemCard';
     var bucket = entry.key ? 'material' : itemCategoryBucket(rcat);
@@ -3495,7 +3909,35 @@ function renderItemsScreen(main, crumb){
       });
       card.appendChild(tagsWrap);
     }
-    card.addEventListener('click', function(){ go({itemId:r[0], itemIsKey:entry.key}); });
+
+    // 목록에서 바로 지역을 지정한다(= 획득처의 지역명 접두사 교체 = 지도상의 위치 이동).
+    // 일괄 선택 중에는 카드 전체가 선택 토글이므로 개별 드롭다운은 숨긴다.
+    if(!itemBulkMode){
+      card.appendChild(buildRegionSelect(splitAcquisition(r[3]).region, function(name){
+        if(setItemRegionByName(r, name)){
+          rebuildItemIndex(); rebuildAllCrossRefs(); markDirty();
+          toast(r[1] + ' → ' + (name ? name : '지역 없음'));
+        }
+      }));
+    }
+
+    var selKey = bulkKey(r[0], entry.key);
+    if(itemBulkMode){
+      var toggleSel = function(){
+        if(itemBulkSelection[selKey]) delete itemBulkSelection[selKey];
+        else itemBulkSelection[selKey] = true;
+        render();
+      };
+      card.style.position = 'relative';
+      if(itemBulkSelection[selKey]) card.classList.add('bulkSelected');
+      var chk = document.createElement('input'); chk.type='checkbox'; chk.className='icBulkCheck';
+      chk.checked = !!itemBulkSelection[selKey];
+      chk.addEventListener('click', function(e){ e.stopPropagation(); toggleSel(); });
+      card.appendChild(chk);
+      card.addEventListener('click', function(){ toggleSel(); });
+    } else {
+      card.addEventListener('click', function(){ go({itemId:r[0], itemIsKey:entry.key}); });
+    }
     grid.appendChild(card);
   });
   if(!anyShown){
@@ -3632,8 +4074,17 @@ function renderItemDetail(main, crumb){
 
   card.appendChild(fieldInput('이름', r[1], function(v){ r[1]=v; }));
   card.appendChild(fieldInput('분류', r[2], function(v){ r[2]=v; }));
-  card.appendChild(fieldTextarea(isKey?'용도':'획득처', r[3], function(v){ r[3]=v; }, 2));
+  var acqField = fieldTextarea(isKey?'용도':'획득처', r[3], function(v){ r[3]=v; }, 2);
+  if(!isKey){
+    var acqHelp = document.createElement('div');
+    acqHelp.style.cssText='font-size:10.5px;color:var(--text-faint);margin-top:3px;line-height:1.5;';
+    acqHelp.textContent = '맨 앞의 지역명이 지도상의 위치입니다. 지도에서 다른 칸으로 끌어다 놓으면 이 지역명이 자동으로 바뀌고, 뒤의 세부 경로는 그대로 유지돼요.';
+    acqField.appendChild(acqHelp);
+  }
+  card.appendChild(acqField);
   card.appendChild(fieldTextarea('설명', r[4], function(v){ r[4]=v; }, 3));
+  var memoCol = itemMemoCol(isKey);
+  card.appendChild(fieldTextarea('메모', r[memoCol], function(v){ r[memoCol]=v; }, 2));
 
   if(!isKey && itemCategoryBucket(r[2])==='product'){
     statCols();
@@ -3818,10 +4269,15 @@ function ensureBotAreaColumns(){
 function rebuildProjectView(opts){
   ensureGraphDataShape();
   ensureBotAreaColumns();
+  ensureItemMemoColumns();
   opts = opts || {};
   var previousNav = nav ? JSON.parse(JSON.stringify(nav)) : null;
   H1=DATA.sheet1.headers; C={}; H1.forEach(function(h,i){C[h]=i;});
-  rebuildRegionsTreeFromSheet1(); rebuildIndexes(); rebuildItemIndex(); rebuildSqIndex(); rebuildAllCrossRefs();
+  rebuildRegionsTreeFromSheet1(); rebuildIndexes(); rebuildItemIndex(); rebuildSqIndex();
+  // 지역명 인덱스가 준비된 뒤에 실행해야 획득처의 지역명 접두사를 제대로 알아본다.
+  // 프로젝트를 바꾸거나 원격 데이터를 받아도 프로젝트당 1회만 수행된다.
+  migratePlacementNotesToMemo();
+  rebuildAllCrossRefs();
   var preserveView = opts.preserveView !== false && previousNav && previousNav.main==='map';
   if(preserveView && previousNav.view==='canvas'){
     var pt=DATA.regionsTree && previousNav.regionId ? DATA.regionsTree[previousNav.regionId] : null;
@@ -3838,8 +4294,13 @@ function rebuildProjectView(opts){
   }else{
     nav=previousNav;
   }
-  var projectDisplayName = (PROJECTS[PROJECT_ID] && PROJECTS[PROJECT_ID].name) || DATA.toolTitle || '새 프로젝트';
+  // 제목의 원본은 문서(DATA.toolTitle)다. 예전에는 목록 캐시(PROJECTS[].name)를 우선해서,
+  // 최상단 제목을 바꿔도 재빌드가 한 번 돌면 옛 이름으로 되돌아갔다.
+  var projectDisplayName = (DATA.toolTitle && String(DATA.toolTitle).trim())
+    || (PROJECTS[PROJECT_ID] && PROJECTS[PROJECT_ID].name)
+    || DEFAULT_PROJECT_TITLE;
   DATA.toolTitle = projectDisplayName;
+  applyProjectNameLocally(projectDisplayName);
   syncBranding(projectDisplayName);
   applyFontSettings(); refreshFontMenuValues(); initTagColorMenuValues(); initExportSettingsValues(); render();
 }
@@ -3864,21 +4325,57 @@ async function createNewProject(){
   PROJECT_ID=makeProjectId(); DATA=makeBlankProject(); PROJECTS[PROJECT_ID]={id:PROJECT_ID,name:DATA.toolTitle,data:JSON.parse(JSON.stringify(DATA)),updatedAt:Date.now()}; ACTIVE_PROJECT_ID=PROJECT_ID; localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS)); localStorage.setItem(ACTIVE_PROJECT_KEY,PROJECT_ID); rebuildProjectView(); markDirty();
   toast('새 프로젝트를 만들었습니다. 기존 프로젝트는 보존되었습니다.');
 }
-async function openProjectList(){
-  if(cloudReady){ await refreshCloudProjectList(); }
-  var modal=document.getElementById('projectModal'), listEl=document.getElementById('projectList');
+// 목록 행 그리기만 담당(모달 열기와 분리). 이름 변경/삭제 후 즉시 다시 그릴 때 재사용한다.
+function renderProjectRows(){
+  var listEl=document.getElementById('projectList');
+  if(!listEl) return;
   listEl.innerHTML='';
   var ids=Object.keys(PROJECTS);
-  if(!ids.length){ listEl.innerHTML='<div style="color:var(--text-faint);padding:14px 0;">저장된 프로젝트가 없습니다.</div>'; modal.classList.add('open'); return; }
+  if(!ids.length){ listEl.innerHTML='<div style="color:var(--text-faint);padding:14px 0;">저장된 프로젝트가 없습니다.</div>'; return; }
   ids.sort(function(a,b){ return (PROJECTS[b].updatedAt||0)-(PROJECTS[a].updatedAt||0); });
   ids.forEach(function(id){
     var p=PROJECTS[id]; var row=document.createElement('div'); row.className='projectRow'+(id===PROJECT_ID?' current':'');
+    // 현재 프로젝트는 목록 캐시가 아니라 살아 있는 제목(DATA.toolTitle)을 보여줘야
+    // 최상단 제목을 고친 즉시 목록에도 반영된다.
+    var displayName = (id===PROJECT_ID) ? currentProjectName() : (p.name||'이름 없음');
     var body=document.createElement('div'); body.className='prBody';
-    var name=document.createElement('div'); name.className='prName'; name.textContent=(p.name||'이름 없음')+(id===PROJECT_ID?'  · 현재':'');
+    var name=document.createElement('div'); name.className='prName'; name.textContent=displayName+(id===PROJECT_ID?'  · 현재':'');
     var meta=document.createElement('div'); meta.className='prMeta'; meta.textContent='마지막 수정: '+(p.updatedAt?new Date(p.updatedAt).toLocaleString():'-');
-    body.appendChild(name); body.appendChild(meta); row.appendChild(body); row.addEventListener('click',function(){ switchProject(id); }); listEl.appendChild(row);
+    body.appendChild(name); body.appendChild(meta); row.appendChild(body);
+    var del=document.createElement('button'); del.className='prDel'; del.textContent='삭제';
+    del.title='이 프로젝트를 목록에서 삭제';
+    del.addEventListener('click',function(e){ e.stopPropagation(); deleteProject(id); });
+    row.appendChild(del);
+    row.addEventListener('click',function(){ switchProject(id); }); listEl.appendChild(row);
   });
-  modal.classList.add('open');
+}
+async function openProjectList(){
+  if(cloudReady){ await refreshCloudProjectList(); }
+  renderProjectRows();
+  document.getElementById('projectModal').classList.add('open');
+}
+async function deleteProject(id){
+  var p=PROJECTS[id];
+  if(!p) return;
+  var label=(id===PROJECT_ID) ? currentProjectName() : (p.name||'이름 없음');
+  if(Object.keys(PROJECTS).length<=1){ alert('마지막 남은 프로젝트는 삭제할 수 없어요.'); return; }
+  if(!confirm('프로젝트 "'+label+'"를 삭제할까요?\n이 프로젝트의 데이터가 함께 사라지며 되돌릴 수 없어요.')) return;
+  try{
+    if(cloudReady && supabase && cloudUser){
+      var res=await supabase.from('projects').delete().eq('id',id);
+      if(res.error) throw res.error;
+    }
+  }catch(e){ console.error(e); toast('프로젝트 삭제 실패: '+(e.message||e)); return; }
+  delete PROJECTS[id];
+  try{ localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS)); }catch(e){}
+  try{ await publishProjectListUpdate('DELETE',{id:id}); }catch(e){}
+  toast('프로젝트 "'+label+'"를 삭제했어요');
+  if(id===PROJECT_ID){
+    // 현재 열려 있던 프로젝트를 지웠다면 가장 최근 프로젝트로 넘어간다.
+    var next=Object.keys(PROJECTS).sort(function(a,b){ return (PROJECTS[b].updatedAt||0)-(PROJECTS[a].updatedAt||0); })[0];
+    if(next){ await switchProject(next, {skipPersistCurrent:true}); return; }
+  }
+  renderProjectRows();
 }
 async function refreshCloudProjectList(){
   try{
@@ -3886,10 +4383,18 @@ async function refreshCloudProjectList(){
     if(res.error) throw res.error;
     var map={}; (res.data||[]).forEach(function(p){ map[p.id]={id:p.id,name:p.name,data:p.data,updatedAt:new Date(p.updated_at).getTime(),version:p.version,owner_id:p.owner_id}; });
     PROJECTS=map;
+    // DB의 name 컬럼은 이름 동기화가 실패/지연되면 옛 값 그대로다. 현재 편집 중인 프로젝트만은
+    // 살아 있는 제목으로 덮어써야, 목록을 열었다 닫는 것만으로 제목이 옛 이름으로 되돌아가지 않는다.
+    if(PROJECT_ID && PROJECTS[PROJECT_ID] && DATA && DATA.toolTitle){
+      PROJECTS[PROJECT_ID].name = String(DATA.toolTitle).trim() || PROJECTS[PROJECT_ID].name;
+    }
     localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS));
   }catch(e){ console.error(e); }
 }
-async function switchProject(targetId){
+// opts.skipPersistCurrent: 방금 삭제한 프로젝트에서 넘어오는 경우. 평소처럼 현재 프로젝트를
+// 먼저 저장하면 지운 항목이 목록에 되살아나므로, 그 저장 단계를 건너뛴다.
+async function switchProject(targetId, opts){
+  opts = opts || {};
   if(targetId===PROJECT_ID){ document.getElementById('projectModal').classList.remove('open'); return; }
   try{
     if(cloudReady){
@@ -3903,7 +4408,7 @@ async function switchProject(targetId){
       PROJECTS[targetId]={id:PROJECT_ID,name:switchedName,data:JSON.parse(JSON.stringify(DATA)),updatedAt:new Date(res.data.updated_at).getTime(),version:res.data.version};
       syncBranding(switchedName);
     }else{
-      persistProjectNow();
+      if(!opts.skipPersistCurrent) persistProjectNow();
       DATA=JSON.parse(JSON.stringify(PROJECTS[targetId].data));
       PROJECT_ID=targetId;
     }
@@ -4110,7 +4615,7 @@ async function onCloudSignedIn(user){
     var ids=Object.keys(PROJECTS);
     var preferred=localStorage.getItem(ACTIVE_PROJECT_KEY);
     if(!ids.length){
-      var first=JSON.parse(JSON.stringify(RAW)); first.toolTitle=first.toolTitle||'빛의왕국 탐사맵';
+      var first=JSON.parse(JSON.stringify(RAW)); first.toolTitle=first.toolTitle||DEFAULT_PROJECT_TITLE;
       var seedId='proj_default';
       var ins=await supabase.from('projects').insert({id:seedId,name:first.toolTitle,data:first,version:1,owner_id:user.id,updated_by:user.id}).select('id,name,data,version,updated_at').single();
       if(ins.error){
@@ -4131,7 +4636,7 @@ async function onCloudSignedIn(user){
     cloudBaseData=JSON.parse(JSON.stringify(DATA));
     PROJECT_ID=cloud.data.id; cloudProjectId=cloud.data.id; cloudVersion=cloud.data.version; ACTIVE_PROJECT_ID=PROJECT_ID;
     PROJECTS[PROJECT_ID]={id:PROJECT_ID,name:cloud.data.name||DATA.toolTitle,data:JSON.parse(JSON.stringify(DATA)),updatedAt:new Date(cloud.data.updated_at).getTime(),version:cloud.data.version};
-    DATA.toolTitle = cloud.data.name || DATA.toolTitle || '빛의왕국 탐사맵 편집기';
+    DATA.toolTitle = cloud.data.name || DATA.toolTitle || DEFAULT_PROJECT_TITLE;
     syncBranding(DATA.toolTitle);
     localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS)); localStorage.setItem(ACTIVE_PROJECT_KEY,PROJECT_ID);
     applyUserPrefs(DATA); H1=DATA.sheet1.headers; C={}; H1.forEach(function(h,i){C[h]=i;});
@@ -4183,10 +4688,11 @@ async function subscribeToProjectList(){
     else {
       var prev=PROJECTS[row.id]||{};
       PROJECTS[row.id]={id:row.id,name:row.name!=null?row.name:(prev.name||'이름 없음'),data:row.data!==undefined?row.data:prev.data,updatedAt:row.updated_at?new Date(row.updated_at).getTime():Date.now(),version:row.version!=null?row.version:prev.version,owner_id:row.owner_id||prev.owner_id};
-      if(row.id===PROJECT_ID && row.name && document.activeElement!==titleInput) syncBranding(row.name);
+      // 원격 이름 변경은 문서 제목에도 반영해야 다음 재빌드에서 되돌아가지 않는다.
+      if(row.id===PROJECT_ID && row.name && document.activeElement!==titleInput){ DATA.toolTitle = row.name; syncBranding(row.name); }
     }
     try{ localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS)); }catch(e){}
-    if(document.getElementById('projectModal').classList.contains('open')) openProjectList();
+    if(document.getElementById('projectModal').classList.contains('open')) renderProjectRows();
     // 목록을 닫아둬도 실시간 반영을 알 수 있게 토스트(broadcast는 self 제외라 남의 변경만 도착)
     if(ev==='INSERT') toast('다른 사용자가 새 프로젝트를 추가했어요: '+(row.name||''));
     else if(ev==='UPDATE') toast('프로젝트 이름이 바뀌었어요: '+(row.name||''));
@@ -4539,6 +5045,11 @@ initTagColorMenu();
 initExportSettingsMenu();
 initFontMenu();
 statCols();
+(function(){
+  // 획득처에 섞여 있던 배치 진행 메모를 '메모' 칸으로 옮긴다(프로젝트당 최초 1회).
+  var moved = migratePlacementNotesToMemo();
+  if(moved){ markDirty(); setTimeout(function(){ toast('획득처의 배치 메모 '+moved+'건을 메모 칸으로 옮겼어요'); }, 600); }
+})();
 saveState(false);
 render();
 initCloud().catch(function(err){ console.error(err); setCloudStatus('연결 실패'); document.getElementById('authOverlay').style.display='flex'; document.getElementById('authMsg').textContent='Supabase 초기화 실패: '+(err.message||err); });
