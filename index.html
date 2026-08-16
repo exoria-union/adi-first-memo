@@ -59,6 +59,14 @@
   #authCard input{width:100%;border:1px solid var(--border-strong);border-radius:2px;padding:9px 10px;margin-bottom:8px;font-size:13px;box-sizing:border-box;}
   #authActions{display:flex;gap:8px;margin-top:10px;}
   #authMsg{min-height:18px;color:#c0392b;font-size:11.5px;margin-top:10px;white-space:pre-wrap;}
+  #snapshotModal{position:fixed;inset:0;background:rgba(0,0,0,.28);z-index:1100;display:none;align-items:center;justify-content:center;}
+  #snapshotModal.open{display:flex;}
+  #snapshotCard{width:520px;max-width:92vw;background:#fff;border:1px solid var(--border-strong);border-radius:4px;box-shadow:0 12px 40px rgba(0,0,0,.2);padding:18px;}
+  #snapshotList{display:flex;flex-direction:column;gap:6px;max-height:46vh;overflow:auto;margin:12px 0;}
+  .snapRow{display:flex;align-items:center;gap:10px;border:1px solid var(--border);padding:9px 11px;border-radius:3px;}
+  .snapRow:hover{border-color:var(--accent);background:var(--accent-soft);}
+  .snapRow .snapWhen{font-weight:600;font-size:12.5px;}
+  .snapRow .snapMeta{font-size:10.5px;color:var(--text-faint);margin-top:2px;}
   #projectModal{position:fixed;inset:0;background:rgba(0,0,0,.28);z-index:1100;display:none;align-items:center;justify-content:center;}
   #projectModal.open{display:flex;}
   #projectCard{width:520px;max-width:92vw;background:#fff;border:1px solid var(--border-strong);border-radius:4px;box-shadow:0 12px 40px rgba(0,0,0,.2);padding:18px;}
@@ -235,6 +243,12 @@
   .choiceEditRow input{flex:1;border:1px solid var(--border-strong);border-radius:2px;padding:6px 8px;font-size:12px;background:var(--bg);}
   .choiceEditRow input:focus{outline:none;border-color:var(--accent);background:#fff;}
   .choiceEditRow button{padding:4px 8px;flex-shrink:0;}
+  .choiceEditRow select.choiceTarget{
+    flex:1;min-width:0;border:1px solid var(--border-strong);border-radius:2px;padding:6px 8px;
+    font-size:12px;background:var(--bg);font-family:inherit;color:var(--text);cursor:pointer;
+  }
+  .choiceEditRow select.choiceTarget:focus{outline:none;border-color:var(--accent);background:#fff;}
+  .choiceEditRow select.choiceTarget.choiceDangling{border-color:#c0392b;background:#fdecea;color:#c0392b;font-weight:600;}
 
   /* ============ NODE DETAIL PANEL (modal-ish, slide over) ============ */
   #nodePanelOverlay{position:fixed;inset:0;background:rgba(0,0,0,.28);z-index:300;display:none;}
@@ -517,6 +531,19 @@
     <div id="authMsg"></div>
   </div>
 </div>
+<div id="snapshotModal">
+  <div id="snapshotCard">
+    <h3 style="margin:0 0 4px;font-size:15px;">복구 지점</h3>
+    <div style="font-size:11.5px;color:var(--text-faint);line-height:1.6;">
+      편집하는 동안 자동으로 쌓인 지점입니다. 되돌리기 전 상태도 함께 보관하니 안심하고 눌러도 돼요.<br>
+      (이미지와 추가한 글꼴은 용량이 커서 복구 지점에 담지 않고, 되돌린 뒤에도 지금 것이 그대로 남습니다.)
+    </div>
+    <div id="snapshotList"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <button class="ghost" id="btnSnapshotClose">닫기</button>
+    </div>
+  </div>
+</div>
 <div id="projectModal">
   <div id="projectCard">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
@@ -683,6 +710,7 @@
   <button class="ghost" id="btnExportSql" title="지역 데이터를 bot_area 테이블용 INSERT SQL로 내보내기">SQL 내보내기</button>
   <button class="ghost" id="btnImportXlsx">엑셀 불러오기</button>
   <button class="ghost" id="btnNewProject">새 프로젝트</button>
+  <button class="ghost" id="btnSnapshots" title="편집 내용을 되돌릴 수 있는 복구 지점">↶ 되돌리기</button>
   <button class="ghost" id="btnProjectList">프로젝트 목록</button>
   <button class="ghost" id="btnCloudSignOut">로그아웃</button>
   <input type="file" id="importFileInput" accept=".xlsx,.xls" style="display:none;">
@@ -781,6 +809,13 @@ try{
 }catch(e){ PROJECTS = {}; ACTIVE_PROJECT_ID = null; }
 
 function makeProjectId(){ return 'proj_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8); }
+/* "쓸 수 있는 프로젝트 문서인가". 원본 데이터로 되돌리기 전에 반드시 이걸 먼저 확인한다.
+   행이 없는 것과 문서가 깨진 것은 다르다 — 새로 만든 빈 프로젝트는 행이 0개인 게 정상이므로,
+   행 수가 아니라 "헤더가 있는 시트 구조인가"로 판단해야 빈 프로젝트를 건너뛰지 않는다. */
+function hasAuthoredContent(d){
+  return !!(d && d.sheet1 && Array.isArray(d.sheet1.headers) && d.sheet1.headers.length
+            && Array.isArray(d.sheet1.rows));
+}
 if(!Object.keys(PROJECTS).length && savedParsed){
   var migratedId = 'proj_default';
   PROJECTS[migratedId] = {id:migratedId,name:savedParsed.toolTitle||DEFAULT_PROJECT_TITLE,data:savedParsed,updatedAt:Date.now()};
@@ -788,12 +823,16 @@ if(!Object.keys(PROJECTS).length && savedParsed){
   try{ localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS)); localStorage.setItem(ACTIVE_PROJECT_KEY,ACTIVE_PROJECT_ID); }catch(e){}
 }
 
-// Project data is versioned with the shipped HTML build. Personal UI preferences are NOT: \n// they live in a separate localStorage record so updating the GitHub Pages HTML does not reset
-// fonts, tag colors, or Excel sheet names. Existing saved DATA is still used when its build matches.
-if(ACTIVE_PROJECT_ID && PROJECTS[ACTIVE_PROJECT_ID] && PROJECTS[ACTIVE_PROJECT_ID].data){
+// 개인 UI 설정(글꼴/태그색/시트명)은 별도 레코드에 있어 편집기 HTML을 새로 배포해도 초기화되지 않는다.
+// 작업 데이터는 아래 순서로 고른다: 활성 프로젝트 → 마지막 단일 저장본 → 원본.
+// 각 단계에서 "내용이 실제로 들어 있는지"를 확인해, 껍데기만 남은 항목 때문에 작업물을 건너뛰지 않게 한다.
+if(ACTIVE_PROJECT_ID && PROJECTS[ACTIVE_PROJECT_ID] && hasAuthoredContent(PROJECTS[ACTIVE_PROJECT_ID].data)){
   PROJECT_ID = ACTIVE_PROJECT_ID;
   DATA = PROJECTS[ACTIVE_PROJECT_ID].data;
-} else if(savedParsed && savedParsed.__buildStamp === RAW.__buildStamp){
+} else if(hasAuthoredContent(savedParsed)){
+  // 예전에는 __buildStamp 가 다르면(= 편집기 HTML을 새로 배포하면) 저장돼 있던 작업물을 두고
+  // 원본 데이터로 갈아엎었다. 빌드가 바뀌었다는 이유로 사용자의 작업을 버리면 안 된다.
+  // 저장된 내용이 있으면 무조건 그걸 쓰고, 형식 차이는 이후 보정 단계(rebuild/ensure*)가 맡는다.
   PROJECT_ID = 'proj_default';
   DATA = savedParsed;
   PROJECTS[PROJECT_ID] = {id:PROJECT_ID,name:DATA.toolTitle||DEFAULT_PROJECT_TITLE,data:DATA,updatedAt:Date.now()};
@@ -870,6 +909,21 @@ function rebuildIndexes(){
     if(nameToIdByRegion[top][name] === undefined) nameToIdByRegion[top][name] = id;
     if(!nameToIdsByRegion[top][name]) nameToIdsByRegion[top][name] = [];
     if(nameToIdsByRegion[top][name].indexOf(id)===-1) nameToIdsByRegion[top][name].push(id);
+  });
+  syncMoveRowIds();
+}
+/* tree.moveRowId 는 지금까지 "시트 전체 재구성" 때만 정해졌다. 그래서 사용자가 노드를 만들고
+   이름을 '이동한다'로 바꿔도 moveRowId 는 계속 비어 있었고, 그래프는 이동한다 링크의 목적지를
+   찾지 못해 그 노드를 아예 그리지 않았다("이동한다가 사라진다"). 인덱스를 다시 만들 때마다
+   이름으로 다시 찾아 맞춰 두면, 어떤 경로로 만들었든 즉시 인식된다. */
+function syncMoveRowIds(){
+  if(!DATA || !DATA.regionsTree) return;
+  Object.keys(DATA.regionsTree).forEach(function(topId){
+    var tree = DATA.regionsTree[topId];
+    if(!tree) return;
+    var m = nameToIdsByRegion[topId];
+    var found = (m && m['이동한다'] && m['이동한다'].length) ? m['이동한다'][0] : null;
+    tree.moveRowId = found;
   });
 }
 rebuildIndexes();
@@ -1335,6 +1389,7 @@ function migratePlacementNotesToMemo(){
   ensureItemMemoColumns();
   if(DATA.__placementNotesMigrated) return 0;
   var moved = 0;
+  takeSnapshot('획득처 메모 정리 직전');
   [[DATA.items,false],[DATA.keyItems,true]].forEach(function(pair){
     var table = pair[0], memoCol = itemMemoCol(pair[1]);
     table.rows.forEach(function(r){
@@ -1492,6 +1547,57 @@ function blankNodeRow(topId, rowId, name){
   row[C['스크립트(내용)']] = '(내용을 입력하세요)';
   return row;
 }
+/* '이동한다' 노드는 다른 일반 노드와 달리 "인접 지역으로 나가는 출구"라, 인접 지역 목록과
+   그 지역들로 이어지는 링크가 함께 채워져야 제 구실을 한다. 예전에는 일반 노드로 만든 뒤
+   이름만 '이동한다'로 바꾸는 방법뿐이어서 종류 코드도, 인접 지역 링크도 비어 있었다. */
+function adjacentRegionIds(topId){
+  var raw = String(regionHeaderRow(topId)[C['인접 지역']]||'');
+  return raw.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+}
+function buildMoveScript(topId){
+  var names = adjacentRegionIds(topId)
+    .map(function(rid){ return DATA.regionsTree[rid] ? regionName(rid) : null; })
+    .filter(Boolean);
+  return joinScript('다른 구역으로 이동한다.', names, '지역');
+}
+// 이 지역의 '이동한다' 노드를 보장한다. 이미 있으면 그 ID를, 없으면 새로 만들어 돌려준다.
+function ensureMoveNode(topId){
+  var tree = DATA.regionsTree[topId];
+  if(!tree) return null;
+  var existing = idsForName(topId, '이동한다')[0];
+  if(existing){ tree.moveRowId = existing; return existing; }
+
+  var newId = nextNodeRowId(topId);
+  var row = blankNodeRow(topId, newId, '이동한다');
+  row[C['종류 코드']] = 'INCUNTR_99';
+  row[C['인접 지역']] = regionHeaderRow(topId)[C['인접 지역']];
+  row[C['스크립트(내용)']] = buildMoveScript(topId);
+  DATA.sheet1.rows.push(row);
+  rebuildIndexes();               // moveRowId 까지 여기서 자동으로 맞춰진다
+  markDirty();
+  var linked = parseChoices(row[C['스크립트(내용)']]).length;
+  toast(linked
+    ? '이동한다 노드를 만들고 인접 지역 '+linked+'곳으로 연결했어요'
+    : '이동한다 노드를 만들었어요 (이 지역에 인접 지역이 설정돼 있지 않아요)');
+  return newId;
+}
+// 이미 있는 이동한다 노드의 링크를 지역 헤더의 인접 지역 기준으로 다시 채운다.
+function refillMoveNodeLinks(topId){
+  var mid = idsForName(topId, '이동한다')[0];
+  if(!mid) return 0;
+  var row = DATA.sheet1.rows[rowById[mid]];
+  if(!row) return 0;
+  var parsed = splitScript(row[C['스크립트(내용)']]);
+  var names = adjacentRegionIds(topId)
+    .map(function(rid){ return DATA.regionsTree[rid] ? regionName(rid) : null; })
+    .filter(Boolean);
+  row[C['인접 지역']] = regionHeaderRow(topId)[C['인접 지역']];
+  row[C['종류 코드']] = 'INCUNTR_99';
+  row[C['스크립트(내용)']] = joinScript(parsed.narrative || '다른 구역으로 이동한다.', names, '지역');
+  rebuildIndexes();
+  markDirty();
+  return names.length;
+}
 // creates a new node and appends it as a choice on `fromRowId`'s script; returns the new row's id
 function addNodeAsChoice(topId, fromRowId){
   var name = uniqueNodeName(topId, '새 노드');
@@ -1507,6 +1613,25 @@ function addNodeAsChoice(topId, fromRowId){
   markDirty();
   toast('새 노드 "'+name+'"를 추가했어요');
   return newId;
+}
+/* 편집창의 "+ 선택지 추가"용. 선택지를 만든다는 건 곧 "다음 노드를 만든다"는 뜻인데,
+   예전에는 빈 입력칸만 생기고 실제 행은 만들어지지 않았다. 그래서 이름을 다 치기 전까지는
+   어디도 가리키지 않는 끊어진 링크가 남고, 우연히 기존 노드와 같은 이름을 치면 이름 중복이
+   생겼다. 이제는 선택지를 추가하는 순간 진짜 노드가 생기고 링크가 함께 걸린다.
+   colName 은 본문/성공/실패 중 어느 스크립트의 선택지인지 지정한다. */
+function addNodeForChoice(topId, fromRowId, colName, keyword){
+  var name = uniqueNodeName(topId, '새 노드');
+  var newId = nextNodeRowId(topId);
+  DATA.sheet1.rows.push(blankNodeRow(topId, newId, name));
+  var fromRow = DATA.sheet1.rows[rowById[fromRowId]];
+  var parsed = splitScript(fromRow[C[colName]]);
+  parsed.choices.push(name);
+  fromRow[C[colName]] = joinScript(parsed.narrative, parsed.choices, keyword);
+  var ownerCluster = findClusterOfNode(topId, fromRowId);
+  if(ownerCluster && ownerCluster.nodeIds.indexOf(newId)===-1) ownerCluster.nodeIds.push(newId);
+  rebuildIndexes();
+  markDirty();
+  return {id:newId, name:name};
 }
 // creates a new node and splices it in as a PARENT of an existing node: every place that
 // currently points to targetRowId (by name, via "▶[지역/…]" or the header's "▶[진입/…]") is
@@ -1615,6 +1740,7 @@ function deleteNode(topId, rowId, opts){
 
   if(opts.hard){
     if(!confirm('고아 노드 "'+name+'"를 완전히 삭제할까요?\n연결이 이미 끊긴 노드라 이번에는 행 데이터까지 지웁니다. 되돌릴 수 없어요.')) return false;
+    takeSnapshot('고아 노드 완전 삭제 직전');
     stripLinksToNodeName(topId, name);   // 혹시 남아 있는 참조가 있으면 함께 정리
     var rowIdx = rowById[rowId];
     if(rowIdx !== undefined && DATA.sheet1.rows[rowIdx] === row) DATA.sheet1.rows.splice(rowIdx, 1);
@@ -1653,6 +1779,7 @@ function deleteCluster(topId, clusterIdx){
   if(!cl) return false;
   if(tree.clusters.length<=1){ alert('지역에는 최소 1개의 세부지역이 있어야 해요.'); return false; }
   if(!confirm('세부지역 "'+cl.root+'" 전체(노드 '+cl.nodeIds.length+'개)를 삭제할까요? 노드 데이터는 삭제하지 않고 고아 노드로 보존됩니다.')) return false;
+  takeSnapshot('세부지역 삭제 직전');
   var headerRow = regionHeaderRow(topId);
   var parsed = splitScript(headerRow[C['스크립트(내용)']]);
   parsed.choices = parsed.choices.filter(function(c){ return c !== cl.root; });
@@ -1665,6 +1792,102 @@ function deleteCluster(topId, clusterIdx){
   markDirty();
   toast('세부지역을 삭제했어요 · 노드 데이터는 고아 노드로 보존했습니다');
   return true;
+}
+
+/* ---------------- 복구 지점(스냅샷) ----------------
+   자동 저장은 편리하지만 "직전 상태"를 되찾을 방법이 없다. 그래서 저장이 일어날 때마다
+   일정 간격으로 편집 내용의 사본을 남겨 두고, 언제든 그 시점으로 되돌릴 수 있게 한다.
+   이미지(itemImages)와 사용자 글꼴은 base64라 용량이 커서 스냅샷에서 제외하고,
+   복구할 때는 지금 것을 그대로 이어 쓴다. */
+var SNAPSHOT_KEY = 'lumkingdom_map_editor_snapshots_v1';
+var SNAPSHOT_MAX = 5;               // localStorage 용량이 한정적이라 최근 것 위주로만
+var SNAPSHOT_MIN_GAP_MS = 90*1000;  // 저장이 잦아도 이 간격보다 촘촘하게는 안 남긴다
+var SNAPSHOT_HEAVY_KEYS = ['itemImages','customFonts'];
+var snapshotsDisabled = false;      // 용량이 정말 부족하면 이번 세션에서는 포기(본 저장 우선)
+
+function loadSnapshots(){
+  try{ return JSON.parse(localStorage.getItem(SNAPSHOT_KEY)||'[]') || []; }catch(e){ return []; }
+}
+function snapshotPayload(){
+  var copy = {};
+  Object.keys(DATA).forEach(function(k){
+    if(SNAPSHOT_HEAVY_KEYS.indexOf(k)!==-1) return;
+    copy[k] = DATA[k];
+  });
+  return JSON.parse(JSON.stringify(copy));
+}
+function snapshotSummary(){
+  var nodes = (DATA.sheet1 && DATA.sheet1.rows) ? DATA.sheet1.rows.length : 0;
+  var items = ((DATA.items&&DATA.items.rows)||[]).length + ((DATA.keyItems&&DATA.keyItems.rows)||[]).length;
+  var regions = DATA.regionsTree ? Object.keys(DATA.regionsTree).length : 0;
+  return '지역 '+regions+' · 노드 '+nodes+' · 아이템 '+items;
+}
+// label 을 주면 간격 제한을 무시하고 남긴다(파괴적인 작업 직전용).
+function takeSnapshot(label){
+  if(snapshotsDisabled || !DATA || !DATA.sheet1) return;
+  var list = loadSnapshots();
+  var now = Date.now();
+  if(!label && list.length && (now - (list[0].at||0)) < SNAPSHOT_MIN_GAP_MS) return;
+  var entry = {at:now, label:label||'자동 저장', summary:snapshotSummary(), projectId:PROJECT_ID, data:snapshotPayload()};
+  list.unshift(entry);
+  while(list.length > SNAPSHOT_MAX) list.pop();
+  // 용량이 모자라면 오래된 것부터 버리며 재시도한다. 그래도 안 되면 스냅샷을 포기하되,
+  // 본 저장(persist)까지 막히지 않도록 여기서 조용히 끝낸다.
+  while(list.length){
+    try{ localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(list)); return; }
+    catch(e){ list.pop(); }
+  }
+  try{ localStorage.removeItem(SNAPSHOT_KEY); }catch(e){}
+  snapshotsDisabled = true;
+  console.warn('저장 공간이 부족해 복구 지점을 남기지 못했습니다.');
+}
+function restoreSnapshot(idx){
+  var list = loadSnapshots();
+  var snap = list[idx];
+  if(!snap || !snap.data || !snap.data.sheet1){ toast('복구 지점을 읽을 수 없어요'); return; }
+  if(!confirm('"'+new Date(snap.at).toLocaleString()+'" 시점으로 되돌릴까요?\n'+snap.summary
+    +'\n\n지금 상태도 복구 지점으로 남겨두니, 되돌린 뒤 다시 돌아올 수 있어요.')) return;
+  takeSnapshot('되돌리기 직전');
+  var keepHeavy = {};
+  SNAPSHOT_HEAVY_KEYS.forEach(function(k){ if(DATA[k]!==undefined) keepHeavy[k] = DATA[k]; });
+  DATA = JSON.parse(JSON.stringify(snap.data));
+  SNAPSHOT_HEAVY_KEYS.forEach(function(k){ if(keepHeavy[k]!==undefined) DATA[k] = keepHeavy[k]; });
+  ensureGraphDataShape();
+  H1 = DATA.sheet1.headers; C={}; H1.forEach(function(h,i){ C[h]=i; });
+  try{ rebuildIndexes(); rebuildItemIndex(); rebuildSqIndex(); rebuildAllCrossRefs(); }
+  catch(e){ console.error('복구 후 인덱스 재구성 실패', e); }
+  markDirty();
+  rebuildProjectView({preserveView:false});
+  toast('복구 지점으로 되돌렸어요 · ' + snap.summary);
+  closeSnapshotModal();
+}
+function openSnapshotModal(){
+  var modal = document.getElementById('snapshotModal');
+  var listEl = document.getElementById('snapshotList');
+  listEl.innerHTML = '';
+  var list = loadSnapshots();
+  if(!list.length){
+    listEl.innerHTML = '<div style="color:var(--text-faint);padding:14px 0;font-size:12px;">'
+      + '아직 복구 지점이 없어요. 편집을 시작하면 자동으로 쌓입니다.</div>';
+  } else {
+    list.forEach(function(snap, i){
+      var rowEl = document.createElement('div'); rowEl.className='snapRow';
+      var body = document.createElement('div'); body.style.flex='1'; body.style.minWidth='0';
+      var t = document.createElement('div'); t.className='snapWhen';
+      t.textContent = new Date(snap.at).toLocaleString() + (snap.label && snap.label!=='자동 저장' ? '  · '+snap.label : '');
+      var m = document.createElement('div'); m.className='snapMeta'; m.textContent = snap.summary||'';
+      body.appendChild(t); body.appendChild(m);
+      var btn = document.createElement('button'); btn.className='primary'; btn.textContent='이 시점으로';
+      btn.addEventListener('click', function(){ restoreSnapshot(i); });
+      rowEl.appendChild(body); rowEl.appendChild(btn);
+      listEl.appendChild(rowEl);
+    });
+  }
+  modal.classList.add('open');
+}
+function closeSnapshotModal(){
+  var m = document.getElementById('snapshotModal');
+  if(m) m.classList.remove('open');
 }
 
 /* ---------------- persistence ---------------- */
@@ -1692,6 +1915,8 @@ function persist(){
     saveState(false);
     scheduleCloudSave();
   }catch(e){ toast('로컬 저장 실패: ' + e.message); }
+  // 본 저장이 끝난 뒤에 복구 지점을 남긴다. 여기서 용량이 모자라도 본 저장은 이미 끝났다.
+  try{ takeSnapshot(); }catch(e){ console.error(e); }
   // 저장은 막지 않는다(작업 중인 내용을 잃는 게 더 나쁘다). 대신 저장된 시점에
   // 어느 필수 칸이 비어 있는지 편집기에서 바로 짚어 준다.
   try{ flagMissingRequiredOnSave(); }catch(e){ console.error(e); }
@@ -1828,7 +2053,11 @@ function syncBranding(name){
 function applyProjectNameLocally(name){
   name = String(name || '').trim() || DEFAULT_PROJECT_TITLE;
   if(!PROJECT_ID) return name;
-  PROJECTS[PROJECT_ID] = PROJECTS[PROJECT_ID] || {id:PROJECT_ID};
+  // 이름만 있고 data 가 없는 껍데기 항목을 남기면, 다음 부팅에서 그 항목이 활성 프로젝트로
+  // 뽑히면서 작업물이 비어 보인다. 항목이 없으면 지금 내용을 함께 담아 만든다.
+  if(!PROJECTS[PROJECT_ID]){
+    PROJECTS[PROJECT_ID] = {id:PROJECT_ID, data:JSON.parse(JSON.stringify(DATA))};
+  }
   PROJECTS[PROJECT_ID].name = name;
   PROJECTS[PROJECT_ID].updatedAt = Date.now();
   try{ localStorage.setItem(PROJECTS_KEY, JSON.stringify(PROJECTS)); }catch(e){}
@@ -2350,6 +2579,23 @@ function renderRegionScreen(main, crumb){
   });
   importRegionBtn.addEventListener('click', function(){ regionFileInput.click(); });
   regionIoRow.appendChild(exportRegionBtn); regionIoRow.appendChild(importRegionBtn); regionIoRow.appendChild(regionFileInput);
+  // 이동한다 노드는 인접 지역으로 나가는 출구다. 없으면 만들고, 있으면 인접 지역 링크를 다시 채운다.
+  var hasMove = idsForName(topId, '이동한다').length > 0;
+  var moveBtn = document.createElement('button'); moveBtn.className='ghost';
+  moveBtn.textContent = hasMove ? '이동한다 인접 지역 다시 채우기' : '+ 이동한다 노드 만들기';
+  moveBtn.title = hasMove
+    ? '지역의 인접 지역 설정을 기준으로 이동한다의 연결을 다시 만듭니다'
+    : '인접 지역으로 이어지는 이동한다 노드를 만듭니다';
+  moveBtn.addEventListener('click', function(){
+    if(hasMove){
+      var n = refillMoveNodeLinks(topId);
+      toast(n ? '이동한다를 인접 지역 '+n+'곳으로 다시 연결했어요' : '이 지역에 인접 지역이 설정돼 있지 않아요');
+    } else {
+      ensureMoveNode(topId);
+    }
+    render();
+  });
+  regionIoRow.appendChild(moveBtn);
   wrap.appendChild(regionIoRow);
 
   var cg = document.createElement('div'); cg.className='clusterGrid';
@@ -2870,6 +3116,13 @@ function renderClusterCanvasScreen(main, crumb){
     var t = r[C['상위지역ID(부모ID)']] || rid;
     if(t===topId && !everyAssignedId[rid] && !reachableSet[rid] && orphanIds.indexOf(rid)===-1) orphanIds.push(rid);
   });
+  // 이동한다는 지역의 고정 출구라 everyAssignedId 에서 제외돼 있다. 그래서 아무도 가리키지
+  // 않는 상태가 되면(연결이 끊기거나 새로 만든 직후) 그래프에서 통째로 안 보였다.
+  // 연결이 없더라도 반드시 화면에 남겨, 어디에 붙일지 바로 손볼 수 있게 한다.
+  if(tree.moveRowId && !reachableSet[tree.moveRowId] && orphanIds.indexOf(tree.moveRowId)===-1
+     && rowById[tree.moveRowId]!==undefined){
+    orphanIds.push(tree.moveRowId);
+  }
   var allIds = reachableIds.concat(orphanIds);
 
   var maxLayoutY = 0;
@@ -3686,6 +3939,14 @@ function fieldSelect(label, value, options, onChange){
   return wrap;
 }
 
+/* 편집창은 그래프 위에 겹쳐 뜨는 서랍이라, 선택지를 고쳐도 뒤의 그래프는 예전 모습 그대로였다.
+   연결이 바뀌는 순간(추가·변경·해제)에만 뒤 화면을 다시 그린다. 글자 입력마다 그리면 무겁다.
+   편집창 자체는 #main 바깥이라 다시 그려도 입력 중인 칸이 날아가지 않는다. */
+function refreshGraphBehindPanel(){
+  if(!nav || nav.main!=='map') return;
+  if(nav.view!=='canvas' && nav.view!=='cluster' && nav.view!=='region') return;
+  try{ render(); }catch(e){ console.error('graph live refresh failed', e); }
+}
 // narrative text + a structured, editable list of "▶[지역/X]" choices, kept in sync with the
 // underlying script column. Each choice has its own jump-to-that-node shortcut.
 function scriptFieldEditor(label, topId, row, colName){
@@ -3712,39 +3973,98 @@ function scriptFieldEditor(label, topId, row, colName){
   wrap.appendChild(choicesWrap);
 
   function sync(){
-    var vals = Array.prototype.map.call(choicesWrap.querySelectorAll('input'), function(i){ return i.value; });
+    var vals = Array.prototype.map.call(choicesWrap.querySelectorAll('select.choiceTarget'), function(sel){ return sel.value; })
+      .filter(function(v){ return v; });
     row[C[colName]] = joinScript(narrativeTa.value, vals, writeKeyword);
     markDirty();
+    refreshGraphBehindPanel();
+  }
+
+  // 선택지의 대상은 "이 지역 안에 실제로 있는 노드"여야 한다. 자유 입력이던 시절에는
+  // 이름을 다 치기 전까지 아무 데도 닿지 않는 링크가 남고, 기존 노드와 이름이 겹치기도 했다.
+  // 그래서 대상은 목록에서 고르게 하고, 새 노드가 필요하면 그 자리에서 만들어 붙인다.
+  function buildTargetOptions(sel, current){
+    sel.innerHTML = '';
+    var seen = {};
+    var names = [];
+    DATA.sheet1.rows.forEach(function(r2){
+      var top = r2[C['상위지역ID(부모ID)']] || r2[C['지역ID']];
+      if(top!==topId) return;
+      if(r2[C['지역ID']] === DATA.regionsTree[topId].headerRowId) return;
+      var nm = r2[C['지역명']];
+      if(!nm || nm===row[C['지역명']] || seen[nm]) return;
+      seen[nm] = 1; names.push(nm);
+    });
+    names.sort(function(a,b){ return a.localeCompare(b,'ko'); });
+    names.forEach(function(nm){
+      var o = document.createElement('option'); o.value = nm; o.textContent = nm;
+      if(nm===current) o.selected = true;
+      sel.appendChild(o);
+    });
+    if(!seen['이동한다']){
+      var mv = document.createElement('option'); mv.value='이동한다'; mv.textContent='이동한다 (없음 — 고르면 새로 만들어요)';
+      if(current==='이동한다') mv.selected = true;
+      sel.appendChild(mv);
+    }
+    if(current && !seen[current] && current!=='이동한다'){
+      var miss = document.createElement('option');
+      miss.value = current; miss.textContent = current + ' (없는 노드)'; miss.selected = true;
+      sel.appendChild(miss);
+      sel.classList.add('choiceDangling');
+    } else {
+      sel.classList.remove('choiceDangling');
+    }
+    var mk = document.createElement('option');
+    mk.value = '__new__'; mk.textContent = '＋ 새 노드를 만들어 연결…';
+    sel.appendChild(mk);
   }
 
   function addChoiceRow(val){
     var rowEl = document.createElement('div'); rowEl.className='choiceEditRow';
-    var inp = document.createElement('input'); inp.type='text'; inp.value = val||''; inp.placeholder='다음 노드 이름 (예: 이동한다)';
-    inp.addEventListener('input', sync);
-    var jumpBtn = document.createElement('button'); jumpBtn.className='ghost'; jumpBtn.textContent='→'; jumpBtn.title='이 노드 편집으로 이동';
-    jumpBtn.addEventListener('click', function(){
-      var name = inp.value.trim();
-      if(!name){ return; }
-      if(name === '이동한다'){
-        var tree = DATA.regionsTree[topId];
-        if(tree.moveRowId) renderNodePanel(topId, tree.moveRowId);
-        else alert('이 지역에는 이동한다 노드가 없어요.');
+    var sel = document.createElement('select'); sel.className='choiceTarget';
+    buildTargetOptions(sel, val||'');
+    sel.addEventListener('change', function(){
+      if(sel.value==='__new__'){
+        var made = addNodeForChoice(topId, row[C['지역ID']], colName, writeKeyword);
+        renderNodePanel(topId, row[C['지역ID']]);
+        refreshGraphBehindPanel();
+        toast('새 노드 "'+made.name+'"를 만들어 연결했어요');
         return;
       }
-      var nid = nameToIdByRegion[topId][name];
+      if(sel.value==='이동한다' && !idsForName(topId,'이동한다').length){
+        ensureMoveNode(topId);
+        sync();
+        renderNodePanel(topId, row[C['지역ID']]);
+        refreshGraphBehindPanel();
+        return;
+      }
+      sync();
+      buildTargetOptions(sel, sel.value);
+    });
+    var jumpBtn = document.createElement('button'); jumpBtn.className='ghost'; jumpBtn.textContent='→'; jumpBtn.title='이 노드 편집으로 이동';
+    jumpBtn.addEventListener('click', function(){
+      var name = sel.value;
+      if(!name || name==='__new__') return;
+      var nid = idsForName(topId, name)[0];
       if(nid) renderNodePanel(topId, nid);
       else alert('"'+name+'"과(와) 일치하는 노드를 이 지역에서 찾을 수 없어요.');
     });
-    var rm = document.createElement('button'); rm.className='ghost'; rm.textContent='✕'; rm.title='선택지 삭제';
+    var rm = document.createElement('button'); rm.className='ghost'; rm.textContent='✕'; rm.title='이 선택지(연결)만 끊기 · 노드는 남아요';
     rm.addEventListener('click', function(){ rowEl.remove(); sync(); });
-    rowEl.appendChild(inp); rowEl.appendChild(jumpBtn); rowEl.appendChild(rm);
+    rowEl.appendChild(sel); rowEl.appendChild(jumpBtn); rowEl.appendChild(rm);
     choicesWrap.appendChild(rowEl);
   }
   parsed.choices.forEach(function(c){ addChoiceRow(c); });
 
-  var addBtn = document.createElement('button'); addBtn.className='ghost'; addBtn.textContent='+ 선택지 추가';
+  var addBtn = document.createElement('button'); addBtn.className='ghost'; addBtn.textContent='+ 선택지 추가 (새 노드 생성)';
   addBtn.style.cssText='align-self:flex-start;margin-top:4px;';
-  addBtn.addEventListener('click', function(){ addChoiceRow(''); sync(); });
+  addBtn.title = '선택지를 추가하면 이어질 노드도 함께 만들어집니다';
+  addBtn.addEventListener('click', function(){
+    var made = addNodeForChoice(topId, row[C['지역ID']], colName, writeKeyword);
+    renderNodePanel(topId, row[C['지역ID']]);
+    refreshGraphBehindPanel();
+    toast('선택지와 새 노드 "'+made.name+'"를 함께 만들었어요');
+  });
   wrap.appendChild(addBtn);
 
   narrativeTa.addEventListener('input', sync);
@@ -4052,6 +4372,7 @@ function renderItemsScreen(main, crumb){
       var targets = selectedKeys.map(function(k){ return allByKey[k]; });
       if(!targets.length){ toast('아이템을 먼저 선택하세요'); return; }
       var toName = bulkSel.value==='__none__' ? '' : bulkSel.value;
+      takeSnapshot('아이템 지역 일괄 변경 직전');
       var changed = 0;
       targets.forEach(function(e){ if(setItemRegionByName(e.row, toName)) changed++; });
       rebuildItemIndex(); rebuildAllCrossRefs(); markDirty();
@@ -4640,6 +4961,9 @@ async function switchProject(targetId, opts){
 }
 document.getElementById('btnNewProject').addEventListener('click',function(){ if(confirm('현재 프로젝트는 저장하고 새 프로젝트를 추가합니다. 기존 프로젝트는 삭제되지 않습니다. 계속할까요?')) createNewProject(); });
 document.getElementById('btnProjectList').addEventListener('click',openProjectList);
+document.getElementById('btnSnapshots').addEventListener('click',openSnapshotModal);
+document.getElementById('btnSnapshotClose').addEventListener('click',closeSnapshotModal);
+document.getElementById('snapshotModal').addEventListener('click',function(e){ if(e.target===this) closeSnapshotModal(); });
 document.getElementById('btnProjectClose').addEventListener('click',function(){document.getElementById('projectModal').classList.remove('open');});
 document.getElementById('projectModal').addEventListener('click',function(e){if(e.target===this)this.classList.remove('open');});
 document.getElementById('btnProjectModalNew').addEventListener('click',function(){document.getElementById('projectModal').classList.remove('open'); if(confirm('현재 프로젝트를 보존하고 새 프로젝트를 추가할까요?')) createNewProject();});
