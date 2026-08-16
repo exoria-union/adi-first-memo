@@ -167,96 +167,105 @@ export function createSim(data, opts = {}) {
     return { text, notes };
   }
 
-  // ---- 인카운터 핸들러 ----
-  function handlePass(area) { const r = extractCn(area, ''); return join(r); }
+  // ---- 인카운터 핸들러 (각자 { msg, status } 반환; status = 이번 스텝 결과: ING/SUCC/FAIL) ----
+  function handlePass(area) { return { msg: join(extractCn(area, '')), status: 'ING' }; }
   function handleTradeIG(area) {
-    const ids = parseIdList(area.deal_item_id); if (!ids.length || !consumeFirst(ids)) return '필요한 아이템을 다 가지고 있지 않은 것 같다. 다시 주머니를 확인해 보자.';
-    const g = safeInt(area.gold_drop, 0); ch.gold += g; const r = extractCn(area, ''); return join(r, [`골드 +${g} (보유 ${ch.gold})`]);
+    const ids = parseIdList(area.deal_item_id); if (!ids.length || !consumeFirst(ids)) return { msg: '필요한 아이템을 다 가지고 있지 않은 것 같다. 다시 주머니를 확인해 보자.', status: 'ING' };
+    const g = safeInt(area.gold_drop, 0); ch.gold += g; return { msg: join(extractCn(area, ''), [`골드 +${g} (보유 ${ch.gold})`]), status: 'ING' };
   }
   function handleTradeII(area) {
-    const ids = parseIdList(area.deal_item_id); if (!ids.length || !consumeFirst(ids)) return '필요한 아이템을 다 가지고 있지 않은 것 같다. 다시 주머니를 확인해 보자.';
+    const ids = parseIdList(area.deal_item_id); if (!ids.length || !consumeFirst(ids)) return { msg: '필요한 아이템을 다 가지고 있지 않은 것 같다. 다시 주머니를 확인해 보자.', status: 'ING' };
     const newIds = parseIdList(area.item_id); const notes = [];
     if (newIds.length) { const cnt = rollDiceExpr(area.item_drop, 1); awardItem(newIds[0], cnt); notes.push(`획득: ${itemName(newIds[0])} ×${cnt}`); }
-    const a2 = Object.assign({}, area, { item_id: null }); const r = extractCn(a2, ''); return join(r, notes);
+    const a2 = Object.assign({}, area, { item_id: null }); return { msg: join(extractCn(a2, ''), notes), status: 'ING' };
   }
   function handleTradeGI(area) {
-    const g = safeInt(area.deal_gold, 0); if (ch.gold < g) return '상인이 흥정은 어렵다며 내쫓았다……. 충분한 골드를 챙긴 다음 다시 오자.';
+    const g = safeInt(area.deal_gold, 0); if (ch.gold < g) return { msg: '상인이 흥정은 어렵다며 내쫓았다……. 충분한 골드를 챙긴 다음 다시 오자.', status: 'ING' };
     ch.gold -= g; const notes = [`골드 -${g} (보유 ${ch.gold})`]; const newIds = parseIdList(area.item_id);
     if (newIds.length) { const cnt = safeInt(area.item_drop, 1); awardItem(newIds[0], cnt); notes.push(`획득: ${itemName(newIds[0])} ×${cnt}`); }
-    const a2 = Object.assign({}, area, { item_id: null }); const r = extractCn(a2, ''); return join(r, notes);
+    const a2 = Object.assign({}, area, { item_id: null }); return { msg: join(extractCn(a2, ''), notes), status: 'ING' };
   }
   function requiredStats(inc) { const s = safeStr(inc).toUpperCase(), r = []; if (s.includes('STR')) r.push('힘'); if (s.includes('WIS')) r.push('지혜'); if (s.includes('DEX')) r.push('솜씨'); if (s.includes('ALL')) r.push('무관'); return r; }
   function handleSkill(area, action, potion, name) {
     const stats = requiredStats(area.incounter_cd);
     if (!STAT_KOR.includes(action)) {
-      if (area.area_cn) return join(extractCn(area, ''));
+      if (area.area_cn) return { msg: join(extractCn(area, '')), status: 'ING' };
       const req = stats[0] && stats[0] !== '무관' ? stats[0] : '원하는 스탯';
-      return `이곳을 통과하려면 능력을 발휘해야 할 것 같다. [지역/${name}/${req}]을 입력해 도전해 보자.`;
+      return { msg: `이곳을 통과하려면 능력을 발휘해야 할 것 같다. [지역/${name}/${req}]을 입력해 도전해 보자.`, status: 'ING' };
     }
     if (!stats.includes('무관') && !stats.includes(action)) {
-      if (!stats.length) return '이 행동은 통하지 않을 것 같다! 다른 방식으로 도전해 보자.';
-      return `이 행동은 통하지 않을 것 같다! 침착하게, 다른 방식으로 도전해 보자.\n 가령, ${stats[0]}을(를) 살린다면 어떨까?\n\n▶[지역/${name}/${stats[0]}]`;
+      if (!stats.length) return { msg: '이 행동은 통하지 않을 것 같다! 다른 방식으로 도전해 보자.', status: 'ING' };
+      return { msg: `이 행동은 통하지 않을 것 같다! 침착하게, 다른 방식으로 도전해 보자.\n 가령, ${stats[0]}을(를) 살린다면 어떨까?\n\n▶[지역/${name}/${stats[0]}]`, status: 'ING' };
     }
-    if (potion) { const sv = safeInt(ch[STAT_COL[action]], 0); if (sv === 3) return '강화 포션을 사용할 필요는 없을 것 같다. 포션 없이 자신의 능력으로 도전해 보자.'; }
+    if (potion) { const sv = safeInt(ch[STAT_COL[action]], 0); if (sv === 3) return { msg: '강화 포션을 사용할 필요는 없을 것 같다. 포션 없이 자신의 능력으로 도전해 보자.', status: 'ING' }; }
     const target = safeInt(area.target_roll, 0);
     const res = targetDice(ch[STAT_COL[action]], target, !!potion);
     let out = `(${res.stat}D6>=${res.target}) ＞ ${res.dice_result}\n`;
     if (res.good) {
       const r = extractCn(area, 'succ'); out += r.text; const notes = r.notes.slice();
       const ax = safeInt(area.area_exp, 0); if (ax > 0) { ch.exp += ax; notes.push(`경험치 +${ax}`); }
-      return join({ text: out, notes });
+      return { msg: join({ text: out, notes }), status: 'ING' };
     } else {
-      const r = extractCn(area, 'fail'); mission && (mission.result = 'FAIL'); return join({ text: out + r.text, notes: r.notes.concat(['(탐사 실패 — [지역/포기] 또는 [재도전])']) });
+      const r = extractCn(area, 'fail'); return { msg: join({ text: out + r.text, notes: r.notes.concat(['(실패 — ▶포기 하거나, 같은 명령을 다시 입력해 재도전)']) }), status: 'FAIL' };
     }
   }
   function handleComplete(area) {
-    mission && (mission.result = 'SUCC'); ch.exp += 10;
+    ch.exp += 10;
     const r = extractCn(area, '');
     const tail = `\n\n짧은 시간에 많은 경험이 쌓였다. 이제 교단으로 복귀하여 푹 쉬자.\n\n지역 임무를 하면서 10시간의 경험이 쌓였다.\n지금까지 ${ch.ch_name}이(가) 쌓은 경험은 ${ch.exp}시간 정도다.`;
-    return join({ text: r.text + tail, notes: r.notes.concat(['✅ 탐사 완료']) });
+    return { msg: join({ text: r.text + tail, notes: r.notes.concat(['✅ 탐사 완료']) }), status: 'SUCC' };
   }
 
   function join(r, extra) { const notes = (r.notes || []).concat(extra || []); return r.text + (notes.length ? '\n\n— ' + notes.join(' · ') : ''); }
 
-  // ---- 선택지 추출(스크립트의 ▶[지역/X]/▶[진입/X]) ----
-  function choicesOf(area) {
-    const out = []; const re = /▶\[(?:지역|진입)\/([^\]]+)\]/g; let m;
-    const src = safeStr(area.area_cn) + '\n' + safeStr(area.succ_cn) + '\n' + safeStr(area.fail_cn);
-    while ((m = re.exec(src))) { const n = m[1].trim(); if (n && !out.includes(n)) out.push(n); }
+  // ---- 선택지 추출: "표시된 스크립트(메시지)"의 ▶[지역/X]/▶[진입/X] 마커에서만 뽑는다.
+  //   (예전엔 area_cn+성공+실패를 통째로 훑어, 성공 시 실패 스크립트의 선택지까지 나왔다.)
+  function choicesFromText(text) {
+    const out = []; const re = /▶\s*\[(?:지역|진입)\/([^\]]+)\]/g; let m;
+    while ((m = re.exec(safeStr(text)))) { const n = m[1].trim(); if (n && !out.includes(n)) out.push(n); }
     return out;
   }
 
   // ---- 메인 진입점(area_mission 이식) ----
+  //   미션이 있으면 "진행 중"(현재 루트 우선 이름 해석 + 스텝 디스패치), 없으면 "신규 시작".
+  //   status는 sticky한 mission 상태가 아니라 매 스텝 핸들러가 돌려주는 값을 그대로 쓴다.
   function command(areaName, action, potion) {
     const norm = safeStr(areaName).replace(/\s/g, '');
     if (norm === '포기') { if (!mission) return { msg: '아직 지역 임무에 도전하지 않았던 것 같다. 임무를 수행하러 가볼까?' }; ch.exp += 5; mission = null; return { msg: `지역 임무를 포기하고 돌아가기로 했다.\n실패는 성공의 어머니다.\n\n지역 임무를 하면서 5시간의 경험이 쌓였다. (누적 ${ch.exp}시간)`, ended: true }; }
     if (safeInt(ch.max_hp, 0) - safeInt(ch.hp, 0) < 1) return { msg: '지금 몸 상태로 임무에 나가는 것은 무리다……. 우선 체력부터 회복하고 보자.' };
 
-    if (mission && mission.result === 'ING') {
-      // 진행 중 → 현재 루트 안에서 이름 해석
-      const area = (A.byRootName[mission.root] || {})[norm] || A.byName[norm];
+    // 지역 해석: 미션 중이면 현재 루트 안에서 → 전역, 없으면 새 미션(최상위 진입)
+    let area, isNew = false;
+    if (mission) {
+      area = (A.byRootName[mission.root] || {})[norm] || A.byName[norm];
       if (!area) return { msg: `${areaName} (이)라는 곳을 찾을 수 없다……. 지도를 확인해 보자.` };
-      // 키아이템
-      if (area.key_yn === 'Y') { const raw = safeStr(area.key_id); const ids = parseIdList(raw); if (ids.length) { const isOr = raw.includes('{'); const ok = isOr ? ids.some(hasItem) : ids.every(hasItem); if (!ok) return { msg: '필요한 키 아이템을 다 가지고 있지 않은 것 같다. 다시 주머니를 확인해 보자.' }; if (isOr) consumeFirst(ids); else ids.forEach(id => { const i = ch.inventory.indexOf(id); if (i >= 0) ch.inventory.splice(i, 1); }); } }
-      mission.area_id = area.area_id;
-      const inc = safeStr(area.incounter_cd); let msg;
-      if (inc === 'INCUNTR_02' || inc.indexOf('INCUNTR_00') === 0) msg = handlePass(area);
-      else if (inc.includes('INCUNTR_04_IG')) msg = handleTradeIG(area);
-      else if (inc.includes('INCUNTR_04_II')) msg = handleTradeII(area);
-      else if (inc.includes('INCUNTR_04_GI')) msg = handleTradeGI(area);
-      else if (inc.includes('INCUNTR_03')) msg = handleSkill(area, action, potion, area.area_name);
-      else if (inc === 'INCUNTR_99') msg = handleComplete(area);
-      else msg = handlePass(area);
-      const ended = mission && mission.result !== 'ING';
-      return { msg, area, choices: mission && mission.result === 'ING' ? choicesOf(area) : [], ended };
+    } else {
+      area = A.byName[norm];
+      if (!area) return { msg: `${areaName} 임무를 수행할 수 있는 지역이 아닌 것 같다……. 지도를 확인해 보자.` };
+      mission = { area_id: area.area_id, root: area._root }; isNew = true;
     }
-
-    // 신규 시작 — 최상위(진입) 지역
-    const area = A.byName[norm];
-    if (!area) return { msg: `${areaName} 임무를 수행할 수 있는 지역이 아닌 것 같다……. 지도를 확인해 보자.` };
-    mission = { area_id: area.area_id, root: area._root, result: 'ING' };
-    const r = extractCn(area, '');
-    return { msg: join(r), area, choices: choicesOf(area) };
+    // 키아이템 게이트
+    if (area.key_yn === 'Y') {
+      const raw = safeStr(area.key_id); const ids = parseIdList(raw);
+      if (ids.length) {
+        const isOr = raw.includes('{'); const ok = isOr ? ids.some(hasItem) : ids.every(hasItem);
+        if (!ok) { if (isNew) mission = null; return { msg: '필요한 키 아이템을 다 가지고 있지 않은 것 같다. 다시 주머니를 확인해 보자.', area, choices: [], status: 'ING' }; }
+        if (isOr) consumeFirst(ids); else ids.forEach(id => { const i = ch.inventory.indexOf(id); if (i >= 0) ch.inventory.splice(i, 1); });
+      }
+    }
+    mission.area_id = area.area_id; mission.root = area._root;   // 루트 동기화(트리 간 이동/완료 후 인접 이동 대응)
+    const inc = safeStr(area.incounter_cd); let res;
+    if (inc === 'INCUNTR_02' || inc.indexOf('INCUNTR_00') === 0) res = handlePass(area);
+    else if (inc.includes('INCUNTR_04_IG')) res = handleTradeIG(area);
+    else if (inc.includes('INCUNTR_04_II')) res = handleTradeII(area);
+    else if (inc.includes('INCUNTR_04_GI')) res = handleTradeGI(area);
+    else if (inc.includes('INCUNTR_03')) res = handleSkill(area, action, potion, area.area_name);
+    else if (inc === 'INCUNTR_99') res = handleComplete(area);
+    else res = handlePass(area);
+    // 선택지는 실제로 표시된 메시지에서만 추출(성공→성공스크립트, 실패→실패스크립트, 완료→인접지역).
+    let choices = choicesFromText(res.msg);
+    if (res.status === 'FAIL') choices = ['포기'];   // 실패 후엔 ▶포기(경험치 소액) 또는 같은 명령 재입력
+    return { msg: res.msg, area, choices, status: res.status };
   }
 
   return {
@@ -343,7 +352,9 @@ export function openAreaTestUI(container, data, opts = {}) {
     const out = sim.command(name, action, potion);
     bubble(out.msg, 'bot');
     renderChoices(out.choices);
-    if (out.ended) { renderChoices([]); bubble('— 탐사가 종료되었습니다. [탐사 시작]으로 다시 체험할 수 있어요. —', 'bot'); }
+    if (out.ended) { renderChoices([]); bubble('— 탐사를 종료했습니다. [탐사 시작]으로 다시 체험할 수 있어요. —', 'bot'); }
+    else if (out.status === 'SUCC') bubble('✅ 이 임무를 완료했습니다. 인접 지역(▶)으로 계속 가거나, 위에서 다른 지역으로 새로 시작할 수 있어요.', 'bot');
+    else if (out.status === 'FAIL') bubble('❌ 탐사에 실패했습니다. ▶포기 하면 경험치를 조금 얻고 돌아갑니다.', 'bot');
     cmdIn.value = '';
   }
 

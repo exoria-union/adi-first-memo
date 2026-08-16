@@ -15,9 +15,25 @@ function mk(o){ const r=new Array(H.length).fill(null); for(const k in o){ r[ci[
 const rows=[
   mk({'지역ID':'BELL','상위지역ID(부모ID)':'','지역명':'종탑','종류 코드':'INCUNTR_00','스크립트(내용)':'나선계단 입구, 쇠 냄새가 난다.\n\n▶[진입/나선계단을 오른다]'}),
   mk({'지역ID':'BELL_01','상위지역ID(부모ID)':'BELL','지역명':'나선계단을 오른다','종류 코드':'INCUNTR_03_STR','주사위 목표치':1,'스크립트(내용)':'가파른 계단이 위로 이어진다.\n\n▶[지역/종을 친다]','성공 스크립트':'{name}은 힘껏 계단을 올랐다!\n\n▶[지역/종을 친다]','실패 스크립트':'미끄러져 굴렀다...'}),
-  mk({'지역ID':'BELL_02','상위지역ID(부모ID)':'BELL','지역명':'종을 친다','종류 코드':'INCUNTR_99','인접 지역':'LIB','스크립트(내용)':'거대한 종이 울려 퍼진다. 탐사 완료!'}),
+  mk({'지역ID':'BELL_02','상위지역ID(부모ID)':'BELL','지역명':'종을 친다','종류 코드':'INCUNTR_99','인접 지역':'LIB','스크립트(내용)':'거대한 종이 울려 퍼진다. 탐사 완료!\n\n▶[지역/신학교]'}),
   // 거래 노드(골드 지불→아이템)
   mk({'지역ID':'BELL_03','상위지역ID(부모ID)':'BELL','지역명':'상인','종류 코드':'INCUNTR_04_GI','지역거래 시, 교단원이 낼 골드 상한가':100,'파밍 아이템 ID':'50','파밍 아이템 수':1,'스크립트(내용)':'상인이 물건을 건넸다.'}),
+  // 능력판정: 성공/실패에 서로 다른 선택지
+  mk({'지역ID':'BELL_04','상위지역ID(부모ID)':'BELL','지역명':'좁은 틈','종류 코드':'INCUNTR_03_DEX','주사위 목표치':1,'스크립트(내용)':'좁은 틈이 보인다.','성공 스크립트':'빠져나왔다!\n\n▶[지역/보물방]','실패 스크립트':'끼었다...\n\n▶[지역/되돌아간다]'}),
+  // 종족 전용(VAM)
+  mk({'지역ID':'BELL_05','상위지역ID(부모ID)':'BELL','지역명':'봉인문','종류 코드':'INCUNTR_02','종족 전용':'VAM','스크립트(내용)':'흡혈귀만 열 수 있는 문이 열렸다.','종족이 아닐 때 스크립트':'문은 꿈쩍도 하지 않는다.'}),
+  // 최초 탐사(first_check)
+  mk({'지역ID':'BELL_06','상위지역ID(부모ID)':'BELL','지역명':'비밀제단','종류 코드':'INCUNTR_02','최초 탐사 여부':'Y','스크립트(내용)':'처음 보는 제단이 빛난다!','최초 탐사가 아닐 시 실패 스크립트':'제단은 이미 빛을 잃었다.'}),
+  // 최초 유일 지급(first_drop Y)
+  mk({'지역ID':'BELL_07','상위지역ID(부모ID)':'BELL','지역명':'유물함','종류 코드':'INCUNTR_02','최초 유일 지급 여부':'Y','파밍 아이템 ID':'70','파밍 아이템 수':1,'스크립트(내용)':'유물을 발견했다!','유일 아이템 소진 스크립트':'유물함은 비어 있다.'}),
+  // 키아이템
+  mk({'지역ID':'BELL_08','상위지역ID(부모ID)':'BELL','지역명':'잠긴문','종류 코드':'INCUNTR_02','키아이템 필요 여부':'Y','키아이템 ID':'99','스크립트(내용)':'열쇠로 문을 열었다.'}),
+  // 태그 {a/b/c}
+  mk({'지역ID':'BELL_09','상위지역ID(부모ID)':'BELL','지역명':'낡은상자','종류 코드':'INCUNTR_02','스크립트(내용)':'낡은 상자에서 {검/검/검}을 하나 주웠다.'}),
+  // 거래 IG(아이템→골드)
+  mk({'지역ID':'BELL_10','상위지역ID(부모ID)':'BELL','지역명':'고물상','종류 코드':'INCUNTR_04_IG','지역거래 시, 교단원이 낼 아이템ID':'10','파밍 골드':200,'스크립트(내용)':'고물을 팔았다.'}),
+  // 능력판정: 목표7=D6로는 항상 실패(재도전 테스트용)
+  mk({'지역ID':'BELL_11','상위지역ID(부모ID)':'BELL','지역명':'절벽','종류 코드':'INCUNTR_03_STR','주사위 목표치':7,'스크립트(내용)':'까마득한 절벽.','성공 스크립트':'올랐다!','실패 스크립트':'추락했다...'}),
 ];
 
 try{
@@ -44,7 +60,7 @@ try{
   // 4) 완료
   r=sim.command('종을 친다');
   ok('완료(INCUNTR_99): 완료 스크립트', r.msg.includes('탐사 완료'));
-  ok('완료: 종료 플래그', r.ended===true);
+  ok('완료: status=SUCC(하드종료 아님, 계속 진행 가능)', r.status==='SUCC' && r.ended!==true);
 
   // 5) 거래(골드→아이템): 새 세션
   const sim2=createSim({rows,headers:H},{character:{gold:500},itemName:id=>'물약#'+id});
@@ -67,6 +83,55 @@ try{
   ok('파싱: [지역/나선계단/힘]', (function(){var p=pi('[지역/나선계단/힘]');return p.name==='나선계단'&&p.action==='힘';})());
   ok('파싱: 정문 홀/포션(스탯없이 포션)', (function(){var p=pi('정문 홀/포션');return p.name==='정문 홀'&&p.action===''&&p.potion===true;})());
   ok('파싱: [지역/포기] → 포기', pi('[지역/포기]').name==='포기');
+
+  // 8) 선택지-스크립트 일치: 성공 시 성공 스크립트 선택지만(실패 것 제외)
+  var s4=createSim({rows,headers:H},{character:{diy:6}}); s4.command('종탑'); r=s4.command('좁은 틈','솜씨');
+  ok('성공 선택지=보물방, 실패것(되돌아간다) 제외', r.choices.indexOf('보물방')>=0 && r.choices.indexOf('되돌아간다')<0);
+  // 9) 완료: status SUCC + 인접 선택지 유지(계속 진행)
+  var s5=createSim({rows,headers:H}); s5.command('종탑'); r=s5.command('종을 친다');
+  ok('완료: status=SUCC', r.status==='SUCC');
+  ok('완료: 인접 선택지(신학교) 유지', r.choices.indexOf('신학교')>=0);
+  // 10) 실패: status FAIL + 포기 선택지
+  var s6=createSim({rows,headers:H},{character:{diy:1}});
+  // 목표를 높여 실패 유도 위해 별도 지역? 대신 diy로는 target1이라 항상성공 → 실패 테스트는 목표7 노드 필요. 생략 대신 포기 경로만.
+  s6.command('종탑'); var rg=s6.command('포기'); ok('포기: 종료 플래그', rg.ended===true);
+  // 11) 종족 게이팅
+  var vam=createSim({rows,headers:H},{character:{ch_class:3}}); vam.command('종탑'); r=vam.command('봉인문');
+  ok('VAM: 종족 통과(area_cn)', r.msg.includes('열렸다'));
+  var hum=createSim({rows,headers:H},{character:{ch_class:0}}); hum.command('종탑'); r=hum.command('봉인문');
+  ok('비-VAM: 종족 실패 스크립트', r.msg.includes('꿈쩍도'));
+  // 12) 최초 탐사(first_check)
+  var f1=createSim({rows,headers:H},{character:{personalFirst:true}}); f1.command('종탑'); r=f1.command('비밀제단');
+  ok('최초탐사자: 최초 스크립트', r.msg.includes('처음 보는'));
+  var f2=createSim({rows,headers:H},{character:{personalFirst:false}}); f2.command('종탑'); r=f2.command('비밀제단');
+  ok('비-최초: check_fail 스크립트', r.msg.includes('이미 빛을'));
+  // 13) 최초 유일 지급(first_drop Y)
+  var d1=createSim({rows,headers:H},{character:{personalFirst:false}}); d1.command('종탑'); r=d1.command('유물함');
+  ok('first_drop Y+비최초: 소진 스크립트, 아이템無', r.msg.includes('비어 있다'));
+  var d2=createSim({rows,headers:H},{character:{personalFirst:true},itemName:function(id){return '유물#'+id;}}); d2.command('종탑'); r=d2.command('유물함');
+  ok('first_drop Y+최초: 유물 획득', r.msg.includes('유물#70'));
+  // 14) 키아이템
+  var k1=createSim({rows,headers:H},{character:{inventory:[99]}}); k1.command('종탑'); r=k1.command('잠긴문');
+  ok('키아이템 보유: 통과', r.msg.includes('문을 열었다'));
+  var k2=createSim({rows,headers:H},{character:{inventory:[]}}); k2.command('종탑'); r=k2.command('잠긴문');
+  ok('키아이템 없음: 차단', r.msg.includes('키 아이템을 다'));
+  // 15) 태그 {a/b/c}
+  var t1=createSim({rows,headers:H}); t1.command('종탑'); r=t1.command('낡은상자');
+  ok('태그 {a/b/c} 치환(검)', r.msg.includes('상자에서 검을 하나'));
+  // 16) 거래 IG(아이템→골드)
+  var ig=createSim({rows,headers:H},{character:{inventory:[10],gold:0}}); ig.command('종탑'); r=ig.command('고물상');
+  ok('거래 IG: 골드 +200', r.msg.includes('골드 +200'));
+  // 17) 스킬 실패(목표7=항상실패) → status FAIL, 포기 선택지, 미션 유지 → 재도전 인-컨텍스트
+  var sf=createSim({rows,headers:H},{character:{str:3}}); sf.command('종탑'); r=sf.command('절벽','힘');
+  ok('스킬 실패: status=FAIL', r.status==='FAIL');
+  ok('스킬 실패: 선택지=[포기]', r.choices.length===1 && r.choices[0]==='포기');
+  ok('스킬 실패: 미션 유지(재도전 가능)', !!sf.mission);
+  var r2=sf.command('절벽','힘');
+  ok('스킬 재도전: 인-컨텍스트 재판정(주사위 재표기)', r2.msg.includes('D6>=7'));
+  // 18) 완료 후 status 비고착: 다른 노드로 이동하면 ING(완료 안내 재출력 안 됨)
+  var sc=createSim({rows,headers:H},{character:{gold:500}}); sc.command('종탑'); sc.command('종을 친다');
+  r=sc.command('상인');
+  ok('완료 후 이동: status=ING(고착 아님)', r.status==='ING' && r.msg.includes('골드 -100'));
 
   log('\n=== '+pass+' passed, '+fail+' failed ===',fail?'f':'p');
   document.title=fail===0?'SIM OK':'SIM FAIL';
