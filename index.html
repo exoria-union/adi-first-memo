@@ -393,6 +393,34 @@
   .requiredMark{color:#c0392b;font-weight:800;margin-left:2px;}
 
   .requiredMark{color:#c0392b;font-weight:800;margin-left:2px;}
+  /* 필수인데 비어 있는 칸: 저장 시 어느 칸이 빠졌는지 바로 짚어 준다 */
+  .field.missingRequired > label{color:#c0392b;font-weight:700;}
+  .field.missingRequired input,
+  .field.missingRequired textarea,
+  .field.missingRequired select{
+    border-color:#c0392b !important;background:#fdecea;
+    box-shadow:0 0 0 2px rgba(192,57,43,.12);
+  }
+  .field.missingRequired .missingWhy{
+    font-size:10px;color:#c0392b;margin-top:3px;line-height:1.45;font-weight:600;
+  }
+  @keyframes missingFlash{
+    0%,100%{box-shadow:0 0 0 2px rgba(192,57,43,.12);}
+    50%{box-shadow:0 0 0 5px rgba(192,57,43,.32);}
+  }
+  .field.missingRequired.justFlagged input,
+  .field.missingRequired.justFlagged textarea,
+  .field.missingRequired.justFlagged select{animation:missingFlash .5s ease-in-out 2;}
+  #npMissingBanner{
+    background:#fdecea;border:1px solid #e8a49b;color:#a5291c;border-radius:3px;
+    padding:9px 11px;font-size:11.5px;line-height:1.6;margin-bottom:4px;
+  }
+  #npMissingBanner b{color:#8f2318;}
+  #npMissingBanner .npMissJump{
+    display:inline-block;margin:3px 4px 0 0;padding:2px 7px;border:1px solid #e8a49b;border-radius:999px;
+    background:#fff;color:#a5291c;font-size:10.5px;font-weight:700;cursor:pointer;
+  }
+  #npMissingBanner .npMissJump:hover{background:#c0392b;color:#fff;border-color:#c0392b;}
   .fieldRow2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
   .canvasNode{
     position:absolute;width:150px;background:var(--surface);border:1px solid var(--border-strong);
@@ -415,6 +443,16 @@
   .canvasEdge.edgeDimmed{opacity:.15;}
   .canvasLegend{display:flex;align-items:center;gap:10px;font-size:11px;color:var(--text-faint);}
   .canvasLegend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px;}
+  .dupNameWarn{
+    background:#fff3cd;border:1px solid #e0c069;color:#8a6d1a;border-radius:3px;
+    padding:8px 10px;font-size:11.5px;line-height:1.6;margin-bottom:8px;
+  }
+  .dupNameWarn b{color:#7a5f10;}
+  .canvasNode.dupNameNode{border-color:#d99a1f;box-shadow:0 0 0 2px rgba(217,154,31,.18);}
+  .canvasNode .cnDupBadge{
+    display:inline-block;font-size:8.5px;font-weight:700;padding:1px 4px;border-radius:999px;
+    background:#fff3cd;color:#8a6d1a;margin-left:4px;vertical-align:1px;
+  }
   .canvasNode.moveNode{border-style:dashed;background:#fbfbfc;color:var(--text-dim);}
   .canvasNode.rootNode{border-color:var(--accent);background:var(--accent-soft);}
   .canvasNode.orphanNode{border-color:#d99a1f;border-style:dashed;background:#fdf6e8;}
@@ -809,21 +847,42 @@ function cacheSharedUiPrefs(){
 var H1 = DATA.sheet1.headers;
 var C = {}; H1.forEach(function(h,i){ C[h]=i; });
 
-var rowById = {}, nameToIdByRegion = {};
+/* 노드 사이의 연결은 전부 "이름"으로 걸린다(▶[지역/이름]). 그런데 같은 지역 안에 이름이
+   겹치는 행이 있으면 이름→ID 인덱스에서 뒤에 오는 행이 앞의 행을 덮어써서, 가려진 행은
+   부모가 분명히 가리키고 있는데도 아무도 도달하지 못하는 고아가 된다. 그 행에 달려 있던
+   하위 연결(예: 이동한다)까지 통째로 그래프에서 사라진다.
+   그래서 이름→ID는 "단수"(호환용)와 "복수"(실제 연결 해석용) 두 가지를 함께 만든다. */
+var rowById = {}, nameToIdByRegion = {}, nameToIdsByRegion = {};
 function rebuildIndexes(){
   rowById = {};
   DATA.sheet1.rows.forEach(function(r,i){ rowById[r[C['지역ID']]] = i; });
   nameToIdByRegion = {};
+  nameToIdsByRegion = {};
   Object.keys(DATA.regionsTree).forEach(function(topId){
     nameToIdByRegion[topId] = {};
+    nameToIdsByRegion[topId] = {};
   });
   DATA.sheet1.rows.forEach(function(r){
     var top = r[C['상위지역ID(부모ID)']] || r[C['지역ID']];
+    var name = r[C['지역명']], id = r[C['지역ID']];
     if(!nameToIdByRegion[top]) nameToIdByRegion[top] = {};
-    nameToIdByRegion[top][r[C['지역명']]] = r[C['지역ID']];
+    if(!nameToIdsByRegion[top]) nameToIdsByRegion[top] = {};
+    if(nameToIdByRegion[top][name] === undefined) nameToIdByRegion[top][name] = id;
+    if(!nameToIdsByRegion[top][name]) nameToIdsByRegion[top][name] = [];
+    if(nameToIdsByRegion[top][name].indexOf(id)===-1) nameToIdsByRegion[top][name].push(id);
   });
 }
 rebuildIndexes();
+// 이름이 가리키는 모든 행 ID. 이름이 겹치면 둘 다 돌려주므로, 어느 쪽도 조용히 사라지지 않는다.
+function idsForName(topId, name){
+  var m = nameToIdsByRegion[topId];
+  return (m && m[name]) ? m[name] : [];
+}
+// 이 지역 안에서 이름이 겹치는 노드들. 그래프 화면에서 경고로 알린다.
+function duplicateNodeNames(topId){
+  var m = nameToIdsByRegion[topId] || {};
+  return Object.keys(m).filter(function(n){ return m[n].length > 1; });
+}
 
 // Rebuilds DATA.regionsTree (header/cluster/이동한다 structure) purely from the raw sheet1 rows -
 // the JS equivalent of the Python pipeline that built it at export time. Needed whenever sheet1
@@ -846,39 +905,56 @@ function rebuildRegionsTreeFromSheet1(){
     var headerI = null;
     for(var k=0;k<idxs.length;k++){ if(rows[idxs[k]][typeIdx]==='INCUNTR_00'){ headerI = idxs[k]; break; } }
     if(headerI===null) return;
+    // 이름이 겹치는 행이 있으면 예전에는 뒤의 행이 앞의 행을 덮어써서, 가려진 행이 어느
+    // 세부지역에도 못 들어가고 그래프에서 고아로 떨어졌다. 이름 하나에 행 여러 개를 담는다.
     var byName = {};
-    idxs.forEach(function(i){ byName[rows[i][nameIdx]] = i; });
+    idxs.forEach(function(i){
+      var nm = rows[i][nameIdx];
+      if(!byName[nm]) byName[nm] = [];
+      byName[nm].push(i);
+    });
     var headerChoices = parseChoices(rows[headerI][scriptIdx]);
     var clusterRoots = headerChoices.filter(function(c){ return c!=='이동한다'; });
 
+    // assigned는 "이름"이 아니라 "행 인덱스" 기준이다. 이름이 겹치는 행들을 각각 따로 추적해야
+    // 한쪽이 다른 쪽을 덮어써서 어느 세부지역에도 못 들어가는 일이 없다.
+    // 자리 배정은 enqueue 시점에 확정한다(dequeue 시점에 하면 두 부모가 같은 사본을 집어
+    // 나머지 사본이 영영 배정되지 않는다). 링크 하나에 행 하나씩 짝지어지므로,
+    // 부모가 둘이면 같은 이름의 사본도 각자 제 갈래로 나뉜다.
     var assigned = {};
     var clusters = [];
+    function claimOne(name){
+      var list = byName[name] || [];
+      for(var i=0;i<list.length;i++){
+        if(!assigned[list[i]]){ assigned[list[i]] = true; return list[i]; }
+      }
+      return null;
+    }
     clusterRoots.forEach(function(root){
-      if(assigned[root] || !(root in byName)) return;
-      var queue=[root], members=[], localSeen={};
+      if(!(root in byName)) return;
+      var seed = claimOne(root);
+      if(seed===null) return;
+      var queue = [seed], members = [];
       while(queue.length){
-        var cur = queue.shift();
-        if(localSeen[cur] || assigned[cur]) continue;
-        localSeen[cur]=true;
-        if(!(cur in byName)) continue;
-        assigned[cur]=true;
-        members.push(cur);
-        var ri = byName[cur];
+        var ri = queue.shift();
+        members.push(ri);
         var nexts = parseChoices(rows[ri][scriptIdx])
           .concat(parseChoices(rows[ri][succIdx]||''))
           .concat(parseChoices(rows[ri][failIdx]||''));
         nexts.forEach(function(n){
-          if(!localSeen[n] && !assigned[n] && (n in byName) && n!=='이동한다') queue.push(n);
+          if(n==='이동한다' || !(n in byName)) return;
+          var ni = claimOne(n);
+          if(ni!==null) queue.push(ni);
         });
       }
-      clusters.push({root:root, nodeIds: members.map(function(n){ return rows[byName[n]][idIdx]; })});
+      clusters.push({root:root, nodeIds: members.map(function(i){ return rows[i][idIdx]; })});
     });
 
     tree[topId] = {
       id: topId,
       headerRowId: rows[headerI][idIdx],
       clusters: clusters,
-      moveRowId: ('이동한다' in byName) ? rows[byName['이동한다']][idIdx] : null
+      moveRowId: byName['이동한다'] ? rows[byName['이동한다'][0]][idIdx] : null
     };
   });
   DATA.regionsTree = tree;
@@ -1616,6 +1692,9 @@ function persist(){
     saveState(false);
     scheduleCloudSave();
   }catch(e){ toast('로컬 저장 실패: ' + e.message); }
+  // 저장은 막지 않는다(작업 중인 내용을 잃는 게 더 나쁘다). 대신 저장된 시점에
+  // 어느 필수 칸이 비어 있는지 편집기에서 바로 짚어 준다.
+  try{ flagMissingRequiredOnSave(); }catch(e){ console.error(e); }
 }
 function scheduleCloudSave(){
   if(COLLAB){ try{ COLLAB.push(DATA); }catch(e){ console.error(e); } return; }
@@ -2363,7 +2442,6 @@ function setCanvasPos(topId, rowId, x, y){
 // branches share, so dragging a subtree doesn't yank a shared node away from its
 // other parent's branch
 function computeInDegrees(topId, idSet){
-  var nameToId = nameToIdByRegion[topId];
   var indeg = {};
   Object.keys(idSet).forEach(function(id){ indeg[id] = 0; });
   Object.keys(idSet).forEach(function(id){
@@ -2374,8 +2452,9 @@ function computeInDegrees(topId, idSet){
       .concat(parseChoices(row[C['실패 스크립트']]||''));
     choices.forEach(function(cname){
       if(cname==='이동한다') return;
-      var nid = nameToId[cname];
-      if(nid && idSet[nid]!==undefined) indeg[nid] = (indeg[nid]||0)+1;
+      idsForName(topId, cname).forEach(function(nid){
+        if(idSet[nid]!==undefined) indeg[nid] = (indeg[nid]||0)+1;
+      });
     });
   });
   return indeg;
@@ -2383,7 +2462,6 @@ function computeInDegrees(topId, idSet){
 // nodes reachable from startRid that have exactly one incoming edge within idSet -
 // i.e. "belong" exclusively to this branch and should travel together with it
 function getExclusiveDescendants(topId, startRid, idSet, indeg){
-  var nameToId = nameToIdByRegion[topId];
   var visited = {}; visited[startRid] = true;
   var queue = [startRid], result = [];
   while(queue.length){
@@ -2395,10 +2473,11 @@ function getExclusiveDescendants(topId, startRid, idSet, indeg){
       .concat(parseChoices(row[C['실패 스크립트']]||''));
     choices.forEach(function(cname){
       if(cname==='이동한다') return;
-      var nid = nameToId[cname];
-      if(nid && !visited[nid] && idSet[nid]!==undefined && indeg[nid]===1){
-        visited[nid] = true; result.push(nid); queue.push(nid);
-      }
+      idsForName(topId, cname).forEach(function(nid){
+        if(!visited[nid] && idSet[nid]!==undefined && indeg[nid]===1){
+          visited[nid] = true; result.push(nid); queue.push(nid);
+        }
+      });
     });
   }
   return result;
@@ -2408,7 +2487,6 @@ function getExclusiveDescendants(topId, startRid, idSet, indeg){
 // canvas itself uses - returns a Set-like object of reachable row IDs (not names, since a
 // hierarchy swap moves links between rows while each row's own ID stays put)
 function getReachableRowIds(topId, rootId, moveRowId){
-  var nameToId = nameToIdByRegion[topId];
   var visited = {};
   if(!rootId) return visited;
   var queue = [rootId];
@@ -2422,8 +2500,9 @@ function getReachableRowIds(topId, rootId, moveRowId){
       .concat(parseChoices(row[C['실패 스크립트']]||''));
     choices.forEach(function(cname){
       if(cname==='이동한다') return;
-      var nid = nameToId[cname];
-      if(nid && !visited[nid]){ visited[nid]=true; queue.push(nid); }
+      idsForName(topId, cname).forEach(function(nid){
+        if(!visited[nid]){ visited[nid]=true; queue.push(nid); }
+      });
     });
   }
   return visited;
@@ -2570,7 +2649,6 @@ function swapNodeHierarchy(topId, ridA, ridB){
 
 
 function autoLayoutNodes(topId, rootId, idSet, moveRowId){
-  var nameToId = nameToIdByRegion[topId];
   var visited = {};
   var layerOf = {};
   var order = [];
@@ -2591,11 +2669,14 @@ function autoLayoutNodes(topId, rootId, idSet, moveRowId){
         if(moveRowId && !visited[moveRowId]){ visited[moveRowId]=true; queue.push([moveRowId, depth+1]); }
         return;
       }
-      var nid = nameToId[cname];
-      if(nid && (idSet[nid] || nid===moveRowId) && !visited[nid]){
-        visited[nid] = true;
-        queue.push([nid, depth+1]);
-      }
+      // 이름이 겹치는 노드가 있으면 모두 따라간다. 한쪽만 골라 버리면 나머지 한쪽과
+      // 그 아래 가지가 통째로 그래프에서 사라진다.
+      idsForName(topId, cname).forEach(function(nid){
+        if((idSet[nid] || nid===moveRowId) && !visited[nid]){
+          visited[nid] = true;
+          queue.push([nid, depth+1]);
+        }
+      });
     });
   }
   var LAYER_W = 220, NODE_H = 80; // grid-aligned (multiples of the 20px drag-snap grid)
@@ -2700,6 +2781,20 @@ function renderClusterCanvasScreen(main, crumb){
   toolbar.appendChild(backBtn); toolbar.appendChild(resetBtn); toolbar.appendChild(hierarchySwapBtn);
   toolbar.appendChild(lockBtn); toolbar.appendChild(legend); toolbar.appendChild(hint);
   wrap.appendChild(toolbar);
+
+  // 연결은 이름으로만 걸리므로, 같은 지역에 이름이 겹치면 그 이름을 가리키는 링크가
+  // 어느 쪽을 뜻하는지 정할 수 없다. 그래프는 양쪽 모두로 선을 긋되, 사실을 알려 준다.
+  var dupNames = duplicateNodeNames(topId);
+  var dupIdSet = {};
+  dupNames.forEach(function(n){ idsForName(topId, n).forEach(function(id){ dupIdSet[id]=true; }); });
+  if(dupNames.length){
+    var warn = document.createElement('div'); warn.className='dupNameWarn';
+    warn.innerHTML = '⚠ 이 지역에 이름이 겹치는 노드가 있어요: '
+      + dupNames.map(function(n){ return '<b>'+escapeHtml(n)+'</b> ('+idsForName(topId,n).length+'개)'; }).join(', ')
+      + '<br>연결은 이름으로 걸리기 때문에, 이 이름을 가리키는 선은 같은 이름의 노드 <b>모두</b>로 이어집니다. '
+      + '의도한 한쪽만 연결하려면 노드 이름을 서로 다르게 바꿔주세요.';
+    wrap.appendChild(warn);
+  }
 
   var canvasWrap = document.createElement('div'); canvasWrap.id='clusterCanvasWrap';
   var inner = document.createElement('div'); inner.id='clusterCanvasInner';
@@ -2854,7 +2949,10 @@ function renderClusterCanvasScreen(main, crumb){
       var fw = fromEl ? fromEl.offsetWidth : 150;
       var fh = fromEl ? fromEl.offsetHeight : 50;
       function edgeTo(targetName, cls){
-        var tid = targetName==='이동한다' ? tree.moveRowId : nameToId[targetName];
+        var targets = targetName==='이동한다' ? [tree.moveRowId] : idsForName(topId, targetName);
+        targets.forEach(function(tid){ edgeToId(tid, cls); });
+      }
+      function edgeToId(tid, cls){
         if(!tid || !nodeEls[tid]) return;
         var toPos = nodePos(tid);
         var toEl = nodeEls[tid];
@@ -2889,8 +2987,10 @@ function renderClusterCanvasScreen(main, crumb){
       .concat(parseChoices(row[C['실패 스크립트']]||''));
     var out = [];
     names.forEach(function(n){
-      var tid = n==='이동한다' ? tree.moveRowId : nameToId[n];
-      if(tid && nodeEls[tid] && tid!==rid && out.indexOf(tid)===-1) out.push(tid);
+      var targets = n==='이동한다' ? [tree.moveRowId] : idsForName(topId, n);
+      targets.forEach(function(tid){
+        if(tid && nodeEls[tid] && tid!==rid && out.indexOf(tid)===-1) out.push(tid);
+      });
     });
     return out;
   }
@@ -2998,6 +3098,13 @@ function renderClusterCanvasScreen(main, crumb){
     if(cnToolbar.children.length) box.appendChild(cnToolbar);
 
     var nameDiv = document.createElement('div'); nameDiv.className='cnName'; nameDiv.textContent = row[C['지역명']];
+    if(dupIdSet[rid]){
+      box.classList.add('dupNameNode');
+      var dupBadge = document.createElement('span'); dupBadge.className='cnDupBadge';
+      dupBadge.textContent = '이름중복';
+      dupBadge.title = '같은 지역에 이름이 같은 노드가 또 있어요 (' + rid + ') — 링크가 양쪽 모두로 이어집니다';
+      nameDiv.appendChild(dupBadge);
+    }
     var typeDiv = document.createElement('div'); typeDiv.className='cnType'; typeDiv.textContent = row[C['종류 코드']]||'';
     box.appendChild(nameDiv); box.appendChild(typeDiv);
     var metaDiv = document.createElement('div'); metaDiv.className='cnMeta';
@@ -3399,26 +3506,46 @@ function itemExistsById(id){
   var rows=(DATA.items.rows||[]).concat(DATA.keyItems.rows||[]);
   return rows.some(function(r){ return String(r[0]||'').trim()===v; });
 }
-function nodeValidation(row){
+/* 필수 항목 검사. 어느 "칸"이 비었는지까지 같이 돌려줘야 편집기에서 그 칸을 짚어 줄 수 있다.
+   col은 시트 헤더명이며, 노드 편집기의 각 필드에 붙여 둔 data-col 과 짝이 된다. */
+function nodeValidationDetailed(row){
   var code=String(row[C['종류 코드']]||''), missing=[];
-  if(isDiceType(code)&&!String(row[C['주사위 목표치']]||'').trim())missing.push('주사위 목표치');
+  function need(cond, label, col){ if(cond) missing.push({label:label, col:col}); }
+  var TRADE_ITEM='지역거래 시, 교단원이 낼 아이템ID';
+  var TRADE_GOLD='지역거래 시, 교단원이 낼 골드 상한가';
+
+  need(isDiceType(code)&&!String(row[C['주사위 목표치']]||'').trim(), '주사위 목표치', '주사위 목표치');
   if(is04IGGI(code)){
-    var tradeItem=String(row[C['지역거래 시, 교단원이 낼 아이템ID']]||'').trim();
-    if(!tradeItem) missing.push('교단원이 낼 아이템');
-    else if(!itemExistsById(tradeItem)) missing.push('존재하지 않는 교단원 거래 아이템');
-    if(!String(row[C['지역거래 시, 교단원이 낼 골드 상한가']]||'').trim())missing.push('교단원이 낼 골드 상한가');
+    var tradeItem=String(row[C[TRADE_ITEM]]||'').trim();
+    if(!tradeItem) need(true, '교단원이 낼 아이템', TRADE_ITEM);
+    else need(!itemExistsById(tradeItem), '존재하지 않는 교단원 거래 아이템', TRADE_ITEM);
+    need(!String(row[C[TRADE_GOLD]]||'').trim(), '교단원이 낼 골드 상한가', TRADE_GOLD);
   }
   if(is04II(code)){
     var farmItem=String(row[C['파밍 아이템 ID']]||'').trim();
-    if(!farmItem) missing.push('파밍 아이템');
-    else if(!itemExistsById(farmItem)) missing.push('존재하지 않는 파밍 아이템');
-    var tradeItem2=String(row[C['지역거래 시, 교단원이 낼 아이템ID']]||'').trim();
-    if(!tradeItem2) missing.push('교단원이 낼 아이템');
-    else if(!itemExistsById(tradeItem2)) missing.push('존재하지 않는 교단원 거래 아이템');
+    if(!farmItem) need(true, '파밍 아이템', '파밍 아이템 ID');
+    else need(!itemExistsById(farmItem), '존재하지 않는 파밍 아이템', '파밍 아이템 ID');
+    var tradeItem2=String(row[C[TRADE_ITEM]]||'').trim();
+    if(!tradeItem2) need(true, '교단원이 낼 아이템', TRADE_ITEM);
+    else need(!itemExistsById(tradeItem2), '존재하지 않는 교단원 거래 아이템', TRADE_ITEM);
   }
-  if(isFirstExploration(row)&&!String(row[C['최초 탐사가 아닐 시 실패 스크립트']]||'').trim())missing.push('최초 탐사가 아닐 시 실패 스크립트');
-  if(raceCode(row)&&!String(row[C['종족이 아닐 때 스크립트']]||'').trim())missing.push('종족이 아닐 때 스크립트');
-  return missing;
+  need(isFirstExploration(row)&&!String(row[C['최초 탐사가 아닐 시 실패 스크립트']]||'').trim(),
+       '최초 탐사가 아닐 시 실패 스크립트', '최초 탐사가 아닐 시 실패 스크립트');
+  need(raceCode(row)&&!String(row[C['종족이 아닐 때 스크립트']]||'').trim(),
+       '종족이 아닐 때 스크립트', '종족이 아닐 때 스크립트');
+  // 편집기에서 * 로 필수 표시하던 항목인데 검사에서 빠져 있었다. 표시와 검사를 일치시킨다.
+  if(C['최초 유일 지급 여부']!==undefined){
+    need(String(row[C['최초 유일 지급 여부']]||'').trim().toUpperCase()==='Y'
+         && !String(row[C['유일 아이템 소진 스크립트']]||'').trim(),
+         '유일 아이템 소진 스크립트', '유일 아이템 소진 스크립트');
+  }
+  // 같은 칸이 두 번 걸리면(04_I_GGI + 04_II 동시) 한 번만 남긴다
+  var seen={}, out=[];
+  missing.forEach(function(m){ var k=m.col+'|'+m.label; if(!seen[k]){ seen[k]=1; out.push(m); } });
+  return out;
+}
+function nodeValidation(row){
+  return nodeValidationDetailed(row).map(function(m){ return m.label; });
 }
 function typeTagsForRow(row){
   var tags=[],code=String(row[C['종류 코드']]||'');
@@ -3451,7 +3578,93 @@ function raceSpecificField(row){
   w.appendChild(sel);var h=document.createElement('div');h.style.cssText='font-size:10px;color:var(--text-faint);margin-top:3px;';h.textContent='값이 있으면 「종족이 아닐 때 스크립트」가 필수입니다.';w.appendChild(h);return w;
 }
 function multiTypeCodeField(row){ var w=document.createElement('div');w.className='field';var l=document.createElement('label');l.textContent='종류 코드';w.appendChild(l);var cur=typeCodesArray(row[C['종류 코드']]),sel=document.createElement('select');sel.multiple=true;sel.size=7;sel.style.cssText='border:1px solid var(--border-strong);border-radius:2px;padding:5px;background:var(--bg);font-family:var(--mono);font-size:12px;width:100%;box-sizing:border-box;';TYPE_CODES.forEach(function(x){var o=document.createElement('option');o.value=x;o.textContent=x;if(cur.indexOf(x)!==-1)o.selected=true;sel.appendChild(o);});sel.addEventListener('change',function(){var v=Array.prototype.map.call(sel.selectedOptions,function(o){return o.value;}),d=v.filter(function(x){return x.indexOf('INCUNTR_03_')===0;});if(d.length)v=v.filter(function(x){return x.indexOf('INCUNTR_03_')!==0;}).concat(d);row[C['종류 코드']]=v.join(',');markDirty();refreshNodeEditorTags(row);});w.appendChild(sel);var h=document.createElement('div');h.style.cssText='font-size:10px;color:var(--text-faint);margin-top:3px;';h.textContent='03 계열은 여러 능력치를 동시에 선택할 수 있습니다.';w.appendChild(h);return w;}
-function refreshNodeEditorTags(row){var e=document.getElementById('nodeValidationTags');if(!e)return;e.innerHTML='';typeTagsForRow(row).forEach(function(t){var b=document.createElement('span');b.className='badge typeTag '+t.cls;b.textContent=t.text;if(t.title)b.title=t.title;e.appendChild(b);});}
+// 필드 wrap에 "이 칸이 시트의 어느 컬럼인지"를 새겨 둔다. 필수 항목 하이라이트가 이걸로 칸을 찾는다.
+function markFieldCol(wrap, colName){ if(wrap) wrap.setAttribute('data-col', colName); return wrap; }
+var __missingBannerArmed = false;   // 이 편집기 세션에서 저장이 한 번이라도 일어났는지
+var __lastMissingSignature = null;  // 마지막으로 알린 누락 항목 구성(중복 알림 방지)
+function refreshNodeEditorTags(row){
+  var e=document.getElementById('nodeValidationTags');
+  if(e){
+    e.innerHTML='';
+    typeTagsForRow(row).forEach(function(t){var b=document.createElement('span');b.className='badge typeTag '+t.cls;b.textContent=t.text;if(t.title)b.title=t.title;e.appendChild(b);});
+  }
+  applyRequiredHighlights(row);
+}
+/* 필수인데 비어 있는 칸을 편집기에서 직접 짚어 준다.
+   각 필드 wrap에 붙여 둔 data-col 로 찾아 표시하고, 채워지면 즉시 표시가 걷힌다.
+   flash=true 면(저장 시점) 잠깐 깜빡여서 새로 생긴 문제라는 것을 알린다. */
+function applyRequiredHighlights(row, flash){
+  var panel = document.getElementById('nodePanel');
+  if(!panel || !row) return [];
+  var missing = nodeValidationDetailed(row);
+  var byCol = {};
+  missing.forEach(function(m){ (byCol[m.col] = byCol[m.col] || []).push(m.label); });
+
+  panel.querySelectorAll('.field[data-col]').forEach(function(f){
+    var labels = byCol[f.getAttribute('data-col')];
+    var why = f.querySelector('.missingWhy');
+    if(labels){
+      f.classList.add('missingRequired');
+      if(!why){ why = document.createElement('div'); why.className='missingWhy'; f.appendChild(why); }
+      why.textContent = '⚠ ' + labels.join(' · ') + ' — 필수 항목이에요';
+      if(flash){
+        f.classList.remove('justFlagged');
+        void f.offsetWidth;              // 애니메이션 재시작
+        f.classList.add('justFlagged');
+      }
+    } else {
+      f.classList.remove('missingRequired','justFlagged');
+      if(why) why.remove();
+    }
+  });
+
+  var banner = document.getElementById('npMissingBanner');
+  if(banner){
+    // 칸 하이라이트는 늘 보여주되(빈 필수 칸은 언제나 빈 것이므로), 상단 요약 배너는
+    // "저장됐는데 비어 있다"는 뜻이므로 실제 저장이 한 번 일어난 뒤에만 띄운다.
+    if(!missing.length || !__missingBannerArmed){ banner.style.display='none'; banner.innerHTML=''; }
+    else {
+      banner.style.display='';
+      banner.innerHTML = '';
+      var head = document.createElement('div');
+      head.innerHTML = '⚠ 필수 항목 <b>'+missing.length+'건</b>이 비어 있는 채로 저장됐어요. 아래 칸을 채워주세요.';
+      banner.appendChild(head);
+      var seenCol = {};
+      missing.forEach(function(m){
+        if(seenCol[m.col]) return;
+        seenCol[m.col] = true;
+        var jump = document.createElement('span'); jump.className='npMissJump';
+        jump.textContent = m.label;
+        jump.addEventListener('click', function(){
+          var f = panel.querySelector('.field[data-col="'+m.col.replace(/"/g,'\\"')+'"]');
+          if(!f) return;
+          f.scrollIntoView({behavior:'smooth', block:'center'});
+          var inp = f.querySelector('input,textarea,select');
+          if(inp) setTimeout(function(){ inp.focus(); }, 250);
+        });
+        banner.appendChild(jump);
+      });
+    }
+  }
+  return missing;
+}
+// 저장 시점에 열려 있는 노드 편집기의 누락 필수 항목을 짚어 준다.
+function flagMissingRequiredOnSave(){
+  if(!__collabPanel || !__collabPanel.rowId) return;
+  var overlay = document.getElementById('nodePanelOverlay');
+  if(!overlay || !overlay.classList.contains('open')) return;
+  var idx = rowById[__collabPanel.rowId];
+  var row = (idx===undefined) ? null : DATA.sheet1.rows[idx];
+  if(!row) return;
+  // 자동 저장은 편집 중 수시로 일어난다. 매번 토스트를 띄우면 소음이 되므로,
+  // 빠진 항목의 구성이 실제로 달라졌을 때만 알리고 깜빡인다(하이라이트 자체는 항상 최신).
+  var sig = nodeValidationDetailed(row).map(function(m){ return m.col+'|'+m.label; }).join(',');
+  var changed = (sig !== __lastMissingSignature);
+  __lastMissingSignature = sig;
+  __missingBannerArmed = true;
+  var missing = applyRequiredHighlights(row, changed);
+  if(missing.length && changed) toast('필수 항목 '+missing.length+'건이 비어 있어요 — 빨간 칸을 확인해주세요');
+}
 
 function fieldSelect(label, value, options, onChange){
   var wrap = document.createElement('div'); wrap.className='field';
@@ -3567,6 +3780,8 @@ function renderNodePanel(topId, rowId){
   panel.innerHTML='';
   ensureBotAreaColumns();
   collabClearPanelBindings(); __collabPanel = {topId:topId, rowId:rowId};
+  __missingBannerArmed = false;
+  __lastMissingSignature = null;
   var idx = rowById[rowId];
   var r = DATA.sheet1.rows[idx];
 
@@ -3607,30 +3822,31 @@ function renderNodePanel(topId, rowId){
     var lockedNote = document.createElement('div'); lockedNote.style.cssText='font-size:10px;color:var(--text-faint);margin-top:2px;';
     lockedNote.textContent=isLockedHeader?'지역 시작 노드는 항상 INCUNTR_00으로 고정돼요':'이동한다 노드는 항상 INCUNTR_99로 고정돼요'; lockedField.appendChild(lockedNote); diceRow.appendChild(lockedField);
   } else { diceRow.appendChild(multiTypeCodeField(r)); }
-  diceRow.appendChild(fieldInput('주사위 목표치'+(isDiceType(r[C['종류 코드']])?' *':''), r[C['주사위 목표치']], function(v){r[C['주사위 목표치']]=v;refreshNodeEditorTags(r);}));
+  diceRow.appendChild(markFieldCol(fieldInput('주사위 목표치'+(isDiceType(r[C['종류 코드']])?' *':''), r[C['주사위 목표치']], function(v){r[C['주사위 목표치']]=v;refreshNodeEditorTags(r);}), '주사위 목표치'));
   body.appendChild(diceRow);
   var validationTags=document.createElement('div');validationTags.id='nodeValidationTags';validationTags.style.cssText='display:flex;gap:5px;flex-wrap:wrap;align-items:center;';body.appendChild(validationTags);
+  var missingBanner=document.createElement('div');missingBanner.id='npMissingBanner';missingBanner.style.display='none';body.appendChild(missingBanner);
 
   body.appendChild(scriptFieldEditor('성공 스크립트', topId, r, '성공 스크립트'));
   body.appendChild(scriptFieldEditor('실패 스크립트', topId, r, '실패 스크립트'));
 
   var farmRow1=document.createElement('div');farmRow1.className='fieldRow';
-  farmRow1.appendChild(itemSelectField('파밍 아이템',r[C['파밍 아이템 ID']],function(v){r[C['파밍 아이템 ID']]=v;refreshNodeEditorTags(r);},is04II(r[C['종류 코드']])));
+  farmRow1.appendChild(markFieldCol(itemSelectField('파밍 아이템',r[C['파밍 아이템 ID']],function(v){r[C['파밍 아이템 ID']]=v;refreshNodeEditorTags(r);},is04II(r[C['종류 코드']])), '파밍 아이템 ID'));
   farmRow1.appendChild(fieldInput('파밍 아이템 수',r[C['파밍 아이템 수']],function(v){r[C['파밍 아이템 수']]=v;}));body.appendChild(farmRow1);
   var farmRow2=document.createElement('div');farmRow2.className='fieldRow2';
   farmRow2.appendChild(fieldInput('파밍 골드',r[C['파밍 골드']],function(v){r[C['파밍 골드']]=v;}));
   farmRow2.appendChild(fieldInput('파밍 경험치',r[C['파밍 경험치']],function(v){r[C['파밍 경험치']]=v;}));body.appendChild(farmRow2);
   var tradeRow=document.createElement('div');tradeRow.className='fieldRow';
-  tradeRow.appendChild(itemSelectField('지역거래 시, 교단원이 낼 아이템',r[C['지역거래 시, 교단원이 낼 아이템ID']],function(v){r[C['지역거래 시, 교단원이 낼 아이템ID']]=v;refreshNodeEditorTags(r);},isTradeType(r[C['종류 코드']])));
-  tradeRow.appendChild(fieldInput('지역거래 시, 교단원이 낼 골드 상한가'+(is04IGGI(r[C['종류 코드']])?' *':''),r[C['지역거래 시, 교단원이 낼 골드 상한가']],function(v){r[C['지역거래 시, 교단원이 낼 골드 상한가']]=v;refreshNodeEditorTags(r);}));body.appendChild(tradeRow);
+  tradeRow.appendChild(markFieldCol(itemSelectField('지역거래 시, 교단원이 낼 아이템',r[C['지역거래 시, 교단원이 낼 아이템ID']],function(v){r[C['지역거래 시, 교단원이 낼 아이템ID']]=v;refreshNodeEditorTags(r);},isTradeType(r[C['종류 코드']])), '지역거래 시, 교단원이 낼 아이템ID'));
+  tradeRow.appendChild(markFieldCol(fieldInput('지역거래 시, 교단원이 낼 골드 상한가'+(is04IGGI(r[C['종류 코드']])?' *':''),r[C['지역거래 시, 교단원이 낼 골드 상한가']],function(v){r[C['지역거래 시, 교단원이 낼 골드 상한가']]=v;refreshNodeEditorTags(r);}), '지역거래 시, 교단원이 낼 골드 상한가'));body.appendChild(tradeRow);
 
   var conditionRow = document.createElement('div'); conditionRow.className='fieldRow';
   conditionRow.appendChild(firstExplorationField(r));
   conditionRow.appendChild(raceSpecificField(r));
   body.appendChild(conditionRow);
 
-  body.appendChild(fieldTextarea('최초 탐사가 아닐 시 실패 스크립트'+(isFirstExploration(r)?' *':''), r[C['최초 탐사가 아닐 시 실패 스크립트']], function(v){ r[C['최초 탐사가 아닐 시 실패 스크립트']]=v; refreshNodeEditorTags(r); }, 3));
-  body.appendChild(fieldTextarea('종족이 아닐 때 스크립트'+(raceCode(r)?' *':''), r[C['종족이 아닐 때 스크립트']], function(v){ r[C['종족이 아닐 때 스크립트']]=v; refreshNodeEditorTags(r); }, 3));
+  body.appendChild(markFieldCol(fieldTextarea('최초 탐사가 아닐 시 실패 스크립트'+(isFirstExploration(r)?' *':''), r[C['최초 탐사가 아닐 시 실패 스크립트']], function(v){ r[C['최초 탐사가 아닐 시 실패 스크립트']]=v; refreshNodeEditorTags(r); }, 3), '최초 탐사가 아닐 시 실패 스크립트'));
+  body.appendChild(markFieldCol(fieldTextarea('종족이 아닐 때 스크립트'+(raceCode(r)?' *':''), r[C['종족이 아닐 때 스크립트']], function(v){ r[C['종족이 아닐 때 스크립트']]=v; refreshNodeEditorTags(r); }, 3), '종족이 아닐 때 스크립트'));
 
   var keyRow = document.createElement('div'); keyRow.className='fieldRow';
   keyRow.appendChild(ynSelectField('키아이템 필요 여부', r[C['키아이템 필요 여부']], function(v){ r[C['키아이템 필요 여부']]=v; }, 'N — 필요 없음', 'Y — 필요'));
@@ -3642,7 +3858,7 @@ function renderNodePanel(topId, rowId){
   uniqueRow.appendChild(ynSelectField('최초 유일 지급 여부', r[C['최초 유일 지급 여부']], function(v){ r[C['최초 유일 지급 여부']]=v; refreshNodeEditorTags(r); }, 'N — 일반 지급', 'Y — 최초 1인만 지급'));
   uniqueRow.appendChild(fieldInput('갈림길 그룹', r[C['갈림길 그룹']], function(v){ r[C['갈림길 그룹']]=v; }));
   body.appendChild(uniqueRow);
-  body.appendChild(fieldTextarea('유일 아이템 소진 스크립트'+(String(r[C['최초 유일 지급 여부']]||'').trim().toUpperCase()==='Y'?' *':''), r[C['유일 아이템 소진 스크립트']], function(v){ r[C['유일 아이템 소진 스크립트']]=v; }, 3));
+  body.appendChild(markFieldCol(fieldTextarea('유일 아이템 소진 스크립트'+(String(r[C['최초 유일 지급 여부']]||'').trim().toUpperCase()==='Y'?' *':''), r[C['유일 아이템 소진 스크립트']], function(v){ r[C['유일 아이템 소진 스크립트']]=v; refreshNodeEditorTags(r); }, 3), '유일 아이템 소진 스크립트'));
 
   var bigoField = fieldTextarea('비고', r[C['비고']], function(v){ r[C['비고']]=v; }, 2);
   body.appendChild(bigoField);
