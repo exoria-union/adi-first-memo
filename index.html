@@ -3977,7 +3977,6 @@ function scriptFieldEditor(label, topId, row, colName){
       .filter(function(v){ return v; });
     row[C[colName]] = joinScript(narrativeTa.value, vals, writeKeyword);
     markDirty();
-    refreshGraphBehindPanel();
   }
 
   // 선택지의 대상은 "이 지역 안에 실제로 있는 노드"여야 한다. 자유 입력이던 시절에는
@@ -4040,6 +4039,7 @@ function scriptFieldEditor(label, topId, row, colName){
       }
       sync();
       buildTargetOptions(sel, sel.value);
+      refreshGraphBehindPanel();
     });
     var jumpBtn = document.createElement('button'); jumpBtn.className='ghost'; jumpBtn.textContent='→'; jumpBtn.title='이 노드 편집으로 이동';
     jumpBtn.addEventListener('click', function(){
@@ -4050,7 +4050,7 @@ function scriptFieldEditor(label, topId, row, colName){
       else alert('"'+name+'"과(와) 일치하는 노드를 이 지역에서 찾을 수 없어요.');
     });
     var rm = document.createElement('button'); rm.className='ghost'; rm.textContent='✕'; rm.title='이 선택지(연결)만 끊기 · 노드는 남아요';
-    rm.addEventListener('click', function(){ rowEl.remove(); sync(); });
+    rm.addEventListener('click', function(){ rowEl.remove(); sync(); refreshGraphBehindPanel(); });
     rowEl.appendChild(sel); rowEl.appendChild(jumpBtn); rowEl.appendChild(rm);
     choicesWrap.appendChild(rowEl);
   }
