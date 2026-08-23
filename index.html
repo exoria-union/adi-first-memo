@@ -5499,6 +5499,54 @@ function parsedTableForImport(wb, candidates, preferredIndex){
 function normalizeImportedRows(table){
   return table && table.headers ? {headers:table.headers.slice(), rows:table.rows.map(function(r){ return r.slice(); })} : null;
 }
+/* ---------------- ID 열 찾기 ----------------
+   내보내기 머리글은 'ID'가 아니라 '아이템ID'·'키아이템ID'·'서브퀘스트ID'다. 그런데 불러오기 검사는
+   'ID' 정확 일치만 봤기 때문에, 이 도구가 방금 내보낸 파일조차 "ID 열이 없습니다"로 거부됐다.
+   'ID' / '아이디' / '아이템ID' / 'item id' / 'item_id' 같은 변형을 모두 ID 열로 인정한다. */
+function idColumnIndex(headers){
+  if(!headers) return -1;
+  for(var i=0;i<headers.length;i++){
+    var raw = String(headers[i]==null?'':headers[i]).replace(/^\uFEFF/,'').trim();
+    if(!raw) continue;
+    var n = raw.replace(/[\s_\-().]/g,'').toLowerCase();
+    if(n==='id' || n==='아이디') return i;
+    if(/^[가-힣]+(id|아이디)$/.test(n)) return i;                    // 아이템ID · 키아이템ID · 서브퀘스트ID
+    if(/^[0-9a-z가-힣][0-9a-z가-힣\s_\-]*[\s_\-](id|아이디)$/i.test(raw)) return i; // item id · item_id · 아이템 목록 ID
+  }
+  return -1;
+}
+/* 머리글이 첫 줄이 아닌 시트(제목 줄·안내 줄이 위에 있는 경우)도 살려준다.
+   앞쪽 다섯 줄 안에서 ID 열이 보이는 줄을 머리글로 삼는다. */
+function tableWithIdHeader(table){
+  if(!table) return null;
+  var idIdx = idColumnIndex(table.headers);
+  if(idIdx!==-1) return {table:table, idIdx:idIdx};
+  var limit = Math.min(5, table.rows.length);
+  for(var i=0;i<limit;i++){
+    var cand = idColumnIndex(table.rows[i]);
+    if(cand!==-1) return {table:{headers:table.rows[i], rows:table.rows.slice(i+1)}, idIdx:cand};
+  }
+  return {table:table, idIdx:-1};
+}
+// 앱 전체가 r[0]을 ID로 보기 때문에, ID 열이 첫 칸이 아니면 맨 앞으로 옮겨 맞춘다.
+function withIdFirst(table, idIdx){
+  if(!table || !(idIdx>0)) return table;
+  function move(arr){
+    var a = arr.slice();
+    var v = a.splice(idIdx,1)[0];
+    a.unshift(v===undefined?'':v);
+    return a;
+  }
+  return { headers: move(table.headers), rows: table.rows.map(move) };
+}
+function sheetHeaderHint(table){
+  var hs = (table && table.headers ? table.headers : []).map(function(h){ return String(h==null?'':h).trim(); }).filter(Boolean);
+  return hs.length ? hs.join(' | ') : '(비어 있음)';
+}
+function noIdColumnMessage(label, table, example){
+  return label + ' 시트에서 ID 열을 찾지 못했어요.\n\n읽어들인 머리글: ' + sheetHeaderHint(table)
+    + '\n\nID 열 이름을 "ID" 또는 "' + example + '"처럼 지어주세요. (머리글은 표의 첫 줄에 있어야 합니다)';
+}
 function importSingleXlsx(mode, file){
   var reader = new FileReader();
   reader.onload = function(){
@@ -5508,16 +5556,13 @@ function importSingleXlsx(mode, file){
         var sItems = parsedTableForImport(wb, [exportName('items'), DEFAULT_EXPORT_NAMES.items, '아이템'], 0);
         var sKey = parsedTableForImport(wb, [exportName('keyItems'), DEFAULT_EXPORT_NAMES.keyItems, '키아이템'], 1);
         if(!sItems && !sKey){ alert('아이템 또는 키아이템 시트를 찾지 못했어요.'); return; }
-        if(sItems && sItems.headers.indexOf('ID')===-1){
-          var maybeId = sItems.headers.findIndex(function(h){ return String(h).trim().toLowerCase()==='id'; });
-          if(maybeId===-1){ alert('아이템 시트에 ID 열이 없습니다.'); return; }
-        }
-        if(!sKey){ sKey = null; }
-        if(!sItems){ sItems = null; }
+        var pItems = tableWithIdHeader(sItems), pKey = tableWithIdHeader(sKey);
+        if(pItems && pItems.idIdx===-1){ alert(noIdColumnMessage('아이템', pItems.table, '아이템ID')); return; }
+        if(pKey && pKey.idIdx===-1){ alert(noIdColumnMessage('키아이템', pKey.table, '키아이템ID')); return; }
         if(!confirm('아이템 XLSX를 불러오면 현재 아이템/키아이템 목록만 파일 내용으로 교체됩니다. 지도와 서브퀘스트는 유지됩니다. 계속할까요?')) return;
         var oldImages = DATA.itemImages ? JSON.parse(JSON.stringify(DATA.itemImages)) : {};
-        if(sItems) DATA.items = normalizeImportedRows(sItems);
-        if(sKey) DATA.keyItems = normalizeImportedRows(sKey);
+        if(pItems) DATA.items = withIdFirst(normalizeImportedRows(pItems.table), pItems.idIdx);
+        if(pKey) DATA.keyItems = withIdFirst(normalizeImportedRows(pKey.table), pKey.idIdx);
         DATA.itemImages = {};
         var keepIds = {};
         DATA.items.rows.concat(DATA.keyItems.rows).forEach(function(r){ if(r[0]!==undefined && r[0]!==null && r[0]!=='') keepIds[String(r[0])] = true; });
@@ -5528,11 +5573,11 @@ function importSingleXlsx(mode, file){
         toast('아이템/키아이템 XLSX를 불러왔어요 · 기존 이미지는 같은 ID에 한해 유지했습니다');
       }else if(mode==='subquests'){
         var sSub = parsedTableForImport(wb, [exportName('subquests'), DEFAULT_EXPORT_NAMES.subquests, '서브퀘스트'], 0);
-        if(!sSub || sSub.headers.indexOf('ID')===-1){
-          alert('서브퀘스트 시트를 찾지 못했어요. 첫 번째 시트에 ID 열이 필요합니다.'); return;
-        }
+        if(!sSub){ alert('서브퀘스트 시트를 찾지 못했어요. 첫 번째 시트에 서브퀘스트 표가 있어야 합니다.'); return; }
+        var pSub = tableWithIdHeader(sSub);
+        if(pSub.idIdx===-1){ alert(noIdColumnMessage('서브퀘스트', pSub.table, '서브퀘스트ID')); return; }
         if(!confirm('서브퀘스트 XLSX를 불러오면 현재 서브퀘스트 목록만 파일 내용으로 교체됩니다. 지도와 아이템은 유지됩니다. 계속할까요?')) return;
-        DATA.subquests = normalizeImportedRows(sSub);
+        DATA.subquests = withIdFirst(normalizeImportedRows(pSub.table), pSub.idIdx);
         rebuildSqIndex(); rebuildAllCrossRefs();
         nav.sqId=null;
         markDirty(); render();
