@@ -1065,6 +1065,9 @@ function rebuildRegionsTreeFromSheet1(){
   var scriptIdx = C['스크립트(내용)'], succIdx = C['성공 스크립트'], failIdx = C['실패 스크립트'];
   var rows = DATA.sheet1.rows;
 
+  if(!DATA.nodeHomeCluster || typeof DATA.nodeHomeCluster !== 'object') DATA.nodeHomeCluster = {};
+  var homeMap = DATA.nodeHomeCluster;
+
   var byTop = {};
   rows.forEach(function(r,i){
     var top = r[topIdx] || r[idIdx];
@@ -1096,6 +1099,7 @@ function rebuildRegionsTreeFromSheet1(){
     // 부모가 둘이면 같은 이름의 사본도 각자 제 갈래로 나뉜다.
     var assigned = {};
     var clusters = [];
+    var clusterRootIds = [];   // clusters[i]의 root 행 ID(고아 노드의 "원래 집" 기록용)
     function claimOne(name){
       var list = byName[name] || [];
       for(var i=0;i<list.length;i++){
@@ -1103,11 +1107,19 @@ function rebuildRegionsTreeFromSheet1(){
       }
       return null;
     }
+    // ⚠ root 행은 BFS를 돌리기 전에 전부 먼저 자리를 잡아둬야 한다.
+    // 먼저 도는 세부지역이 다른 세부지역의 입구 행을 집어가면, 그 세부지역은 seed를 못 찾아
+    // 통째로 사라지고 소속 노드가 전부 고아로 떨어진다.
+    var rootSeeds = [], isClusterRootName = {};
+    clusterRoots.forEach(function(root){ isClusterRootName[root] = true; });
     clusterRoots.forEach(function(root){
       if(!(root in byName)) return;
       var seed = claimOne(root);
       if(seed===null) return;
-      var queue = [seed], members = [];
+      rootSeeds.push({root:root, seed:seed});
+    });
+    rootSeeds.forEach(function(entry){
+      var queue = [entry.seed], members = [];
       while(queue.length){
         var ri = queue.shift();
         members.push(ri);
@@ -1116,11 +1128,18 @@ function rebuildRegionsTreeFromSheet1(){
           .concat(parseChoices(rows[ri][failIdx]||''));
         nexts.forEach(function(n){
           if(n==='이동한다' || !(n in byName)) return;
+          // 다른 세부지역의 입구를 가리키는 링크는 "그리로 간다"는 뜻이지 그 세부지역을 흡수하는 게 아니다.
+          if(isClusterRootName[n] && n!==entry.root) return;
           var ni = claimOne(n);
           if(ni!==null) queue.push(ni);
         });
       }
-      clusters.push({root:root, nodeIds: members.map(function(i){ return rows[i][idIdx]; })});
+      clusters.push({root:entry.root, nodeIds: members.map(function(i){ return rows[i][idIdx]; })});
+      clusterRootIds.push(rows[entry.seed][idIdx]);
+    });
+    // 각 노드의 "원래 집"을 남긴다. 연결이 끊겨 고아가 돼도 자기 세부지역 그래프에만 뜨게 하는 근거다.
+    clusters.forEach(function(c, ci){
+      (c.nodeIds||[]).forEach(function(nid){ if(nid) homeMap[nid] = clusterRootIds[ci]; });
     });
 
     tree[topId] = {
@@ -1131,6 +1150,10 @@ function rebuildRegionsTreeFromSheet1(){
     };
   });
   DATA.regionsTree = tree;
+  // 사라진 행의 기록은 정리한다(집 정보만 남아 고아 판정을 흔들지 않게).
+  var liveRowIds = {};
+  rows.forEach(function(r){ if(r[idIdx]) liveRowIds[r[idIdx]] = true; });
+  Object.keys(homeMap).forEach(function(id){ if(!liveRowIds[id]) delete homeMap[id]; });
 }
 
 var itemById = {};
@@ -1729,6 +1752,7 @@ function addNodeAsChoice(topId, fromRowId){
   var ownerCluster = findClusterOfNode(topId, fromRowId);
   if(ownerCluster) ownerCluster.nodeIds.push(newId);
   rebuildIndexes();
+  touchNode(newId);
   markDirty();
   toast('새 노드 "'+name+'"를 추가했어요');
   return newId;
@@ -1742,6 +1766,7 @@ function addNodeForChoice(topId, fromRowId){
   var ownerCluster = findClusterOfNode(topId, fromRowId);
   if(ownerCluster && ownerCluster.nodeIds.indexOf(newId)===-1) ownerCluster.nodeIds.push(newId);
   rebuildIndexes();
+  touchNode(newId);
   markDirty();
   return {id:newId, name:name};
 }
@@ -1791,6 +1816,7 @@ function addNodeAsParent(topId, targetRowId){
     if(isRoot) ownerCluster.root = newName;
   }
   rebuildIndexes();
+  touchNode(newId);
   markDirty();
   if(reroutedCount===0 && !isRoot){
     toast('새 상위 노드 "'+newName+'"를 추가했어요 (이 노드를 가리키는 곳이 없어서, 따로 연결해줘야 해요)');
@@ -1812,6 +1838,90 @@ function addNewCluster(topId){
   rebuildIndexes();
   markDirty();
   toast('새 세부지역 "'+name+'"를 추가했어요');
+}
+/* ---------------- 노드 최근 사용 순서 ----------------
+   선택지 드롭다운을 가나다순으로 뿌리면 방금 만든 노드가 목록 한가운데 묻혀 찾기 어렵다.
+   "최근 편집 → 최근 생성" 순으로 보여주기 위한 기록이다.
+   편집 시각은 사람마다 다른 개인 기록이라 공유 문서(DATA)가 아니라 localStorage에 둔다.
+   기록이 없어도 노드 ID의 일련번호(LUM_MAIN_07 → 7)가 생성 순서를 알려주므로 항상 동작한다. */
+var NODE_TOUCH_KEY = 'lumkingdom_map_editor_node_touch_v1';
+var NODE_TOUCH = {};
+var __nodeTouchProject = undefined;
+var __nodeTouchTimer = null;
+function nodeTouchProjectKey(){ return PROJECT_ID || '__local__'; }
+function loadNodeTouch(){
+  var key = nodeTouchProjectKey();
+  if(__nodeTouchProject === key) return;
+  flushNodeTouch();
+  __nodeTouchProject = key;
+  try{ NODE_TOUCH = JSON.parse(localStorage.getItem(NODE_TOUCH_KEY)||'{}')[key] || {}; }
+  catch(e){ NODE_TOUCH = {}; }
+}
+function flushNodeTouch(){
+  clearTimeout(__nodeTouchTimer); __nodeTouchTimer = null;
+  if(__nodeTouchProject === undefined) return;
+  try{
+    var all = JSON.parse(localStorage.getItem(NODE_TOUCH_KEY)||'{}');
+    var trimmed = {};
+    Object.keys(NODE_TOUCH)
+      .sort(function(a,b){ return (NODE_TOUCH[b]||0)-(NODE_TOUCH[a]||0); })
+      .slice(0,400)
+      .forEach(function(id){ trimmed[id] = NODE_TOUCH[id]; });
+    NODE_TOUCH = trimmed;
+    all[__nodeTouchProject] = trimmed;
+    localStorage.setItem(NODE_TOUCH_KEY, JSON.stringify(all));
+  }catch(e){}
+}
+function touchNode(rowId){
+  if(!rowId) return;
+  loadNodeTouch();
+  NODE_TOUCH[rowId] = Date.now();
+  clearTimeout(__nodeTouchTimer);
+  __nodeTouchTimer = setTimeout(flushNodeTouch, 500);
+}
+// 노드 ID 꼬리의 일련번호(LUM_MAIN_07 → 7). 나중에 만든 노드일수록 크다.
+function nodeCreationSeq(rowId){
+  var m = /_(\d+)$/.exec(String(rowId||''));
+  if(m) return parseInt(m[1],10);
+  var i = rowById[rowId];
+  return i===undefined ? -1 : i;
+}
+// 이름 하나에 대한 정렬 키. 같은 이름의 행이 여럿이면 가장 최근 것을 대표로 쓴다.
+function nodeRecencyKey(topId, name){
+  loadNodeTouch();
+  var ids = idsForName(topId, name), ts = 0, seq = -1;
+  ids.forEach(function(id){
+    if((NODE_TOUCH[id]||0) > ts) ts = NODE_TOUCH[id]||0;
+    var sq = nodeCreationSeq(id); if(sq > seq) seq = sq;
+  });
+  return {name:name, ts:ts, seq:seq};
+}
+// 최근 편집 → 최근 생성 → 이름 순.
+function sortByNodeRecency(entries){
+  entries.sort(function(a,b){
+    if(b.ts !== a.ts) return b.ts - a.ts;
+    if(b.seq !== a.seq) return b.seq - a.seq;
+    return String(a.name).localeCompare(String(b.name),'ko');
+  });
+  return entries;
+}
+/* 세부지역 명단(regionsTree)을 근거로 각 노드의 "집"(소속 세부지역 root의 행 ID)을 채운다.
+   rebuildRegionsTreeFromSheet1이 돌 때는 거기서 바로 기록하지만, 부팅 직후처럼 저장된
+   regionsTree를 그대로 쓰는 경로에서는 기록이 비어 있어 이 함수가 한 번 메워준다. */
+function syncNodeHomeClusters(){
+  if(!DATA || !DATA.regionsTree) return;
+  if(!DATA.nodeHomeCluster || typeof DATA.nodeHomeCluster !== 'object') DATA.nodeHomeCluster = {};
+  var homeMap = DATA.nodeHomeCluster;
+  Object.keys(DATA.regionsTree).forEach(function(topId){
+    var t = DATA.regionsTree[topId];
+    if(!t || !t.clusters) return;
+    var byName = nameToIdByRegion[topId] || {};
+    t.clusters.forEach(function(c){
+      var homeRootId = byName[c.root];
+      if(!homeRootId) return;
+      (c.nodeIds||[]).forEach(function(nid){ if(nid) homeMap[nid] = homeRootId; });
+    });
+  });
 }
 function findClusterOfNode(topId, rowId){
   var clusters = DATA.regionsTree[topId].clusters;
@@ -2790,6 +2900,8 @@ function ensureGraphDataShape(){
   if(!DATA.gridPositions || typeof DATA.gridPositions !== 'object') DATA.gridPositions = {};
   if(!DATA.cellColors || typeof DATA.cellColors !== 'object') DATA.cellColors = {};
   if(!DATA.regionsTree || typeof DATA.regionsTree !== 'object') DATA.regionsTree = {};
+  // 노드가 마지막으로 속했던 세부지역(그 세부지역 root의 행 ID). 고아가 된 뒤에도 "원래 집"을 안다.
+  if(!DATA.nodeHomeCluster || typeof DATA.nodeHomeCluster !== 'object') DATA.nodeHomeCluster = {};
 }
 function getCanvasPos(topId, rowId){
   if(!DATA) return null;
@@ -3257,7 +3369,17 @@ function renderClusterCanvasScreen(main, crumb){
 
   // 고아 판정은 "현재 세부지역에서 안 보인다"가 아니라, 이 지역의 어떤 세부지역 root에서도
   // 도달할 수 없는 실제 노드만 대상으로 한다. 숫자/노란 표시/완전삭제가 전부 같은 orphanSet을 쓴다.
-  var orphanIds = getRegionOrphanRowIds(topId);
+  // 다만 화면에는 "원래 있던 세부지역"에서만 보여준다. 예전에는 지역 전체의 고아가 모든 세부지역
+  // 그래프에 다 떠서, 남의 세부지역 노드를 끌어온 것처럼 보였다.
+  var homeCluster = DATA.nodeHomeCluster || {};
+  var liveClusterRootIds = {};
+  (tree.clusters||[]).forEach(function(c){ var cid = nameToId[c.root]; if(cid) liveClusterRootIds[cid]=true; });
+  var orphanIds = getRegionOrphanRowIds(topId).filter(function(rid){
+    var home = homeCluster[rid];
+    if(!home) return true;                 // 소속 이력이 없는 노드(가져온 데이터 등)는 놓치지 않게 모두 표시
+    if(home===rootId) return true;         // 이 세부지역 출신
+    return !liveClusterRootIds[home];      // 출신 세부지역이 없어졌으면 여기서라도 보여준다
+  });
   var orphanSet = {}; orphanIds.forEach(function(id){ orphanSet[id]=true; });
 
   // 이동한다는 고정 출구라 연결이 없어도 화면에는 남기되, 실제 고아 개수에는 포함하지 않는다.
@@ -4147,44 +4269,101 @@ function scriptFieldEditor(label, topId, row, colName){
   // 선택지의 대상은 "이 지역 안에 실제로 있는 노드"여야 한다. 자유 입력이던 시절에는
   // 이름을 다 치기 전까지 아무 데도 닿지 않는 링크가 남고, 기존 노드와 이름이 겹치기도 했다.
   // 그래서 대상은 목록에서 고르게 하고, 새 노드가 필요하면 그 자리에서 만들어 붙인다.
+  /* 목록에는 "지금 편집 중인 세부지역의 노드"만 올린다.
+     지역 전체를 가나다순으로 뿌리면 (1) 노드가 수십 개인 지역에서 방금 만든 노드를 찾기 어렵고,
+     (2) 다른 세부지역 노드를 잘못 고르면 그 노드가 이쪽으로 끌려와 저쪽 세부지역이 통째로
+     고아가 된다. 다른 세부지역 노드가 정말 필요하면 목록 맨 아래에서 펼쳐 볼 수 있다. */
+  function targetNamesFor(sel){
+    var tree0 = DATA.regionsTree[topId] || {};
+    var selfName = row[C['지역명']];
+    // 지역 시작 노드의 선택지는 곧 "세부지역 입구 목록"이라 지역 전체를 봐야 한다.
+    var cl = isHeaderMainScript ? null : findClusterOfNode(topId, row[C['지역ID']]);
+    var homeIds = {};
+    if(cl) (cl.nodeIds||[]).forEach(function(id){ homeIds[id] = true; });
+    var byNm = {}, order = [];
+    DATA.sheet1.rows.forEach(function(r2){
+      var top = r2[C['상위지역ID(부모ID)']] || r2[C['지역ID']];
+      if(top!==topId) return;
+      var rid = r2[C['지역ID']], nm = r2[C['지역명']];
+      if(!nm || nm===selfName || nm==='이동한다' || rid===tree0.headerRowId) return;
+      if(!byNm[nm]){ byNm[nm] = {name:nm, home:false}; order.push(nm); }
+      if(homeIds[rid]) byNm[nm].home = true;
+    });
+    var here = [], other = [];
+    order.forEach(function(nm){
+      var entry = nodeRecencyKey(topId, nm);
+      (!cl || byNm[nm].home ? here : other).push(entry);
+    });
+    return { here: sortByNodeRecency(here), other: sortByNodeRecency(other),
+             scoped: !!cl && !sel.__showAllTargets, hasCluster: !!cl,
+             clusterName: cl ? cl.root : null };
+  }
   function buildTargetOptions(sel, current){
     sel.innerHTML = '';
     var empty = document.createElement('option');
     empty.value = ''; empty.textContent = '— 연결할 노드 선택 —';
     if(!current) empty.selected = true;
     sel.appendChild(empty);
+    var groups = targetNamesFor(sel);
     var seen = {};
-    var names = [];
-    DATA.sheet1.rows.forEach(function(r2){
-      var top = r2[C['상위지역ID(부모ID)']] || r2[C['지역ID']];
-      if(top!==topId) return;
-      if(r2[C['지역ID']] === DATA.regionsTree[topId].headerRowId) return;
-      var nm = r2[C['지역명']];
-      if(!nm || nm===row[C['지역명']] || seen[nm]) return;
-      seen[nm] = 1; names.push(nm);
-    });
-    names.sort(function(a,b){ return a.localeCompare(b,'ko'); });
-    names.forEach(function(nm){
-      var o = document.createElement('option'); o.value = nm; o.textContent = nm;
-      if(nm===current) o.selected = true;
-      sel.appendChild(o);
-    });
+    function addOption(parent, entry, suffix){
+      seen[entry.name] = 1;
+      var o = document.createElement('option');
+      o.value = entry.name; o.textContent = entry.name + (suffix||'');
+      if(entry.name===current) o.selected = true;
+      parent.appendChild(o);
+    }
+    function addGroup(label, list, suffix){
+      if(!list.length) return;
+      var g = document.createElement('optgroup'); g.label = label;
+      list.forEach(function(e){ addOption(g, e, suffix); });
+      sel.appendChild(g);
+    }
+    sel.__otherNames = {};
+    groups.other.forEach(function(e){ sel.__otherNames[e.name] = 1; });
+    if(groups.scoped){
+      groups.here.forEach(function(e){ addOption(sel, e); });
+      if(groups.other.length){
+        var more = document.createElement('option');
+        more.value = '__showall__';
+        more.textContent = '▸ 다른 세부지역 · 고아 노드도 보기 ('+groups.other.length+'개)';
+        sel.appendChild(more);
+      }
+    } else if(groups.hasCluster){
+      addGroup('이 세부지역'+(groups.clusterName?' — '+groups.clusterName:''), groups.here);
+      addGroup('⚠ 다른 세부지역 · 고아 노드 (연결하면 이쪽으로 옮겨와요)', groups.other);
+    } else {
+      groups.here.forEach(function(e){ addOption(sel, e); });
+    }
     if(!seen['이동한다']){
-      var mv = document.createElement('option'); mv.value='이동한다'; mv.textContent='이동한다 (없음 — 고르면 새로 만들어요)';
+      var mv = document.createElement('option'); mv.value='이동한다';
+      mv.textContent = idsForName(topId,'이동한다').length ? '이동한다' : '이동한다 (없음 — 고르면 새로 만들어요)';
       if(current==='이동한다') mv.selected = true;
       sel.appendChild(mv);
     }
+    // 목록을 이 세부지역으로 좁혔어도, 이미 다른 세부지역으로 걸려 있던 링크는 반드시 옵션으로
+    // 남겨야 한다. 옵션이 없으면 select 값이 빈 값이 되어, 옆 선택지를 건드리는 순간 그 링크가
+    // 통째로 사라진다. 지역에 실제로 있는 노드면 "없는 노드"가 아니라 "다른 세부지역"으로 표시한다.
+    var inRegion = {};
+    groups.here.concat(groups.other).forEach(function(e){ inRegion[e.name] = 1; });
     if(current && !seen[current] && current!=='이동한다'){
-      var miss = document.createElement('option');
-      miss.value = current; miss.textContent = current + ' (없는 노드)'; miss.selected = true;
-      sel.appendChild(miss);
-      sel.classList.add('choiceDangling');
+      var extra = document.createElement('option');
+      extra.value = current; extra.selected = true;
+      if(inRegion[current]){
+        extra.textContent = current + ' (다른 세부지역)';
+        sel.classList.remove('choiceDangling');
+      } else {
+        extra.textContent = current + ' (없는 노드)';
+        sel.classList.add('choiceDangling');
+      }
+      sel.appendChild(extra);
     } else {
       sel.classList.remove('choiceDangling');
     }
     var mk = document.createElement('option');
     mk.value = '__new__'; mk.textContent = '＋ 새 노드를 만들어 연결…';
     sel.appendChild(mk);
+    sel.__value = current || '';
   }
 
   function addChoiceRow(val){
@@ -4192,6 +4371,17 @@ function scriptFieldEditor(label, topId, row, colName){
     var sel = document.createElement('select'); sel.className='choiceTarget';
     buildTargetOptions(sel, val||'');
     sel.addEventListener('change', function(){
+      if(sel.value==='__showall__'){
+        // 목록만 넓혀 다시 그린다. 연결은 아직 아무것도 바뀌지 않았다.
+        sel.__showAllTargets = true;
+        var keep = sel.__value || '';
+        buildTargetOptions(sel, keep);
+        sel.value = keep;
+        return;
+      }
+      if(sel.value && sel.__otherNames && sel.__otherNames[sel.value]){
+        toast('"'+sel.value+'"는 다른 세부지역 노드예요 · 연결하면 이 세부지역으로 옮겨올 수 있어요');
+      }
       if(sel.value==='__new__'){
         var made = addNodeForChoice(topId, row[C['지역ID']]);
         buildTargetOptions(sel, made.name);
@@ -4270,6 +4460,15 @@ function renderNodePanel(topId, rowId){
   panel.innerHTML='';
   ensureBotAreaColumns();
   collabClearPanelBindings(); __collabPanel = {topId:topId, rowId:rowId};
+  // 어떤 칸이든 만지면 "최근 편집"으로 기록해, 선택지 드롭다운 맨 위로 올라오게 한다.
+  // 패널 DOM은 재사용되므로 리스너는 한 번만 건다.
+  if(!panel.__touchWired){
+    panel.__touchWired = true;
+    ['input','change'].forEach(function(ev){
+      panel.addEventListener(ev, function(){ if(__collabPanel) touchNode(__collabPanel.rowId); }, true);
+    });
+  }
+  touchNode(rowId);
   __missingBannerArmed = false;
   __lastMissingSignature = null;
   var idx = rowById[rowId];
@@ -4982,6 +5181,7 @@ function rebuildProjectView(opts){
   H1=DATA.sheet1.headers; C={}; H1.forEach(function(h,i){C[h]=i;});
   var nodeRepair = repairNodeIntegrityIfNeeded();
   rebuildRegionsTreeFromSheet1(); rebuildIndexes(); rebuildItemIndex(); rebuildSqIndex();
+  syncNodeHomeClusters();
   // 지역명 인덱스가 준비된 뒤에 실행해야 획득처의 지역명 접두사를 제대로 알아본다.
   // 프로젝트를 바꾸거나 원격 데이터를 받아도 프로젝트당 1회만 수행된다.
   migratePlacementNotesToMemo();
@@ -5534,6 +5734,54 @@ function parsedTableForImport(wb, candidates, preferredIndex){
 function normalizeImportedRows(table){
   return table && table.headers ? {headers:table.headers.slice(), rows:table.rows.map(function(r){ return r.slice(); })} : null;
 }
+/* ---------------- ID 열 찾기 ----------------
+   내보내기 머리글은 'ID'가 아니라 '아이템ID'·'키아이템ID'·'서브퀘스트ID'다. 그런데 불러오기 검사는
+   'ID' 정확 일치만 봤기 때문에, 이 도구가 방금 내보낸 파일조차 "ID 열이 없습니다"로 거부됐다.
+   'ID' / '아이디' / '아이템ID' / 'item id' / 'item_id' 같은 변형을 모두 ID 열로 인정한다. */
+function idColumnIndex(headers){
+  if(!headers) return -1;
+  for(var i=0;i<headers.length;i++){
+    var raw = String(headers[i]==null?'':headers[i]).replace(/^\uFEFF/,'').trim();
+    if(!raw) continue;
+    var n = raw.replace(/[\s_\-().]/g,'').toLowerCase();
+    if(n==='id' || n==='아이디') return i;
+    if(/^[가-힣]+(id|아이디)$/.test(n)) return i;                    // 아이템ID · 키아이템ID · 서브퀘스트ID
+    if(/^[0-9a-z가-힣][0-9a-z가-힣\s_\-]*[\s_\-](id|아이디)$/i.test(raw)) return i; // item id · item_id · 아이템 목록 ID
+  }
+  return -1;
+}
+/* 머리글이 첫 줄이 아닌 시트(제목 줄·안내 줄이 위에 있는 경우)도 살려준다.
+   앞쪽 다섯 줄 안에서 ID 열이 보이는 줄을 머리글로 삼는다. */
+function tableWithIdHeader(table){
+  if(!table) return null;
+  var idIdx = idColumnIndex(table.headers);
+  if(idIdx!==-1) return {table:table, idIdx:idIdx};
+  var limit = Math.min(5, table.rows.length);
+  for(var i=0;i<limit;i++){
+    var cand = idColumnIndex(table.rows[i]);
+    if(cand!==-1) return {table:{headers:table.rows[i], rows:table.rows.slice(i+1)}, idIdx:cand};
+  }
+  return {table:table, idIdx:-1};
+}
+// 앱 전체가 r[0]을 ID로 보기 때문에, ID 열이 첫 칸이 아니면 맨 앞으로 옮겨 맞춘다.
+function withIdFirst(table, idIdx){
+  if(!table || !(idIdx>0)) return table;
+  function move(arr){
+    var a = arr.slice();
+    var v = a.splice(idIdx,1)[0];
+    a.unshift(v===undefined?'':v);
+    return a;
+  }
+  return { headers: move(table.headers), rows: table.rows.map(move) };
+}
+function sheetHeaderHint(table){
+  var hs = (table && table.headers ? table.headers : []).map(function(h){ return String(h==null?'':h).trim(); }).filter(Boolean);
+  return hs.length ? hs.join(' | ') : '(비어 있음)';
+}
+function noIdColumnMessage(label, table, example){
+  return label + ' 시트에서 ID 열을 찾지 못했어요.\n\n읽어들인 머리글: ' + sheetHeaderHint(table)
+    + '\n\nID 열 이름을 "ID" 또는 "' + example + '"처럼 지어주세요. (머리글은 표의 첫 줄에 있어야 합니다)';
+}
 function importSingleXlsx(mode, file){
   var reader = new FileReader();
   reader.onload = function(){
@@ -5543,16 +5791,13 @@ function importSingleXlsx(mode, file){
         var sItems = parsedTableForImport(wb, [exportName('items'), DEFAULT_EXPORT_NAMES.items, '아이템'], 0);
         var sKey = parsedTableForImport(wb, [exportName('keyItems'), DEFAULT_EXPORT_NAMES.keyItems, '키아이템'], 1);
         if(!sItems && !sKey){ alert('아이템 또는 키아이템 시트를 찾지 못했어요.'); return; }
-        if(sItems && sItems.headers.indexOf('ID')===-1){
-          var maybeId = sItems.headers.findIndex(function(h){ return String(h).trim().toLowerCase()==='id'; });
-          if(maybeId===-1){ alert('아이템 시트에 ID 열이 없습니다.'); return; }
-        }
-        if(!sKey){ sKey = null; }
-        if(!sItems){ sItems = null; }
+        var pItems = tableWithIdHeader(sItems), pKey = tableWithIdHeader(sKey);
+        if(pItems && pItems.idIdx===-1){ alert(noIdColumnMessage('아이템', pItems.table, '아이템ID')); return; }
+        if(pKey && pKey.idIdx===-1){ alert(noIdColumnMessage('키아이템', pKey.table, '키아이템ID')); return; }
         if(!confirm('아이템 XLSX를 불러오면 현재 아이템/키아이템 목록만 파일 내용으로 교체됩니다. 지도와 서브퀘스트는 유지됩니다. 계속할까요?')) return;
         var oldImages = DATA.itemImages ? JSON.parse(JSON.stringify(DATA.itemImages)) : {};
-        if(sItems) DATA.items = normalizeImportedRows(sItems);
-        if(sKey) DATA.keyItems = normalizeImportedRows(sKey);
+        if(pItems) DATA.items = withIdFirst(normalizeImportedRows(pItems.table), pItems.idIdx);
+        if(pKey) DATA.keyItems = withIdFirst(normalizeImportedRows(pKey.table), pKey.idIdx);
         DATA.itemImages = {};
         var keepIds = {};
         DATA.items.rows.concat(DATA.keyItems.rows).forEach(function(r){ if(r[0]!==undefined && r[0]!==null && r[0]!=='') keepIds[String(r[0])] = true; });
@@ -5563,11 +5808,11 @@ function importSingleXlsx(mode, file){
         toast('아이템/키아이템 XLSX를 불러왔어요 · 기존 이미지는 같은 ID에 한해 유지했습니다');
       }else if(mode==='subquests'){
         var sSub = parsedTableForImport(wb, [exportName('subquests'), DEFAULT_EXPORT_NAMES.subquests, '서브퀘스트'], 0);
-        if(!sSub || sSub.headers.indexOf('ID')===-1){
-          alert('서브퀘스트 시트를 찾지 못했어요. 첫 번째 시트에 ID 열이 필요합니다.'); return;
-        }
+        if(!sSub){ alert('서브퀘스트 시트를 찾지 못했어요. 첫 번째 시트에 서브퀘스트 표가 있어야 합니다.'); return; }
+        var pSub = tableWithIdHeader(sSub);
+        if(pSub.idIdx===-1){ alert(noIdColumnMessage('서브퀘스트', pSub.table, '서브퀘스트ID')); return; }
         if(!confirm('서브퀘스트 XLSX를 불러오면 현재 서브퀘스트 목록만 파일 내용으로 교체됩니다. 지도와 아이템은 유지됩니다. 계속할까요?')) return;
-        DATA.subquests = normalizeImportedRows(sSub);
+        DATA.subquests = withIdFirst(normalizeImportedRows(pSub.table), pSub.idIdx);
         rebuildSqIndex(); rebuildAllCrossRefs();
         nav.sqId=null;
         markDirty(); render();
@@ -5777,6 +6022,7 @@ function importRegionXlsx(topId, file){
 document.getElementById('lightbox').addEventListener('click', function(){
   document.getElementById('lightbox').classList.remove('open');
 });
+syncNodeHomeClusters();
 initTagColorMenu();
 initExportSettingsMenu();
 initFontMenu();
