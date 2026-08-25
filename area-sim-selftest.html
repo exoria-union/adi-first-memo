@@ -132,6 +132,16 @@ try{
   var sc=createSim({rows,headers:H},{character:{gold:500}}); sc.command('종탑'); sc.command('종을 친다');
   r=sc.command('상인');
   ok('완료 후 이동: status=ING(고착 아님)', r.status==='ING' && r.msg.includes('골드 -100'));
+  // 19) 포션: 스탯3이면 불필요 거부(원본 consume_potion)
+  var p0=createSim({rows,headers:H},{character:{str:3}}); p0.command('종탑'); r=p0.command('절벽','힘',true);
+  ok('포션: 스탯3이면 거부(불필요)', r.msg.includes('사용할 필요는 없'));
+  // 20) 포션: 아이템 없으면 거부
+  var p1=createSim({rows,headers:H},{character:{str:5,inventory:[]}}); p1.command('종탑'); r=p1.command('절벽','힘',true);
+  ok('포션: 아이템(99) 없으면 거부', r.msg.includes('가지고 있지 않'));
+  // 21) 포션: 아이템 보유 시 소모 + 판정(stat5+1=6D6 표기)
+  var p2=createSim({rows,headers:H},{character:{str:5,inventory:[99]}}); p2.command('종탑'); r=p2.command('절벽','힘',true);
+  ok('포션: 보유 시 6D6 표기(stat5+1)', r.msg.includes('6D6>='));
+  ok('포션: 사용 후 인벤에서 소모(99 제거)', p2.character.inventory.indexOf(99)<0);
 
   log('\n=== '+pass+' passed, '+fail+' failed ===',fail?'f':'p');
   document.title=fail===0?'SIM OK':'SIM FAIL';

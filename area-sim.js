@@ -30,6 +30,8 @@ const RACE_TO_CLASS = { VAM: 3, CYC: 6, GAG: 5, BAN: 4 };
 const HALF_HUMAN = new Set([3, 4, 5, 6]);
 const STAT_KOR = ['힘', '솜씨', '지혜'];
 const STAT_COL = { '힘': 'str', '솜씨': 'diy', '지혜': 'wis' };
+// 스탯별 강화 포션 아이템 ID(원본 POTION_ITEM_IDS). 포션 사용 = 이 아이템을 보유·소모해야 함.
+const POTION_ITEM_IDS = { '힘': 99, '솜씨': 179, '지혜': 185 };
 
 const safeInt = (v, d = 0) => { const n = parseInt(String(v == null ? '' : v).trim(), 10); return isNaN(n) ? d : n; };
 const safeStr = (v, d = '') => (v == null ? d : String(v));
@@ -197,7 +199,13 @@ export function createSim(data, opts = {}) {
       if (!stats.length) return { msg: '이 행동은 통하지 않을 것 같다! 다른 방식으로 도전해 보자.', status: 'ING' };
       return { msg: `이 행동은 통하지 않을 것 같다! 침착하게, 다른 방식으로 도전해 보자.\n 가령, ${stats[0]}을(를) 살린다면 어떨까?\n\n▶[지역/${name}/${stats[0]}]`, status: 'ING' };
     }
-    if (potion) { const sv = safeInt(ch[STAT_COL[action]], 0); if (sv === 3) return { msg: '강화 포션을 사용할 필요는 없을 것 같다. 포션 없이 자신의 능력으로 도전해 보자.', status: 'ING' }; }
+    if (potion) {
+      const sv = safeInt(ch[STAT_COL[action]], 0);
+      if (sv === 3) return { msg: '강화 포션을 사용할 필요는 없을 것 같다. 포션 없이 자신의 능력으로 도전해 보자.', status: 'ING' };
+      const pid = POTION_ITEM_IDS[action];   // 원본: 해당 스탯 포션 아이템 보유 필수 + 판정 전 소모
+      if (!pid || !hasItem(pid)) return { msg: `${action} 강화 포션을 가지고 있지 않은 것 같다. 언제 다 써버렸나……? 다시 주머니를 확인해 보자.`, status: 'ING' };
+      consumeFirst([pid]);
+    }
     const target = safeInt(area.target_roll, 0);
     const res = targetDice(ch[STAT_COL[action]], target, !!potion);
     let out = `(${res.stat}D6>=${res.target}) ＞ ${res.dice_result}\n`;
@@ -321,19 +329,62 @@ export function openAreaTestUI(container, data, opts = {}) {
   cfg.appendChild(startBtn);
   container.appendChild(cfg);
 
+  // ---- 본문: 좌(채팅) + 우(🎒 소지품 패널) 2단 레이아웃 ----
+  const mainRow = el('div', 'display:flex;gap:10px;align-items:stretch;flex-wrap:wrap;');
+  const leftCol = el('div', 'flex:1 1 360px;min-width:260px;display:flex;flex-direction:column;');
+  const invPanel = el('div', 'flex:0 0 215px;min-width:185px;border:1px solid var(--border);border-radius:8px;background:var(--surface-2,#f7f8fb);padding:10px;display:flex;flex-direction:column;gap:8px;align-self:flex-start;max-height:60vh;overflow:auto;');
+  mainRow.appendChild(leftCol); mainRow.appendChild(invPanel);
+  container.appendChild(mainRow);
+
   // ---- 채팅 로그 ----
   const chatWrap = el('div', 'border:1px solid var(--border);border-radius:8px;height:46vh;overflow:auto;padding:12px;background:var(--bg,#f6f6f7);display:flex;flex-direction:column;gap:8px;');
-  container.appendChild(chatWrap);
+  leftCol.appendChild(chatWrap);
   const choicesBar = el('div', 'display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;');
-  container.appendChild(choicesBar);
+  leftCol.appendChild(choicesBar);
 
   // ---- 입력 ----
   const inputRow = el('div', 'display:flex;gap:6px;margin-top:8px;');
   const cmdIn = el('input', 'flex:1;border:1px solid var(--border-strong,#ccc);border-radius:4px;padding:8px 10px;font-size:13px;'); cmdIn.placeholder = '예: 종탑 · 나선계단/힘/포션 · [진입/정문 홀] 붙여넣기도 OK · 또는 아래 ▶선택지 클릭';
   const sendBtn = el('button', 'padding:8px 16px;', '입력'); sendBtn.className = 'primary';
-  inputRow.appendChild(cmdIn); inputRow.appendChild(sendBtn); container.appendChild(inputRow);
-  const hint = el('div', 'font-size:10.5px;color:var(--text-faint,#999);margin-top:6px;', '봇 명령: [지역/지역명] 으로 시작 → 스크립트의 ▶[지역/X] 선택지를 입력해 이동. 능력 판정(INCUNTR_03)은 [지역/X/힘|솜씨|지혜] 형식. 포션은 뒤에 /포션.');
-  container.appendChild(hint);
+  inputRow.appendChild(cmdIn); inputRow.appendChild(sendBtn); leftCol.appendChild(inputRow);
+  const hint = el('div', 'font-size:10.5px;color:var(--text-faint,#999);margin-top:6px;', '봇 명령: [지역/지역명] 으로 시작 → 스크립트의 ▶[지역/X] 선택지를 입력해 이동. 능력 판정(INCUNTR_03)은 [지역/X/힘|솜씨|지혜] 형식. 포션은 뒤에 /포션(해당 스탯 포션 아이템 보유·소모).');
+  leftCol.appendChild(hint);
+
+  // ---- 소지품(인벤토리) 그래픽 패널 ----
+  const dispItemName = opts.itemName || (id => '아이템#' + id);
+  const POTION_NAME = { 99: '힘', 179: '솜씨', 185: '지혜' };
+  invPanel.appendChild(el('div', 'font-weight:700;font-size:12.5px;color:var(--text,#1c1c1f);', '🎒 소지품'));
+  const statBox = el('div', 'display:flex;flex-direction:column;gap:5px;');
+  const itemsBox = el('div', 'display:flex;flex-direction:column;gap:5px;');
+  const potionRow = el('div', 'display:none;flex-direction:column;gap:4px;border-top:1px dashed var(--border,#ddd);padding-top:7px;');
+  invPanel.appendChild(statBox); invPanel.appendChild(itemsBox); invPanel.appendChild(potionRow);
+  function itemIcon(id) { if (POTION_NAME[id]) return '🧪'; const nm = String(dispItemName(id)); if (/검|칼|도끼|창/.test(nm)) return '🗡️'; if (/방패/.test(nm)) return '🛡️'; if (/활|궁/.test(nm)) return '🏹'; if (/반지|보석|유물|목걸이/.test(nm)) return '💍'; if (/열쇠|키/.test(nm)) return '🔑'; if (/포션|물약/.test(nm)) return '🧪'; if (/책|서적|문서/.test(nm)) return '📖'; if (/골드|동전/.test(nm)) return '🪙'; return '📦'; }
+  function statChip(icon, label, val) { const c = el('div', 'display:flex;align-items:center;gap:6px;font-size:12px;background:var(--surface,#fff);border:1px solid var(--border,#e1e1e4);border-radius:6px;padding:5px 8px;color:var(--text,#1c1c1f);'); c.appendChild(el('span', 'font-size:14px;', icon)); c.appendChild(el('span', 'color:var(--text-dim,#666);', label)); c.appendChild(el('span', 'margin-left:auto;font-weight:700;', String(val))); return c; }
+  function renderInv() {
+    statBox.innerHTML = ''; itemsBox.innerHTML = '';
+    if (!sim) { potionRow.style.display = 'none'; itemsBox.appendChild(el('div', 'font-size:11px;color:var(--text-faint,#999);', '탐사를 시작하면 소지품이 표시됩니다.')); return; }
+    const c = sim.character;
+    statBox.appendChild(statChip('💰', '골드', c.gold));
+    statBox.appendChild(statChip('⭐', '경험치', c.exp));
+    statBox.appendChild(statChip('❤️', '체력', (safeInt(c.max_hp, 0) - safeInt(c.hp, 0)) + ' / ' + safeInt(c.max_hp, 0)));
+    const counts = {}; (c.inventory || []).forEach(id => { counts[id] = (counts[id] || 0) + 1; });
+    const ids = Object.keys(counts).map(Number).sort((a, b) => a - b);
+    itemsBox.appendChild(el('div', 'font-size:11px;color:var(--text-dim,#666);margin-top:2px;', '아이템 (' + ids.length + '종)'));
+    if (!ids.length) itemsBox.appendChild(el('div', 'font-size:11px;color:var(--text-faint,#999);padding:3px 0;', '— 빈 주머니 —'));
+    ids.forEach(id => {
+      const card = el('div', 'display:flex;align-items:center;gap:7px;font-size:12px;background:var(--surface,#fff);border:1px solid var(--border,#e1e1e4);border-radius:6px;padding:5px 8px;color:var(--text,#1c1c1f);');
+      card.appendChild(el('span', 'font-size:15px;flex:0 0 auto;', itemIcon(id)));
+      const nm = el('span', 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;', dispItemName(id)); nm.title = dispItemName(id) + ' (ID ' + id + ')';
+      card.appendChild(nm);
+      card.appendChild(el('span', 'margin-left:auto;flex:0 0 auto;font-weight:700;color:var(--accent,#3457d5);', '×' + counts[id]));
+      itemsBox.appendChild(card);
+    });
+    potionRow.style.display = 'flex'; potionRow.innerHTML = '';
+    potionRow.appendChild(el('div', 'font-size:10.5px;color:var(--text-faint,#999);', '포션 지급(테스트용) — 능력판정 /포션에 사용·소모'));
+    const pbRow = el('div', 'display:flex;gap:4px;flex-wrap:wrap;');
+    [[99, '💪힘'], [179, '✋솜씨'], [185, '🧠지혜']].forEach(pv => { const b = el('button', 'font-size:11px;padding:3px 7px;border-radius:6px;', '+' + pv[1]); b.className = 'ghost'; b.addEventListener('click', () => { sim.character.inventory.push(pv[0]); renderInv(); }); pbRow.appendChild(b); });
+    potionRow.appendChild(pbRow);
+  }
 
   function bubble(text, who) {
     const b = el('div', `max-width:82%;white-space:pre-wrap;line-height:1.55;padding:9px 12px;border-radius:12px;font-size:13px;` +
@@ -355,6 +406,7 @@ export function openAreaTestUI(container, data, opts = {}) {
     if (out.ended) { renderChoices([]); bubble('— 탐사를 종료했습니다. [탐사 시작]으로 다시 체험할 수 있어요. —', 'bot'); }
     else if (out.status === 'SUCC') bubble('✅ 이 임무를 완료했습니다. 인접 지역(▶)으로 계속 가거나, 위에서 다른 지역으로 새로 시작할 수 있어요.', 'bot');
     else if (out.status === 'FAIL') bubble('❌ 탐사에 실패했습니다. ▶포기 하면 경험치를 조금 얻고 돌아갑니다.', 'bot');
+    renderInv();   // 매 스텝 소지품/골드/경험치 갱신
     cmdIn.value = '';
   }
 
@@ -368,9 +420,11 @@ export function openAreaTestUI(container, data, opts = {}) {
     };
     sim = createSim(data, { character, itemName: opts.itemName });
     chatWrap.innerHTML = ''; choicesBar.innerHTML = '';
+    renderInv();
     bubble(`[테스트 시작] ${character.ch_name} · 힘${character.str}/솜씨${character.diy}/지혜${character.wis}\n"${startSel.value}"(으)로 탐사를 시작합니다.`, 'bot');
     submit(startSel.value);
   }
+  renderInv();   // 시작 전 빈 상태 안내
   startBtn.addEventListener('click', start);
   sendBtn.addEventListener('click', () => cmdIn.value.trim() && submit(cmdIn.value.trim()));
   cmdIn.addEventListener('keydown', e => { if (e.key === 'Enter' && cmdIn.value.trim()) submit(cmdIn.value.trim()); });
