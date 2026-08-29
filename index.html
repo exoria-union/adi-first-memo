@@ -2914,8 +2914,11 @@ function autoPlaceMissingGridPositions(){
   var taken = {}, maxCol = -1;
   Object.keys(DATA.gridPositions).forEach(function(id){
     var p = DATA.gridPositions[id];
-    if(validGridPos(p)){ taken[p.row+','+p.col] = true; if(p.col>maxCol) maxCol = p.col; }
-    else delete DATA.gridPositions[id];   // 깨진 좌표는 배치 대상으로 되돌린다
+    // 지금 없는 지역의 좌표는 버린다. 남겨두면 그 칸이 찬 것으로 잡혀서 진짜 지역이
+    // 격자 밖으로 밀려난다 — 옛 지역목록 시트(예: 6*6 36칸)를 그대로 둔 파일에서 터졌다.
+    if(!DATA.regionsTree[id] || !validGridPos(p)){ delete DATA.gridPositions[id]; return; }
+    taken[p.row+','+p.col] = true;
+    if(p.col>maxCol) maxCol = p.col;
   });
   // 9지역이면 3*3, 36지역이면 6*6 — 지역 수에 맞춰 정사각형에 가깝게 채운다.
   // 파일에 좌표가 박힌 칸이 더 오른쪽에 있으면 그 폭까지는 넓힌다.
@@ -2936,6 +2939,19 @@ function autoPlaceMissingGridPositions(){
 // 채운 좌표를 '지역목록' 표에도 써넣는다. 내보내기가 이 표를 그대로 쓰기 때문에,
 // 여기 안 남기면 자동 배치한 자리가 엑셀 파일에 실리지 않는다.
 // 겸사겸사 표를 실제 지역 목록에 맞춘다(없어진 지역의 행이 남아 있으면 내보내기가 죽는다).
+// rebuildRegionsTreeFromSheet1은 대표 행(INCUNTR_00)이 없는 묶음을 조용히 버린다.
+// 불러오기에서 "왜 이 지역이 안 보이지"를 알려주려고 그 목록을 뽑는다.
+function droppedRegionIds(){
+  if(!DATA || !DATA.sheet1 || !DATA.regionsTree) return [];
+  var seen = {}, out = [];
+  DATA.sheet1.rows.forEach(function(r){
+    var top = r[C['상위지역ID(부모ID)']] || r[C['지역ID']];
+    if(!top || seen[top]) return;
+    seen[top] = true;
+    if(!DATA.regionsTree[top]) out.push(top);
+  });
+  return out;
+}
 function syncRegionListPositions(){
   if(!DATA || !DATA.regionList || !DATA.regionList.headers || !DATA.regionsTree) return;
   var RH = DATA.regionList.headers;
@@ -5962,6 +5978,7 @@ document.getElementById('importFileInput').addEventListener('change', function()
   if(!confirm('엑셀 파일을 불러오면 현재 편집기의 모든 데이터(지도/아이템/서브퀘스트)가 파일 내용으로 교체돼요. 계속할까요? 먼저 지금 상태를 엑셀로 내보내서 백업해두는 걸 추천해요.')) return;
   var reader = new FileReader();
   reader.onload = function(){
+    var backup = null;
     try{
       var wb = XLSX.read(reader.result, {type:'array'});
       var s1 = sheetToAOA(wb, [exportName('sheet1'), DEFAULT_EXPORT_NAMES.sheet1, '1부']) || sheetByPosition(wb, 0);
@@ -5973,6 +5990,9 @@ document.getElementById('importFileInput').addEventListener('change', function()
         alert('1부(지도) 시트를 찾지 못했어요. 이 도구가 내보낸 엑셀 형식과 같은지 확인해주세요.');
         return;
       }
+      // 중간에 실패하면 DATA가 반쯤 바뀐 채로 남아 "지역이 다 날아간" 것처럼 보였다.
+      // 되돌릴 수 있게 바꾸기 전 상태를 얕게 떠 둔다(속성 참조만 바꾸므로 얕은 복사로 충분).
+      backup = {}; Object.keys(DATA).forEach(function(k){ backup[k] = DATA[k]; });
       DATA.sheet1 = s1;
       if(sItems) DATA.items = sItems;
       if(sKey) DATA.keyItems = sKey;
@@ -5997,6 +6017,14 @@ document.getElementById('importFileInput').addEventListener('change', function()
       C = {}; H1.forEach(function(h,i){ C[h]=i; });
       repairNodeIntegrityIfNeeded('엑셀 불러오기 중 노드 중복 정리 직전');
       rebuildRegionsTreeFromSheet1();
+      // 지역은 "종류 코드가 INCUNTR_00인 대표 행"으로 인식한다. 그 행이 없는 지역은
+      // 통째로 사라지므로(예전엔 아무 말 없이), 사라진 지역ID를 알려준다.
+      var dropped = droppedRegionIds();
+      if(!Object.keys(DATA.regionsTree).length){
+        throw new Error('지역을 하나도 찾지 못했어요. 지역마다 대표 행이 하나씩 필요해요 —'
+          + ' 그 행은 [상위지역ID(부모ID)]를 비우고 [지역ID]·[지역명]을 쓴 뒤 [종류 코드]에 INCUNTR_00을 넣어야 해요.'
+          + (dropped.length ? '\n대표 행이 없는 지역ID: ' + dropped.join(', ') : ''));
+      }
       rebuildIndexes();
       autoPlaceMissingGridPositions();
       syncRegionListPositions();
@@ -6015,9 +6043,20 @@ document.getElementById('importFileInput').addEventListener('change', function()
       nav = { main:'map', view:'map', regionId:null, clusterIdx:null, itemCat:null, itemId:null, sqId:null, itemView:'grid', sqView:'list' };
       markDirty();
       render();
-      toast('엑셀 데이터를 불러왔어요');
+      toast(Object.keys(DATA.regionsTree).length + '개 지역을 불러왔어요');
+      if(dropped.length){
+        alert('일부 지역이 빠졌어요. 아래 지역ID는 [종류 코드]가 INCUNTR_00인 대표 행이 없어서 지도에 올리지 못했어요.\n\n'
+          + dropped.slice(0,20).join(', ') + (dropped.length>20 ? ' … (총 '+dropped.length+'개)' : ''));
+      }
     }catch(err){
-      alert('엑셀을 읽는 중 문제가 생겼어요: ' + err.message);
+      // 반쯤 바뀐 데이터를 남기지 않는다 — 실패하면 불러오기 전 상태 그대로 되돌린다.
+      if(backup){
+        Object.keys(DATA).forEach(function(k){ if(!(k in backup)) delete DATA[k]; });
+        Object.keys(backup).forEach(function(k){ DATA[k] = backup[k]; });
+        try{ rebuildProjectView(); }catch(e2){ console.error('되돌리기 실패', e2); }
+      }
+      console.error('엑셀 불러오기 실패', err);
+      alert('엑셀을 불러오지 못했어요.\n\n' + (err.message||err) + '\n\n편집기 데이터는 불러오기 전 상태로 되돌렸어요.');
     }
   };
   reader.readAsArrayBuffer(f);
