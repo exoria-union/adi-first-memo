@@ -2903,6 +2903,56 @@ function ensureGraphDataShape(){
   // 노드가 마지막으로 속했던 세부지역(그 세부지역 root의 행 ID). 고아가 된 뒤에도 "원래 집"을 안다.
   if(!DATA.nodeHomeCluster || typeof DATA.nodeHomeCluster !== 'object') DATA.nodeHomeCluster = {};
 }
+// 지도 칸은 gridPositions로만 자리를 잡고, gridPositions는 엑셀 '지역목록' 시트의 좌표 칸에서만 온다.
+// 그 좌표가 비어 있으면(새 프로젝트에서 내보낸 파일은 지역목록 시트가 헤더만 나온다) 모든 지역이
+// (0,0)에 겹쳐 쌓여 "한 지역만 불러와진 것"처럼 보였다. → 좌표 없는 지역은 빈 칸에 순서대로 배치한다.
+var MAP_GRID_MAX_COLS = 6;   // 격자 배경이 816px(136*6) 고정이라 그 밖으로는 내보내지 않는다
+function validGridPos(p){ return !!p && isFinite(p.row) && isFinite(p.col) && p.row>=0 && p.col>=0; }
+function autoPlaceMissingGridPositions(){
+  if(!DATA || !DATA.regionsTree) return 0;
+  if(!DATA.gridPositions || typeof DATA.gridPositions !== 'object') DATA.gridPositions = {};
+  var taken = {}, maxCol = -1;
+  Object.keys(DATA.gridPositions).forEach(function(id){
+    var p = DATA.gridPositions[id];
+    if(validGridPos(p)){ taken[p.row+','+p.col] = true; if(p.col>maxCol) maxCol = p.col; }
+    else delete DATA.gridPositions[id];   // 깨진 좌표는 배치 대상으로 되돌린다
+  });
+  // 9지역이면 3*3, 36지역이면 6*6 — 지역 수에 맞춰 정사각형에 가깝게 채운다.
+  // 파일에 좌표가 박힌 칸이 더 오른쪽에 있으면 그 폭까지는 넓힌다.
+  var total = Object.keys(DATA.regionsTree).length;
+  var cols = Math.max(1, Math.ceil(Math.sqrt(total)), maxCol+1);
+  if(cols > MAP_GRID_MAX_COLS) cols = MAP_GRID_MAX_COLS;
+  var slot = 0, placed = 0;
+  Object.keys(DATA.regionsTree).forEach(function(topId){
+    if(validGridPos(DATA.gridPositions[topId])) return;
+    while(taken[Math.floor(slot/cols)+','+(slot%cols)]) slot++;
+    var pos = {row:Math.floor(slot/cols), col:slot%cols};
+    DATA.gridPositions[topId] = pos;
+    taken[pos.row+','+pos.col] = true;
+    slot++; placed++;
+  });
+  return placed;
+}
+// 채운 좌표를 '지역목록' 표에도 써넣는다. 내보내기가 이 표를 그대로 쓰기 때문에,
+// 여기 안 남기면 자동 배치한 자리가 엑셀 파일에 실리지 않는다.
+// 겸사겸사 표를 실제 지역 목록에 맞춘다(없어진 지역의 행이 남아 있으면 내보내기가 죽는다).
+function syncRegionListPositions(){
+  if(!DATA || !DATA.regionList || !DATA.regionList.headers || !DATA.regionsTree) return;
+  var RH = DATA.regionList.headers;
+  var idI = RH.indexOf('지역ID'), coordI = RH.indexOf('좌표(행,열)'), nameI = RH.indexOf('지역명');
+  if(idI===-1 || coordI===-1) return;
+  var byId = {};
+  (DATA.regionList.rows||[]).forEach(function(r){ if(r && r[idI]) byId[r[idI]] = r; });
+  DATA.regionList.rows = Object.keys(DATA.regionsTree).map(function(topId){
+    var r = byId[topId] || [];
+    while(r.length < RH.length) r.push(null);
+    r[idI] = topId;
+    if(nameI!==-1) r[nameI] = regionName(topId);
+    var p = DATA.gridPositions[topId];
+    if(validGridPos(p)) r[coordI] = (p.row+1) + ',' + (p.col+1);
+    return r;
+  });
+}
 function getCanvasPos(topId, rowId){
   if(!DATA) return null;
   if(!DATA.nodeCanvasPos || typeof DATA.nodeCanvasPos !== 'object') DATA.nodeCanvasPos = {};
@@ -5927,25 +5977,29 @@ document.getElementById('importFileInput').addEventListener('change', function()
       if(sItems) DATA.items = sItems;
       if(sKey) DATA.keyItems = sKey;
       if(sSub) DATA.subquests = sSub;
+      var newPositions = {};
       if(sRegion){
         DATA.regionList = sRegion;
         var idIdx2 = sRegion.headers.indexOf('지역ID');
         var coordIdx = sRegion.headers.indexOf('좌표(행,열)');
-        var newPositions = {};
-        sRegion.rows.forEach(function(r){
+        if(idIdx2!==-1 && coordIdx!==-1) sRegion.rows.forEach(function(r){
           var rid = r[idIdx2], coord = r[coordIdx];
           if(rid && coord && String(coord).indexOf(',')!==-1){
             var parts = String(coord).split(',');
-            newPositions[rid] = { row: parseInt(parts[0],10)-1, col: parseInt(parts[1],10)-1 };
+            var pos = { row: parseInt(parts[0],10)-1, col: parseInt(parts[1],10)-1 };
+            if(validGridPos(pos)) newPositions[rid] = pos;
           }
         });
-        DATA.gridPositions = newPositions;
       }
+      // 파일에 적힌 좌표만 살리고(이전 프로젝트의 자리는 버린다), 나머지는 아래에서 자동 배치한다.
+      DATA.gridPositions = newPositions;
       H1 = DATA.sheet1.headers;
       C = {}; H1.forEach(function(h,i){ C[h]=i; });
       repairNodeIntegrityIfNeeded('엑셀 불러오기 중 노드 중복 정리 직전');
       rebuildRegionsTreeFromSheet1();
       rebuildIndexes();
+      autoPlaceMissingGridPositions();
+      syncRegionListPositions();
       rebuildItemIndex();
       rebuildSqIndex();
       rebuildAllCrossRefs();
@@ -6006,6 +6060,8 @@ function importRegionXlsx(topId, file){
       repairNodeIntegrityIfNeeded('지역 엑셀 불러오기 중 노드 중복 정리 직전');
       rebuildRegionsTreeFromSheet1();
       rebuildIndexes();
+      autoPlaceMissingGridPositions();
+      syncRegionListPositions();
       rebuildAllCrossRefs();
       markDirty();
       go({view:'region', regionId:topId});
