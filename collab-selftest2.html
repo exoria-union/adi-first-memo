@@ -47,6 +47,8 @@ function makeClient(backend, name) {
     };
     function match(r){ return st.filters.every(f=>f(r)); }
     function exec(){
+      // ★ 오류 주입 훅: backend.fail(op, table)이 참이면 Supabase의 DB/RLS 오류처럼 {error} 반환(throw 아님).
+      if (backend.fail && backend.fail(st.op, st.t)) return Promise.resolve({ data:null, error:{ message:'injected', code:'42501' } });
       let data=null, error=null;
       const arr = table(st.t);
       if (st.op==='select'){
@@ -225,6 +227,59 @@ try {
       seedData: clone(SAMPLE), onRemote:()=>{}, onPresence:()=>{}, onStatus:()=>{} });
     ok('빈 서버에서도 localStorage 캐시로 복구', readProject(Csess.ydoc).toolTitle==='복구테스트제목');
     await Csess.destroy();
+  }
+
+  // ---- ④ 저장 실패(RLS 등) 시 유실 금지 + 재시도(회귀 방지: _flush가 {error}를 처리) ----
+  {
+    const be = makeBackend(); const cli = makeClient(be,'E');
+    const status=[];
+    const S = await openProject({ supabase:cli, projectId:'perr', user:{id:'ue',email:'e@x.com'},
+      seedData: clone(SAMPLE), onRemote:()=>{}, onPresence:()=>{}, onStatus:s=>status.push(s) });
+    await wait(500);
+    const before = be.doc_updates.length;
+    be.fail = (op,t)=> op==='insert' && t==='doc_updates';   // 이후 doc_updates insert 전부 실패(RLS 모사)
+    const d = readProject(S.ydoc); d.toolTitle='저장실패편집'; S.push(d);
+    await wait(700);                                          // flush 시도 → 실패
+    ok('저장 실패 시 save-error 상태 발생', status.includes('save-error'));
+    ok('저장 실패해도 doc_updates 안 늘어남(조용한 유실 아님)', be.doc_updates.length===before);
+    ok('저장 실패해도 편집은 Y 문서에 보존', readProject(S.ydoc).toolTitle==='저장실패편집');
+    be.fail = null;                                          // DB 복구
+    await S.provider._flush();                               // 재시도
+    ok('복구 후 재시도로 doc_updates에 저장됨', be.doc_updates.length>before);
+    ok('저장 성공 시 connected로 상태 회복', status[status.length-1]==='connected');
+    await S.destroy();
+  }
+
+  // ---- ⑤ 스냅샷 저장 실패 시 doc_updates 삭제 금지(회귀 방지: 스냅샷 없이 로그 삭제 = 데이터 유실) ----
+  {
+    const be = makeBackend(); const cli = makeClient(be,'F');
+    const S = await openProject({ supabase:cli, projectId:'psnap', user:{id:'uf',email:'f@x.com'},
+      seedData: clone(SAMPLE), onRemote:()=>{}, onPresence:()=>{}, onStatus:()=>{} });
+    await wait(500);
+    for (let i=0;i<3;i++){ const d=readProject(S.ydoc); d.toolTitle='v'+i; S.push(d); await wait(40); }
+    await S.provider._flush();
+    const updatesBefore = be.doc_updates.length;
+    ok('스냅샷 전 업데이트 로그 존재', updatesBefore>0);
+    be.fail = (op,t)=> op==='upsert' && t==='doc_snapshots';  // 스냅샷 저장 실패 모사
+    await S.provider._snapshot();
+    ok('스냅샷 실패 시 doc_updates 보존(삭제 안 함)', be.doc_updates.length===updatesBefore);
+    ok('스냅샷 실패 시 doc_snapshots 비어있음', be.doc_snapshots.length===0);
+    be.fail=null; await S.destroy();
+  }
+
+  // ---- ⑥ 로드 실패 + 로컬캐시 없음 → 시드로 실제 데이터 덮어쓰기 방지(연결 중단) ----
+  {
+    try{ Object.keys(localStorage).forEach(k=>{ if(k.indexOf('ydoc_local_pload')===0) localStorage.removeItem(k); }); }catch(e){}
+    const be = makeBackend(); const cli = makeClient(be,'G');
+    be.fail = (op)=> op==='select';   // 모든 읽기 실패(서버 읽기 오류 상황)
+    let threw=false;
+    try {
+      await openProject({ supabase:cli, projectId:'pload', user:{id:'ug',email:'g@x.com'},
+        seedData: clone(SAMPLE), onRemote:()=>{}, onPresence:()=>{}, onStatus:()=>{} });
+    } catch(e){ threw=true; }
+    ok('로드 실패+캐시없음: 연결 중단(throw)', threw);
+    ok('로드 실패 시 서버에 시드 안 써짐(덮어쓰기 방지)', be.doc_updates.length===0 && be.doc_snapshots.length===0);
+    be.fail=null;
   }
 
   await A.destroy(); await B.destroy();

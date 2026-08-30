@@ -60,6 +60,8 @@ export class SupabaseYjsProvider {
     this._lsKey = 'ydoc_local_' + projectId; // Yjs 상태 로컬 캐시(부팅 복구용). localStorage는 동기라 이탈 시에도 남는다.
     this._saveLocalTimer = null;
     this._recoveredDelta = null;
+    this.loadFailed = false;   // DB 읽기 오류 여부(참이면 스냅샷/삭제 금지 — 실제 데이터 덮어쓰기 방지)
+    this._retryMs = 0;         // flush 실패 시 지수 백오프
 
     this._onUpdate = this._onUpdate.bind(this);
     this._onAwareness = this._onAwareness.bind(this);
@@ -114,17 +116,21 @@ export class SupabaseYjsProvider {
   // ---- 영속 로드: 스냅샷 + 이후 업데이트 로그 ----
   async _loadFromDb() {
     let afterId = 0;
+    this.loadFailed = false;
     const snap = await this.supabase
       .from('doc_snapshots').select('snapshot,last_update_id')
       .eq('project_id', this.projectId).maybeSingle();
-    if (snap.data && snap.data.snapshot) {
+    // Supabase는 RLS/네트워크 오류를 throw가 아니라 {error}로 돌려준다 → 반드시 검사.
+    if (snap.error) { this.loadFailed = true; console.warn('[collab] 스냅샷 로드 오류', snap.error); }
+    else if (snap.data && snap.data.snapshot) {
       Y.applyUpdate(this.ydoc, b64ToU8(snap.data.snapshot), this);
       afterId = snap.data.last_update_id || 0;
     }
     const ups = await this.supabase
       .from('doc_updates').select('id,update')
       .eq('project_id', this.projectId).gt('id', afterId).order('id', { ascending: true });
-    if (ups.data && ups.data.length) {
+    if (ups.error) { this.loadFailed = true; console.warn('[collab] 업데이트 로드 오류', ups.error); }
+    else if (ups.data && ups.data.length) {
       this.ydoc.transact(() => {
         for (const r of ups.data) Y.applyUpdate(this.ydoc, b64ToU8(r.update), this);
       }, this);
@@ -132,7 +138,7 @@ export class SupabaseYjsProvider {
     } else {
       this._lastLoadedId = afterId;
     }
-    if (snap.data || (ups.data && ups.data.length)) this.synced = true;
+    if (!this.loadFailed && (snap.data || (ups.data && ups.data.length))) this.synced = true;
     // ★ 로컬 캐시된 Yjs 상태를 덧입혀, Supabase에 flush 안 된 마지막 편집을 복구한다.
     //    CRDT라 이미 반영된 업데이트는 무시되고 로컬 전용 편집만 병합된다(원격 되돌림 없음).
     try {
@@ -145,6 +151,11 @@ export class SupabaseYjsProvider {
         this.synced = true;
       }
     } catch (e) { console.warn('[collab] 로컬 캐시 복구 실패', e); }
+    // ★ 서버 읽기가 실패했고 로컬 캐시로도 문서를 채우지 못했다면(빈 문서), 시드가 실제(못 읽은)
+    //    데이터를 덮어쓰지 못하도록 연결을 중단한다. 상위 startCollab이 localStorage 최신본으로 복구.
+    if (this.loadFailed && this.ydoc.getMap('project').size === 0) {
+      throw new Error('문서 로드 실패(서버 읽기 오류) — 로컬 저장본을 사용합니다.');
+    }
     if (this.synced) this.onFirstSync();
   }
 
@@ -202,32 +213,49 @@ export class SupabaseYjsProvider {
     this._flushTimer = null;
     if (!this._pending.length || this._destroyed) return;
     const merged = Y.mergeUpdates(this._pending.splice(0));
+    // Supabase는 DB/RLS 오류를 throw가 아니라 {error}로 돌려준다. 예전엔 try/catch만 있어
+    // insert가 {error}로 실패하면 이미 splice한 pending이 조용히 사라졌다(→ 데이터 유실).
+    let ins;
     try {
-      const ins = await this.supabase
+      ins = await this.supabase
         .from('doc_updates').insert({ project_id: this.projectId, update: u8ToB64(merged) })
         .select('id').single();
-      if (ins.data) this._lastLoadedId = ins.data.id;
-      if (++this._sinceSnapshot >= 150) this._snapshot();
-    } catch (e) {
-      // 실패 시 되돌려 다음 기회에 재시도
-      this._pending.unshift(merged);
+    } catch (e) { ins = { error: e }; }
+    if (ins && ins.error) {
+      this._pending.unshift(merged);      // 되돌려 보존(유실 금지)
+      this._saveLocal();                  // 로컬에도 즉시 확정(브라우저 이탈 대비)
       this.onStatus('save-error');
+      console.warn('[collab] 서버 저장 실패 — 재시도합니다.', ins.error);
+      this._retryMs = Math.min((this._retryMs || 2000) * 1.6, 30000); // 지수 백오프
+      if (!this._flushTimer && !this._destroyed) this._flushTimer = setTimeout(() => this._flush(), this._retryMs);
+      return;
     }
+    this._retryMs = 0;
+    if (ins && ins.data) this._lastLoadedId = ins.data.id;
+    this.onStatus('connected');           // 저장 성공 → 상태 회복(직전 save-error 해제)
+    if (++this._sinceSnapshot >= 150) this._snapshot();
   }
 
   // ---- 압축: 전체 상태 스냅샷 + 오래된 로그 정리 ----
   async _snapshot() {
     this._sinceSnapshot = 0;
+    if (this.loadFailed) return;   // 서버 상태가 불확실하면 스냅샷/삭제 금지(실제 스냅샷 덮어쓰기 방지)
     const lastId = this._lastLoadedId || 0;
+    let up;
     try {
-      await this.supabase.from('doc_snapshots').upsert({
+      up = await this.supabase.from('doc_snapshots').upsert({
         project_id: this.projectId,
         snapshot: u8ToB64(Y.encodeStateAsUpdate(this.ydoc)),
         last_update_id: lastId,
       });
+    } catch (e) { up = { error: e }; }
+    // ★ 스냅샷 upsert가 실패했으면 doc_updates를 절대 지우지 않는다.
+    //   (예전엔 upsert가 {error}로 실패해도 delete가 실행돼, 스냅샷 없이 로그가 사라질 수 있었다.)
+    if (up && up.error) { console.warn('[collab] 스냅샷 저장 실패 — 업데이트 로그 유지', up.error); return; }
+    try {
       await this.supabase.from('doc_updates')
         .delete().eq('project_id', this.projectId).lte('id', lastId);
-    } catch (e) { /* 다음 기회에 */ }
+    } catch (e) { /* 로그 정리는 다음 스냅샷 때 다시 시도 */ }
   }
 
   // ---- 프레즌스(awareness) ----

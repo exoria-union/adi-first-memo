@@ -5447,10 +5447,16 @@ async function startCollab(projectId){
     toast('실시간 협업 연결 실패 — 로컬 저장본을 표시합니다.');
   }
 }
+var __saveErrorSince = 0;
 function collabStatusText(s){
-  if(s==='connected') return '저장됨 · 실시간 연결';
+  if(s==='connected'){ __saveErrorSince=0; return '저장됨 · 실시간 연결'; }
   if(s==='error')     return '실시간 연결 오류';
-  if(s==='save-error')return '저장 재시도 중…';
+  if(s==='save-error'){
+    // 서버 저장 실패는 데이터 유실 위험이라 눈에 띄게 경고하고, 오래 지속되면 토스트로 알린다.
+    if(!__saveErrorSince){ __saveErrorSince=Date.now(); }
+    if(Date.now()-__saveErrorSince>8000){ __saveErrorSince=Date.now(); try{ toast('⚠ 서버 저장이 계속 실패하고 있습니다 — 변경사항이 이 브라우저에만 있습니다. 로그인/DB 설정을 확인하세요.'); }catch(e){} }
+    return '⚠ 서버 저장 실패(이 브라우저에만 저장됨) — 재시도 중…';
+  }
   if(s==='closed')    return '연결 끊김';
   return s || '';
 }
