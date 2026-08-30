@@ -1747,8 +1747,8 @@ function addNodeAsChoice(topId, fromRowId){
   DATA.sheet1.rows.push(blankNodeRow(topId, newId, name));
   var fromRow = DATA.sheet1.rows[rowById[fromRowId]];
   var parsed = splitScript(fromRow[C['스크립트(내용)']]);
-  parsed.choices.push(name);
-  fromRow[C['스크립트(내용)']] = joinScript(parsed.narrative, parsed.choices);
+  parsed.links.push({name:name, cmd:''});
+  fromRow[C['스크립트(내용)']] = joinScript(parsed.narrative, parsed.links);
   var ownerCluster = findClusterOfNode(topId, fromRowId);
   if(ownerCluster) ownerCluster.nodeIds.push(newId);
   rebuildIndexes();
@@ -1832,8 +1832,8 @@ function addNewCluster(topId){
   DATA.sheet1.rows.push(blankNodeRow(topId, newId, name));
   var headerRow = regionHeaderRow(topId);
   var parsed = splitScript(headerRow[C['스크립트(내용)']]);
-  parsed.choices.push(name);
-  headerRow[C['스크립트(내용)']] = joinScript(parsed.narrative, parsed.choices, '진입');
+  parsed.links.push({name:name, cmd:''});
+  headerRow[C['스크립트(내용)']] = joinScript(parsed.narrative, parsed.links);
   DATA.regionsTree[topId].clusters.push({root: name, nodeIds: [newId]});
   rebuildIndexes();
   markDirty();
@@ -2004,8 +2004,8 @@ function deleteCluster(topId, clusterIdx){
   takeSnapshot('세부지역 삭제 직전');
   var headerRow = regionHeaderRow(topId);
   var parsed = splitScript(headerRow[C['스크립트(내용)']]);
-  parsed.choices = parsed.choices.filter(function(c){ return c !== cl.root; });
-  headerRow[C['스크립트(내용)']] = joinScript(parsed.narrative, parsed.choices, '진입');
+  parsed.links = parsed.links.filter(function(l){ return l.name !== cl.root; });
+  headerRow[C['스크립트(내용)']] = joinScript(parsed.narrative, parsed.links);
 
   // Do NOT delete rows. Removing the cluster membership is enough to make these
   // nodes region-level orphans; their internal child links are untouched.
@@ -3085,8 +3085,8 @@ function splitScriptLinksDetailed(text){
   var src = String(text||'');
   var idx = src.search(/▶\[(?:지역|진입)\//);
   var narrative = idx===-1 ? src : src.slice(0, idx).replace(/\n+$/,'');
-  var links = [], re = /▶\[(지역|진입)\/([^\]]+)\]/g, m;
-  while((m=re.exec(src))) links.push({keyword:m[1], name:m[2]});
+  var links = [], re = /▶\[(지역|진입)\/([^\]]+)\][ \t]*(:[A-Za-z0-9_]+:)?/g, m;
+  while((m=re.exec(src))) links.push({keyword:m[1], name:m[2], cmd:m[3]||''});
   return {narrative:narrative, links:links};
 }
 function joinScriptLinksDetailed(narrative, links){
@@ -3096,9 +3096,9 @@ function joinScriptLinksDetailed(narrative, links){
     if(out) out += '\n\n';
     out += valid.map(function(link){
       // 이름을 trim하면 안 된다. 링크는 지역명과 "완전히 같은 문자열"로만 연결되는데,
-      // 끝에 공백이 있는 지역명(예: "촛불을 밝혀줘! :SQ: ")을 다듬어 버리면 상하위 교체만으로
-      // 멀쩡하던 연결이 끊겨 해당 노드가 고아가 된다. 여기서는 있는 그대로 옮긴다.
-      return '▶['+(link.keyword||'지역')+'/'+String(link.name)+']';
+      // 끝 공백이 있는 지역명을 다듬으면 상하위 교체만으로 멀쩡하던 연결이 끊겨 고아가 된다.
+      // 항상 ▶[지역/…] 로 쓰고, 선택지 이모티콘 명령어(cmd)는 뒤에 보존한다.
+      return '▶[지역/'+String(link.name)+']'+(link.cmd ? ' '+link.cmd : '');
     }).join('\n');
   }
   return out;
@@ -3111,7 +3111,7 @@ function hierarchySwapName(name, nameA, nameB){
 function hierarchyRemapTargetsOnly(text, nameA, nameB){
   if(!text) return text;
   return String(text).replace(/▶\[(지역|진입)\/([^\]]+)\]/g, function(full, keyword, target){
-    return '▶['+keyword+'/'+hierarchySwapName(target, nameA, nameB)+']';
+    return '▶[지역/'+hierarchySwapName(target, nameA, nameB)+']';
   });
 }
 function swapNodeHierarchy(topId, ridA, ridB){
@@ -3177,10 +3177,10 @@ function swapNodeHierarchy(topId, ridA, ridB){
   // 교체된 링크 안에서 A/B를 가리키는 대상도 함께 치환해야 A→B가 B→A로 정확히 뒤집힌다.
   cols.forEach(function(col){
     var newALinks = bParts[col].links.map(function(link){
-      return {keyword:link.keyword, name:hierarchySwapName(link.name, nameA, nameB)};
+      return {name:hierarchySwapName(link.name, nameA, nameB), cmd:link.cmd};
     });
     var newBLinks = aParts[col].links.map(function(link){
-      return {keyword:link.keyword, name:hierarchySwapName(link.name, nameA, nameB)};
+      return {name:hierarchySwapName(link.name, nameA, nameB), cmd:link.cmd};
     });
     rowA[C[col]] = joinScriptLinksDetailed(aParts[col].narrative, newALinks);
     rowB[C[col]] = joinScriptLinksDetailed(bParts[col].narrative, newBLinks);
@@ -3996,21 +3996,35 @@ function parseChoices(text){
   while((m=re.exec(text))) out.push(m[1]);
   return out;
 }
+// 선택지 링크 + 뒤따르는 이모티콘 명령어(예: ▶[지역/X] :sq:)를 함께 파싱.
+function parseChoiceLinks(text){
+  if(!text) return [];
+  var re = /▶\[(?:지역|진입)\/([^\]]+)\][ \t]*(:[A-Za-z0-9_]+:)?/g, m, out=[];
+  while((m=re.exec(text))) out.push({name:m[1], cmd:m[2]||''});
+  return out;
+}
 function splitScript(text){
-  if(!text) return {narrative:'', choices:[]};
+  if(!text) return {narrative:'', choices:[], links:[]};
   var idx = text.search(/▶\[(?:지역|진입)\//);
   var narrative = idx===-1 ? text : text.slice(0, idx).replace(/\n+$/,'');
-  return {narrative: narrative, choices: parseChoices(text)};
+  var links = parseChoiceLinks(text);
+  return {narrative: narrative, choices: links.map(function(x){ return x.name; }), links: links};
 }
+// choices: 문자열(이름) 또는 {name, cmd} 객체 배열. 항상 ▶[지역/…] 로 쓰고, cmd 있으면 "] :cmd:".
 function joinScript(narrative, choices, keyword){
   keyword = keyword || '지역';
   var out = narrative || '';
-  var valid = (choices||[]).filter(function(c){ return c!=null && String(c).trim(); });
+  var valid = (choices||[]).filter(function(c){ var n=(c&&typeof c==='object')?c.name:c; return n!=null && String(n).trim(); });
   if(valid.length){
     if(out) out += '\n\n';
     // 노드 링크는 이름의 완전 일치로 해석한다. 저장할 때 trim하면 기존 이름의 끝 공백 등이
     // 사라져 멀쩡한 링크가 고아 링크로 바뀔 수 있으므로 실제 문자열은 그대로 보존한다.
-    out += valid.map(function(c){ return '▶['+keyword+'/'+String(c)+']'; }).join('\n');
+    out += valid.map(function(c){
+      var isObj = c && typeof c==='object';
+      var n = isObj ? c.name : c;
+      var cmd = (isObj && c.cmd) ? (' '+c.cmd) : '';
+      return '▶['+keyword+'/'+String(n)+']'+cmd;
+    }).join('\n');
   }
   return out;
 }
@@ -4298,8 +4312,19 @@ function refreshGraphBehindPanel(){
   if(nav.view!=='canvas' && nav.view!=='cluster' && nav.view!=='region') return;
   try{ render(); }catch(e){ console.error('graph live refresh failed', e); }
 }
+// 선택지 뒤에 붙는 채팅 커스텀 이모티콘 명령어 목록. ▶[지역/X] :cmd: 형태.
+// [명령어, 표시이름] — 값은 명령어(':sq:' 등), 화면엔 "표시이름 (:cmd:)".
+var CHOICE_CMDS = [
+  ['', '이모티콘 없음'],
+  [':sq:', '서브퀘스트'],
+  [':kw:', '키워드'],
+  [':k:', '키 아이템'],
+  [':sd1:', '씨앗1'], [':sd2:', '씨앗2'], [':sd3:', '씨앗3'], [':sd4:', '씨앗4'],
+  [':g1:', '새싹'], [':g2:', '모종'],
+  [':a:', '수확1'], [':b:', '수확2'], [':c:', '수확3'], [':d:', '수확4']
+];
 // narrative text + a structured, editable list of "▶[지역/X]" choices, kept in sync with the
-// underlying script column. Each choice has its own jump-to-that-node shortcut.
+// underlying script column. Each choice has its own jump-to-that-node shortcut + emoji command.
 function scriptFieldEditor(label, topId, row, colName){
   var wrap = document.createElement('div'); wrap.className='field';
   var l = document.createElement('label'); l.textContent = label;
@@ -4307,7 +4332,7 @@ function scriptFieldEditor(label, topId, row, colName){
   appendFieldHint(wrap, label);
 
   var isHeaderMainScript = colName==='스크립트(내용)' && row[C['지역ID']]===DATA.regionsTree[topId].headerRowId;
-  var writeKeyword = isHeaderMainScript ? '진입' : '지역';
+  var writeKeyword = '지역';   // 진입 명령어는 더 이상 쓰지 않음 — 선택지는 항상 ▶[지역/…]
 
   var parsed = splitScript(row[C[colName]]);
   var narrativeTa = document.createElement('textarea'); narrativeTa.rows = 3;
@@ -4323,10 +4348,15 @@ function scriptFieldEditor(label, topId, row, colName){
   var choicesWrap = document.createElement('div'); choicesWrap.className='choiceEditList';
   wrap.appendChild(choicesWrap);
 
+  // 각 선택지 행에서 대상 노드 이름 + 이모티콘 명령어를 모아 {name, cmd} 배열로.
+  function collectLinks(){
+    return Array.prototype.map.call(choicesWrap.querySelectorAll('.choiceEditRow'), function(rowEl){
+      var t=rowEl.querySelector('select.choiceTarget'), e=rowEl.querySelector('select.choiceEmoji');
+      return { name: t?t.value:'', cmd: e?e.value:'' };
+    }).filter(function(l){ return l.name && l.name!=='__new__'; });
+  }
   function sync(structural){
-    var vals = Array.prototype.map.call(choicesWrap.querySelectorAll('select.choiceTarget'), function(sel){ return sel.value; })
-      .filter(function(v){ return v && v!=='__new__'; });
-    row[C[colName]] = joinScript(narrativeTa.value, vals, writeKeyword);
+    row[C[colName]] = joinScript(narrativeTa.value, collectLinks(), writeKeyword);
     // 선택지 구조가 바뀐 경우에는 파생 regionsTree도 즉시 다시 만든다.
     // 이 단계가 빠지면 고아 노드를 다시 골라도 cluster.nodeIds가 예전 상태라 연결이 안 된 것처럼 보인다.
     if(structural){
@@ -4436,7 +4466,7 @@ function scriptFieldEditor(label, topId, row, colName){
     sel.__value = current || '';
   }
 
-  function addChoiceRow(val){
+  function addChoiceRow(val, cmd){
     var rowEl = document.createElement('div'); rowEl.className='choiceEditRow';
     var sel = document.createElement('select'); sel.className='choiceTarget';
     buildTargetOptions(sel, val||'');
@@ -4483,10 +4513,17 @@ function scriptFieldEditor(label, topId, row, colName){
     });
     var rm = document.createElement('button'); rm.className='ghost'; rm.textContent='✕'; rm.title='이 선택지(연결)만 끊기 · 노드는 남아요';
     rm.addEventListener('click', function(){ rowEl.remove(); sync(true); refreshGraphBehindPanel(); });
-    rowEl.appendChild(sel); rowEl.appendChild(jumpBtn); rowEl.appendChild(rm);
+    // 선택지 뒤 이모티콘 명령어 select — 고르면 ▶[지역/…] :cmd: 로 자동으로 붙는다.
+    var esel = document.createElement('select'); esel.className='choiceEmoji'; esel.title='선택지 뒤에 붙는 이모티콘 명령어 (▶[지역/…] :cmd:)';
+    esel.style.cssText='border:1px solid var(--border-strong);border-radius:2px;padding:6px 6px;font-size:12px;background:var(--bg);flex-shrink:0;max-width:150px;';
+    var curCmd=cmd||'', known=false;
+    CHOICE_CMDS.forEach(function(x){ var o=document.createElement('option'); o.value=x[0]; o.textContent=(x[0]?x[1]+' ('+x[0]+')':x[1]); if(x[0]===curCmd){o.selected=true;known=true;} esel.appendChild(o); });
+    if(curCmd && !known){ var o=document.createElement('option'); o.value=curCmd; o.textContent=curCmd+' (직접 입력)'; o.selected=true; esel.appendChild(o); }
+    esel.addEventListener('change', function(){ sync(false); });
+    rowEl.appendChild(sel); rowEl.appendChild(esel); rowEl.appendChild(jumpBtn); rowEl.appendChild(rm);
     choicesWrap.appendChild(rowEl);
   }
-  parsed.choices.forEach(function(c){ addChoiceRow(c); });
+  parsed.links.forEach(function(l){ addChoiceRow(l.name, l.cmd); });
 
   var addBtn = document.createElement('button'); addBtn.className='ghost'; addBtn.textContent='+ 선택지 추가';
   addBtn.style.cssText='align-self:flex-start;margin-top:4px;';
@@ -4505,9 +4542,7 @@ function scriptFieldEditor(label, topId, row, colName){
     var __rowId = row[C['지역ID']], __col = C[colName], __prevNarr = parsed.narrative;
     var __live = function(){
       if(narrativeTa.__composing) return; // 한글 IME 조합 중엔 대기
-      var vals = Array.prototype.map.call(choicesWrap.querySelectorAll('select.choiceTarget'), function(sel){ return sel.value; })
-        .filter(function(v){ return v && v!=='__new__'; });
-      var composed = joinScript(narrativeTa.value, vals, writeKeyword);
+      var composed = joinScript(narrativeTa.value, collectLinks(), writeKeyword);
       if(COLLAB.applyCellTextEdit(__rowId, __col, __prevNarr, narrativeTa.value, composed)) __prevNarr = narrativeTa.value;
     };
     narrativeTa.addEventListener('compositionstart', function(){ narrativeTa.__composing = true; });
@@ -5239,6 +5274,19 @@ function makeBlankProject(){
 }
 // bot_area 설계 컬럼(사용자 선택분)을 시트에 보강. 없을 때만 헤더 추가하고 C를 재구성한다.
 // 행은 미리 채우지 않고 편집 시 자동 확장(sparse) — 기존 프로젝트에 안전하게 적용된다.
+// 진입 명령어(▶[진입/…]) 폐지 — 기존 스크립트의 진입 마커를 모두 지역(▶[지역/…])으로 변환. 멱등.
+function migrateEntryMarkers(){
+  if(!DATA||!DATA.sheet1||!DATA.sheet1.rows||!C) return false;
+  var cols=['스크립트(내용)','성공 스크립트','실패 스크립트'], changed=false;
+  DATA.sheet1.rows.forEach(function(r){
+    cols.forEach(function(h){
+      var ci=C[h]; if(ci==null||r[ci]==null) return;
+      var v=String(r[ci]);
+      if(v.indexOf('▶[진입/')!==-1){ r[ci]=v.split('▶[진입/').join('▶[지역/'); changed=true; }
+    });
+  });
+  return changed;
+}
 function ensureBotAreaColumns(){
   var need=['최초 유일 지급 여부','유일 아이템 소진 스크립트','갈림길 그룹','탐사 기회 미소모 여부','키아이템 전원 소모 여부'];
   if(!DATA||!DATA.sheet1||!DATA.sheet1.headers) return;
@@ -5253,6 +5301,7 @@ function rebuildProjectView(opts){
   opts = opts || {};
   var previousNav = nav ? JSON.parse(JSON.stringify(nav)) : null;
   H1=DATA.sheet1.headers; C={}; H1.forEach(function(h,i){C[h]=i;});
+  if(migrateEntryMarkers()) markDirty();   // 진입→지역 1회 변환(있을 때만 저장)
   var nodeRepair = repairNodeIntegrityIfNeeded();
   rebuildRegionsTreeFromSheet1(); rebuildIndexes(); rebuildItemIndex(); rebuildSqIndex();
   syncNodeHomeClusters();
@@ -6140,6 +6189,16 @@ statCols();
   // 획득처에 섞여 있던 배치 진행 메모를 '메모' 칸으로 옮긴다(프로젝트당 최초 1회).
   var moved = migratePlacementNotesToMemo();
   if(moved){ markDirty(); setTimeout(function(){ toast('획득처의 배치 메모 '+moved+'건을 메모 칸으로 옮겼어요'); }, 600); }
+})();
+// 진입 명령어(▶[진입/…]) 폐지: 부팅 시 기존 데이터를 지역(▶[지역/…]) 마커로 1회 변환.
+// (프로젝트 전환/원격 수신 경로는 rebuildProjectView 안의 동일 호출이 담당)
+(function(){
+  try{
+    if(DATA && DATA.sheet1 && DATA.sheet1.headers){
+      H1=DATA.sheet1.headers; C={}; H1.forEach(function(h,i){C[h]=i;});
+      if(migrateEntryMarkers()) markDirty();
+    }
+  }catch(e){ console.error('진입→지역 변환 실패', e); }
 })();
 saveState(false);
 render();
