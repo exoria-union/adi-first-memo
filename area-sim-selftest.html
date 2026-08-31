@@ -34,6 +34,9 @@ const rows=[
   mk({'지역ID':'BELL_10','상위지역ID(부모ID)':'BELL','지역명':'고물상','종류 코드':'INCUNTR_04_IG','지역거래 시, 교단원이 낼 아이템ID':'10','파밍 골드':200,'스크립트(내용)':'고물을 팔았다.'}),
   // 능력판정: 목표7=D6로는 항상 실패(재도전 테스트용)
   mk({'지역ID':'BELL_11','상위지역ID(부모ID)':'BELL','지역명':'절벽','종류 코드':'INCUNTR_03_STR','주사위 목표치':7,'스크립트(내용)':'까마득한 절벽.','성공 스크립트':'올랐다!','실패 스크립트':'추락했다...'}),
+  // 배타적 갈림길(같은 branch_group 'G1'): 하나 고르면 다른 하나는 잠김
+  mk({'지역ID':'BELL_L','상위지역ID(부모ID)':'BELL','지역명':'왼쪽길','종류 코드':'INCUNTR_02','갈림길 그룹':'G1','스크립트(내용)':'왼쪽 길로 들어섰다.\n\n▶[지역/종을 친다]'}),
+  mk({'지역ID':'BELL_R','상위지역ID(부모ID)':'BELL','지역명':'오른쪽길','종류 코드':'INCUNTR_02','갈림길 그룹':'G1','스크립트(내용)':'오른쪽 길로 들어섰다.'}),
 ];
 
 try{
@@ -142,6 +145,15 @@ try{
   var p2=createSim({rows,headers:H},{character:{str:5,inventory:[99]}}); p2.command('종탑'); r=p2.command('절벽','힘',true);
   ok('포션: 보유 시 6D6 표기(stat5+1)', r.msg.includes('6D6>='));
   ok('포션: 사용 후 인벤에서 소모(99 제거)', p2.character.inventory.indexOf(99)<0);
+  // 22) 배타적 갈림길: 한 그룹에서 하나 진입 후 다른 하나 잠금, 같은 노드 재진입 허용
+  var br=createSim({rows,headers:H}); br.command('종탑');
+  var bL=br.command('왼쪽길'); ok('갈림길: 왼쪽길 진입', bL.msg.includes('왼쪽 길로'));
+  var bR=br.command('오른쪽길'); ok('갈림길: 다른 갈래(오른쪽길) 잠금', bR.msg.includes('다른 갈림길'));
+  ok('갈림길: 잠금 시 오른쪽 진입 안 됨', !bR.msg.includes('오른쪽 길로'));
+  var bL2=br.command('왼쪽길'); ok('갈림길: 같은 노드 재진입 허용', bL2.msg.includes('왼쪽 길로'));
+  // 23) 포기 후 새 회차에서는 반대 갈래 선택 가능
+  br.command('포기'); br.command('종탑'); var bR2=br.command('오른쪽길');
+  ok('갈림길: 포기 후 새 회차엔 오른쪽길 가능', bR2.msg.includes('오른쪽 길로'));
 
   log('\n=== '+pass+' passed, '+fail+' failed ===',fail?'f':'p');
   document.title=fail===0?'SIM OK':'SIM FAIL';

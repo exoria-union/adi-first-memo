@@ -250,7 +250,18 @@ export function createSim(data, opts = {}) {
     } else {
       area = A.byName[norm];
       if (!area) return { msg: `${areaName} 임무를 수행할 수 있는 지역이 아닌 것 같다……. 지도를 확인해 보자.` };
-      mission = { area_id: area.area_id, root: area._root }; isNew = true;
+      mission = { area_id: area.area_id, root: area._root, branches: {} }; isNew = true;
+    }
+    // ── 배타적 갈림길(branch_group) — 봇 _handle_ongoing_mission과 동일 ─────────
+    //   같은 갈림길 그룹의 '다른' 노드를 이번 회차에 이미 확정했으면 진입 불가(같은 노드
+    //   재진입은 허용). 다른 지역 트리(블록)로 넘어가면 회차가 바뀌므로 원장을 비운다.
+    //   부작용(키 소모 등) 전에 먼저 검사한다.
+    mission.branches = mission.branches || {};
+    if (mission.root !== area._root) mission.branches = {};
+    const bg = safeStr(area.branch_group).trim();
+    if (bg && mission.branches[bg] && mission.branches[bg] !== area.area_id) {
+      const chosen = A.byId[mission.branches[bg]], cur = A.byId[mission.area_id];
+      return { msg: `이미 다른 갈림길${chosen ? `(${chosen.area_name})` : ''}을 선택했습니다.\n이번 탐사에서는 처음 고른 길로만 나아갈 수 있어요.`, area, choices: cur ? choicesFromText(safeStr(cur.area_cn)) : [], status: 'ING' };
     }
     // 키아이템 게이트
     if (area.key_yn === 'Y') {
@@ -262,6 +273,7 @@ export function createSim(data, opts = {}) {
       }
     }
     mission.area_id = area.area_id; mission.root = area._root;   // 루트 동기화(트리 간 이동/완료 후 인접 이동 대응)
+    if (bg && !mission.branches[bg]) mission.branches[bg] = area.area_id;   // 진입 확정 시 갈림길 최초 1회 기록(멱등)
     const inc = safeStr(area.incounter_cd); let res;
     if (inc === 'INCUNTR_02' || inc.indexOf('INCUNTR_00') === 0) res = handlePass(area);
     else if (inc.includes('INCUNTR_04_IG')) res = handleTradeIG(area);
