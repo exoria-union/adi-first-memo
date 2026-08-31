@@ -2127,21 +2127,50 @@ function markDirty(){
     persist();
   }, 700);
 }
-function persist(){
+var __localSaveWarned = 0;
+// 로컬(localStorage) 저장을 시도하고, 용량 초과 시 공간을 확보해 재시도한다. 예외를 던지지 않음.
+function saveLocalData(){
   try{
     PROJECTS[PROJECT_ID] = {id:PROJECT_ID,name:DATA.toolTitle||'새 프로젝트',data:JSON.parse(JSON.stringify(DATA)),updatedAt:Date.now()};
     localStorage.setItem(PROJECTS_KEY, JSON.stringify(PROJECTS));
     localStorage.setItem(ACTIVE_PROJECT_KEY, PROJECT_ID);
     localStorage.setItem(LS_KEY, JSON.stringify(DATA));
     cacheSharedUiPrefs();
-    saveState(false);
-    scheduleCloudSave();
-  }catch(e){ toast('로컬 저장 실패: ' + e.message); }
-  // 본 저장이 끝난 뒤에 복구 지점을 남긴다. 여기서 용량이 모자라도 본 저장은 이미 끝났다.
+    return true;
+  }catch(e){
+    console.warn('로컬 저장 공간 부족 — 정리 후 재시도', e);
+    // 1) 복구 스냅샷 비우기(가장 큰 소비처)
+    try{ localStorage.removeItem(SNAPSHOT_KEY); snapshotsDisabled = true; }catch(_){}
+    // 2) 활성 외 프로젝트의 무거운 data는 목록 표시에 불필요 → 메타데이터만 남긴다(정본은 클라우드).
+    try{ Object.keys(PROJECTS).forEach(function(pid){
+      if(pid!==PROJECT_ID && PROJECTS[pid] && PROJECTS[pid].data){
+        PROJECTS[pid] = {id:pid, name:PROJECTS[pid].name, updatedAt:PROJECTS[pid].updatedAt, version:PROJECTS[pid].version};
+      }
+    }); }catch(_){}
+    // 3) 재시도 — 현재 작업본(LS_KEY)을 최우선으로 남긴다.
+    try{
+      localStorage.setItem(LS_KEY, JSON.stringify(DATA));
+      localStorage.setItem(ACTIVE_PROJECT_KEY, PROJECT_ID);
+      try{ localStorage.setItem(PROJECTS_KEY, JSON.stringify(PROJECTS)); }catch(_){}
+      return true;
+    }catch(e3){ return false; }
+  }
+}
+function persist(){
+  var localOk = saveLocalData();
+  saveState(false);
+  // ★ 로컬 저장이 실패해도(용량 초과 등) 클라우드/협업 저장은 반드시 시도한다 — 정본은 서버다.
+  //   예전엔 persist가 localStorage 예외로 죽으면서 이 줄(클라우드 저장)까지 건너뛰어,
+  //   제목(별도 직접 push) 외의 편집이 서버에 안 올라갔다.
+  try{ scheduleCloudSave(); }catch(e){ console.error(e); }
+  // 복구 지점(로컬)도 남기되, 용량이 모자라도 본 저장은 이미 끝났다.
   try{ takeSnapshot(); }catch(e){ console.error(e); }
-  // 저장은 막지 않는다(작업 중인 내용을 잃는 게 더 나쁘다). 대신 저장된 시점에
-  // 어느 필수 칸이 비어 있는지 편집기에서 바로 짚어 준다.
+  // 저장된 시점에 어느 필수 칸이 비어 있는지 편집기에서 바로 짚어 준다.
   try{ flagMissingRequiredOnSave(); }catch(e){ console.error(e); }
+  if(!localOk && Date.now()-__localSaveWarned>15000){
+    __localSaveWarned = Date.now();
+    toast('⚠ 브라우저 저장 공간이 가득 찼습니다 — 변경사항은 클라우드(서버)에 저장됩니다. 오래된 로컬 복구 지점은 정리했어요.');
+  }
 }
 function scheduleCloudSave(){
   if(COLLAB){ try{ COLLAB.push(DATA); }catch(e){ console.error(e); } return; }
