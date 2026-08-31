@@ -37,7 +37,7 @@ ES 모듈이라 **http로 서빙 필수**: `py -m http.server 8000`(또는 `pyth
 - 그리고 `index.html` 로드 후 콘솔 오류 0 확인. (Supabase 없이도 앱은 localStorage 모드로 뜬다.)
 
 ## 데이터 유실 수정 이력
-① 편집 중 원격 덮어씀 → 보류/blur 병합. ② 협업 실패 시 stale 시드 → localStorage 복구. ③ 부팅 flush 전 유실 → localStorage Yjs 캐시 복구. ④ 새 컬럼 편집 시 reconcile 크래시 → append. ⑤ 대용량 실시간 전파 실패 → 청크 개별 메시지+재조립.
+① 편집 중 원격 덮어씀 → 보류/blur 병합. ② 협업 실패 시 stale 시드 → localStorage 복구. ③ 부팅 flush 전 유실 → localStorage Yjs 캐시 복구. ④ 새 컬럼 편집 시 reconcile 크래시 → append. ⑤ 대용량 실시간 전파 실패 → 청크 개별 메시지+재조립. ⑥ **Supabase 오류 삼킴**: 클라이언트는 RLS/DB 오류를 throw가 아니라 `{error}`로 반환 → `provider.js`의 `_flush`가 미검사로 pending을 조용히 유실, `_snapshot`이 스냅샷 실패에도 doc_updates 삭제(치명), `_loadFromDb`가 읽기 실패를 빈 문서로 오인. → `.error` 검사 추가(실패 시 되돌림·재시도·경고, 스냅샷 성공 시에만 삭제, 읽기 실패+캐시없음 시 연결 중단으로 시드 덮어쓰기 방지). ⑦ **localStorage 용량 초과가 클라우드 저장 차단**: `persist()`에서 setItem이 QuotaExceededError로 죽으면 다음 줄 `scheduleCloudSave()`까지 건너뛰어, 제목(별도 직접 push) 외 편집이 서버에 안 올라감("제목 클릭해야 저장"). → `saveLocalData()`로 로컬 저장을 분리(예외 삼킴)하고 클라우드 저장은 항상 실행, 용량 초과 시 스냅샷/비활성 프로젝트 data 정리 후 재시도.
 
 ## index.html 편집 팁
 주요 함수: `persist`·`markDirty`·`applyRemoteData`·`startCollab`·`onCloudSignedIn`·`rebuildProjectView`·`renderNodePanel`·`ensureBotAreaColumns`·`buildBotAreaSql`·`fieldInput/fieldSelect/fieldTextarea`(라벨로 `FIELD_HINTS` 자동 각주). **사용자가 병렬로 자주 푸시하니, 편집 전 `git pull` 하고 충돌 시 rebase.**
