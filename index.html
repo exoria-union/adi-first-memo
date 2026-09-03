@@ -79,6 +79,17 @@
   .tbMenuItem:hover{background:var(--accent-soft);color:var(--accent);}
   .tbMenuItem .tbMenuSub{display:block;font-size:12px;color:var(--text-faint);font-weight:400;margin-top:2px;}
   .tbMenuItem:hover .tbMenuSub{color:var(--accent);}
+  /* ⚙️ 설정: 태그색·글꼴·시트이름 3종을 한 패널로 */
+  #settingsWrap{position:relative;display:inline-block;}
+  #settingsMenu{min-width:300px;max-height:calc(100vh - 96px);overflow:auto;padding:0;}
+  .setSection{padding:13px 15px;border-bottom:1px solid var(--border);}
+  .setSection:last-child{border-bottom:none;}
+  .setHead{font-size:13px;font-weight:800;color:var(--text);margin-bottom:9px;letter-spacing:-0.01em;}
+  /* 옮겨온 개별 메뉴는 패널 안에서 항상 펼쳐진 정적 섹션으로(절대위치·장식·토글 해제) */
+  #settingsMenu #tagColorMenu, #settingsMenu #fontMenu, #settingsMenu #exportSettingsMenu{
+    display:block !important;position:static !important;top:auto;right:auto;
+    box-shadow:none;border:none;padding:0;min-width:0;background:none;z-index:auto;
+  }
   #cloudStatus{font-size:13px;color:var(--text-faint);white-space:nowrap;}
   #authOverlay{position:fixed;inset:0;background:rgba(246,246,247,.96);z-index:1200;display:flex;align-items:center;justify-content:center;}
   #authCard{width:390px;max-width:92vw;background:#fff;border:1px solid var(--border-strong);border-radius:4px;box-shadow:0 10px 40px rgba(0,0,0,.12);padding:24px;}
@@ -722,59 +733,68 @@
   <div id="collabPresence" title="접속 중인 협업자"></div>
   <div id="collabEditing"></div>
   <div class="spacer"></div>
-  <div id="tagColorWrap">
-    <button class="ghost" id="btnTagColor" title="현재 프로젝트의 모든 협업자에게 공유됩니다">태그 색상 ▾</button>
-    <div id="tagColorMenu">
-      <div class="tcRow">서브퀘스트 <input type="color" id="tcSubquest"></div>
-      <div class="tcRow">레시피 <input type="color" id="tcRecipe"></div>
-      <div class="tcRow">재료 <input type="color" id="tcMaterial"></div>
-      <div class="tcRow">완제 아이템 <input type="color" id="tcProduct"></div>
-      <div class="tcDivider"></div>
-      <div class="tcOpacityRow">
-        <label for="tcOpacity">투명도 <span id="tcOpacityVal">90%</span></label>
-        <input type="range" id="tcOpacity" min="20" max="100" step="5">
+  <!-- 옛 개별 토글 버튼: JS 핸들러 유지를 위해 DOM에 숨겨서 보존(클릭 불가) -->
+  <button class="ghost" id="btnTagColor" style="display:none;">태그 색상</button>
+  <button class="ghost" id="btnFontMenu" style="display:none;">글꼴</button>
+  <button class="ghost" id="btnExportSettings" style="display:none;">시트 이름</button>
+  <div id="settingsWrap">
+    <button class="ghost" id="btnSettings" title="태그 색상 · 글꼴 · 시트 이름 설정">⚙️ 설정 ▾</button>
+    <div id="settingsMenu" class="tbMenu">
+      <div class="setSection">
+        <div class="setHead">🎨 태그 색상</div>
+        <div id="tagColorMenu">
+          <div class="tcRow">서브퀘스트 <input type="color" id="tcSubquest"></div>
+          <div class="tcRow">레시피 <input type="color" id="tcRecipe"></div>
+          <div class="tcRow">재료 <input type="color" id="tcMaterial"></div>
+          <div class="tcRow">완제 아이템 <input type="color" id="tcProduct"></div>
+          <div class="tcDivider"></div>
+          <div class="tcOpacityRow">
+            <label for="tcOpacity">투명도 <span id="tcOpacityVal">90%</span></label>
+            <input type="range" id="tcOpacity" min="20" max="100" step="5">
+          </div>
+        </div>
       </div>
-    </div>
-  </div>
-  <div id="fontMenuWrap">
-    <button class="ghost" id="btnFontMenu" title="현재 프로젝트의 모든 협업자에게 공유됩니다">글꼴 ▾</button>
-    <div id="fontMenu">
-      <div class="fmSection">
-        <div class="fmLabel">지도 지역명</div>
-        <select id="fmMapFont"></select>
-        <label class="fmBoldRow"><input type="checkbox" id="fmMapBold"> 굵게</label>
+      <div class="setSection">
+        <div class="setHead">🔤 글꼴</div>
+        <div id="fontMenu">
+          <div class="fmSection">
+            <div class="fmLabel">지도 지역명</div>
+            <select id="fmMapFont"></select>
+            <label class="fmBoldRow"><input type="checkbox" id="fmMapBold"> 굵게</label>
+          </div>
+          <div class="fmSection">
+            <div class="fmLabel">아이템 · 서브퀘스트 태그</div>
+            <select id="fmTagFont"></select>
+            <label class="fmBoldRow"><input type="checkbox" id="fmTagBold"> 굵게</label>
+          </div>
+          <div class="fmSection">
+            <div class="fmLabel">그래프 노드</div>
+            <select id="fmNodeFont"></select>
+            <label class="fmBoldRow"><input type="checkbox" id="fmNodeBold"> 굵게</label>
+            <label class="fmBoldRow" style="display:flex;flex-direction:column;align-items:stretch;gap:4px;cursor:default;">
+              <span style="font-size:12.5px;color:var(--text-faint);">노드 글자 크기 <b id="fmNodeSizeVal"></b></span>
+              <input id="fmNodeSize" type="range" min="10" max="18" step="0.5" value="12">
+            </label>
+          </div>
+          <div class="fmSection">
+            <div class="fmLabel">사용자 글꼴 추가 (.woff/.woff2)</div>
+            <input type="text" id="fmNewFontName" placeholder="글꼴 이름 (예: 내글꼴)">
+            <input type="file" id="fmNewFontFile" accept=".woff,.woff2">
+            <button class="ghost" id="fmAddFont" style="margin-top:5px;width:100%;">+ 이 프로젝트에 글꼴 추가</button>
+          </div>
+        </div>
       </div>
-      <div class="fmSection">
-        <div class="fmLabel">아이템 · 서브퀘스트 태그</div>
-        <select id="fmTagFont"></select>
-        <label class="fmBoldRow"><input type="checkbox" id="fmTagBold"> 굵게</label>
+      <div class="setSection">
+        <div class="setHead">📄 시트 이름</div>
+        <div id="exportSettingsMenu">
+          <div class="esRow"><label>파일 이름</label><input type="text" id="esFileName"></div>
+          <div class="esRow"><label>1부 시트</label><input type="text" id="esSheet1"></div>
+          <div class="esRow"><label>아이템 시트</label><input type="text" id="esSheetItems"></div>
+          <div class="esRow"><label>키아이템 시트</label><input type="text" id="esSheetKeyItems"></div>
+          <div class="esRow"><label>서브퀘스트 시트</label><input type="text" id="esSheetSubquests"></div>
+          <div class="esRow"><label>지역목록 시트</label><input type="text" id="esSheetRegionList"></div>
+        </div>
       </div>
-      <div class="fmSection">
-        <div class="fmLabel">그래프 노드</div>
-        <select id="fmNodeFont"></select>
-        <label class="fmBoldRow"><input type="checkbox" id="fmNodeBold"> 굵게</label>
-        <label class="fmBoldRow" style="display:flex;flex-direction:column;align-items:stretch;gap:4px;cursor:default;">
-          <span style="font-size:12.5px;color:var(--text-faint);">노드 글자 크기 <b id="fmNodeSizeVal"></b></span>
-          <input id="fmNodeSize" type="range" min="10" max="18" step="0.5" value="12">
-        </label>
-      </div>
-      <div class="fmSection">
-        <div class="fmLabel">사용자 글꼴 추가 (.woff/.woff2)</div>
-        <input type="text" id="fmNewFontName" placeholder="글꼴 이름 (예: 내글꼴)">
-        <input type="file" id="fmNewFontFile" accept=".woff,.woff2">
-        <button class="ghost" id="fmAddFont" style="margin-top:5px;width:100%;">+ 이 프로젝트에 글꼴 추가</button>
-      </div>
-    </div>
-  </div>
-  <div id="exportSettingsWrap">
-    <button class="ghost" id="btnExportSettings">시트 이름 ▾</button>
-    <div id="exportSettingsMenu">
-      <div class="esRow"><label>파일 이름</label><input type="text" id="esFileName"></div>
-      <div class="esRow"><label>1부 시트</label><input type="text" id="esSheet1"></div>
-      <div class="esRow"><label>아이템 시트</label><input type="text" id="esSheetItems"></div>
-      <div class="esRow"><label>키아이템 시트</label><input type="text" id="esSheetKeyItems"></div>
-      <div class="esRow"><label>서브퀘스트 시트</label><input type="text" id="esSheetSubquests"></div>
-      <div class="esRow"><label>지역목록 시트</label><input type="text" id="esSheetRegionList"></div>
     </div>
   </div>
   <div id="exportWrap">
@@ -6127,6 +6147,25 @@ function initExportSettingsMenu(){
     var real=document.getElementById(item.getAttribute('data-exp')==='sql'?'btnExportSql':'btnExportXlsx');
     if(real) real.click();
   });
+  document.addEventListener('click', function(e){ if(!wrap.contains(e.target)) close(); });
+})();
+/* 상단바 '⚙️ 설정' 드롭다운: 태그색·글꼴·시트이름을 한 패널로(position:fixed로 잘림 방지) */
+(function(){
+  var wrap=document.getElementById('settingsWrap'), btn=document.getElementById('btnSettings'), menu=document.getElementById('settingsMenu');
+  if(!btn||!menu||!wrap) return;
+  var close=function(){ menu.classList.remove('open'); };
+  var openAt=function(){
+    var r=btn.getBoundingClientRect();
+    menu.style.top=(r.bottom+6)+'px';
+    menu.style.left=Math.max(8, Math.min(r.left, window.innerWidth-menu.offsetWidth-8))+'px';
+  };
+  btn.addEventListener('click', function(e){
+    e.stopPropagation();
+    var willOpen=!menu.classList.contains('open');
+    menu.classList.toggle('open');
+    if(willOpen) openAt();
+  });
+  menu.addEventListener('click', function(e){ e.stopPropagation(); }); // 내부 입력 클릭으로는 안 닫힘
   document.addEventListener('click', function(e){ if(!wrap.contains(e.target)) close(); });
 })();
 document.getElementById('btnExportXlsx').addEventListener('click', function(){
