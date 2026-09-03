@@ -600,6 +600,27 @@
   </div>
 </div>
 
+<div id="weatherSqlModal" style="position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:1300;display:none;align-items:center;justify-content:center;">
+  <div style="width:760px;max-width:95vw;max-height:92vh;overflow:auto;background:var(--surface);border:1px solid var(--border-strong);border-radius:6px;box-shadow:0 14px 44px rgba(0,0,0,.28);padding:18px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+      <div style="font-size:16px;font-weight:700;">bot_weather SQL 내보내기</div>
+      <button class="ghost" id="btnWeatherSqlClose">닫기</button>
+    </div>
+    <div style="font-size:11.5px;color:var(--text-dim);margin:6px 0 12px;line-height:1.6;">
+      현재 프로젝트의 '날씨' 데이터를 <b>bot_weather</b> 테이블용 <b>INSERT문</b>으로 만듭니다.
+      생성 전에 검증해서 <b>오류가 날 행(이모지 등 4바이트 문자·날짜 형식 오류·발생횟수 비숫자·내용 비어있음)은 제외</b>하고 아래에 리포트로 알려줍니다.
+      <br>※ <code>weather_id</code>(자동)·<code>cre_dt</code>(자동)는 넣지 않습니다. 다시 실행하면 새 행으로 추가됩니다.
+    </div>
+    <div style="margin-bottom:12px;"><button class="primary" id="btnWeatherSqlGenerate" style="padding:7px 16px;">생성</button></div>
+    <div id="weatherSqlReport" style="font-size:12px;margin-bottom:8px;min-height:18px;"></div>
+    <textarea id="weatherSqlOutput" readonly placeholder="[생성] 버튼을 누르면 여기에 INSERT문이 나옵니다." style="width:100%;height:280px;font-family:var(--mono);font-size:11.5px;white-space:pre;overflow:auto;border:1px solid var(--border);border-radius:4px;padding:8px;box-sizing:border-box;background:var(--bg);color:var(--text);"></textarea>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px;">
+      <button class="ghost" id="btnWeatherSqlCopy">📋 전체 복사</button>
+      <button class="primary" id="btnWeatherSqlDownload">⬇ .sql 다운로드</button>
+    </div>
+  </div>
+</div>
+
 <!-- ===== SQL 매뉴얼 팝업 (DB를 잘 모르는 사용자용) ===== -->
 <div id="sqlManualModal" style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1400;display:none;align-items:center;justify-content:center;">
   <div style="width:640px;max-width:94vw;max-height:90vh;overflow:auto;background:var(--surface);border:1px solid var(--border-strong);border-radius:6px;box-shadow:0 14px 44px rgba(0,0,0,.3);padding:20px;line-height:1.7;font-size:13px;">
@@ -735,6 +756,7 @@
   <div class="maintab active" data-maintab="map">지도</div>
   <div class="maintab" data-maintab="items">아이템</div>
   <div class="maintab" data-maintab="subquests">서브퀘스트</div>
+  <div class="maintab" data-maintab="weather">날씨</div>
 </div>
 
 <div id="breadcrumb"></div>
@@ -2396,6 +2418,9 @@ function render(){
     main.className='listscreen';
     if(nav.sqId!=null) renderSubquestDetail(main, crumb);
     else renderSubquestsScreen(main, crumb);
+  } else if(nav.main==='weather'){
+    main.className='listscreen';
+    renderWeatherScreen(main, crumb);
   }
 }
 
@@ -2921,6 +2946,10 @@ function stepKey(step){
    NODE CANVAS (graph) VIEW - all nodes in a cluster at once,
    horizontal auto-layout by default, freely draggable
    ========================================================= */
+// 날씨(bot_weather) 편집 컬럼 — 행은 이 순서의 배열(weather_id·cre_dt는 자동이라 제외).
+//   [0]내용(weather_cn·필수) [1]비고(weather_comment) [2]사용 여부(use_yn) [3]발생 횟수(weather_cnt)
+//   [4]적용 시작일(date) [5]적용 종료일(date). ensureGraphDataShape() 호출보다 먼저 정의해야 함.
+var WEATHER_COLS = ['내용','비고','사용 여부','발생 횟수','적용 시작일','적용 종료일'];
 ensureGraphDataShape();
 function canvasPosKey(topId, rowId){ return topId+'#'+rowId; }
 function ensureGraphDataShape(){
@@ -2931,6 +2960,11 @@ function ensureGraphDataShape(){
   if(!DATA.regionsTree || typeof DATA.regionsTree !== 'object') DATA.regionsTree = {};
   // 노드가 마지막으로 속했던 세부지역(그 세부지역 root의 행 ID). 고아가 된 뒤에도 "원래 집"을 안다.
   if(!DATA.nodeHomeCluster || typeof DATA.nodeHomeCluster !== 'object') DATA.nodeHomeCluster = {};
+  // 날씨 데이터. 항상 초기화해 모든 클라이언트가 이 최상위 키를 갖게 한다(협업 reconcile이
+  // "한쪽에 없는 최상위 키"를 지우는 것을 방지 — 배포 후 팀원 새로고침 권장).
+  if(!DATA.weather || typeof DATA.weather !== 'object' || !Array.isArray(DATA.weather.rows)){
+    DATA.weather = { headers: WEATHER_COLS.slice(), rows: [] };
+  }
 }
 // 지도 칸은 gridPositions로만 자리를 잡고, gridPositions는 엑셀 '지역목록' 시트의 좌표 칸에서만 온다.
 // 그 좌표가 비어 있으면(새 프로젝트에서 내보낸 파일은 지역목록 시트가 헤더만 나온다) 모든 지역이
@@ -6261,7 +6295,123 @@ function sqlEscape(s){
 }
 // utf8(=utf8mb3, 3바이트) 테이블은 4바이트 문자(이모지 등)를 저장하면 오류가 난다
 function sqlHasAstral(s){ return /[\u{10000}-\u{10FFFF}]/u.test(String(s)); }
-var BOT_AREA_COLS = ['up_area_id','start_point','parent_area_id','area_id','area_name','adjacent_id','incounter_cd','area_cn','target_roll','succ_cn','fail_cn','open_race','race_fail_cn','key_yn','key_id','item_id','item_drop','gold_drop','area_exp','deal_item_id','deal_gold','first_check_yn','check_fail_cn','open_target','area_comment','first_drop_yn','drop_fail_cn','branch_group','no_consume_yn','key_all_yn'];
+
+/* =========================================================
+   날씨(bot_weather) 탭 — 입력 편집기 + SQL 내보내기
+   ========================================================= */
+// 소형 필드 헬퍼(날씨 전용)
+function wField(label, node){ var w=document.createElement('div'); w.style.cssText='display:flex;flex-direction:column;gap:3px;margin-top:6px;'; var l=document.createElement('label'); l.style.cssText='font-size:11px;color:var(--text-dim);'; l.textContent=label; w.appendChild(l); w.appendChild(node); return w; }
+function wTextarea(val, onChange, rows, ph){ var t=document.createElement('textarea'); t.rows=rows||2; t.value=val==null?'':val; if(ph) t.placeholder=ph; t.style.cssText='border:1px solid var(--border-strong);border-radius:3px;padding:6px 8px;font-size:12.5px;font-family:var(--sans);resize:vertical;box-sizing:border-box;'; t.addEventListener('input', function(){ onChange(t.value); }); return t; }
+function wInput(val, type, onChange, ph){ var el=document.createElement('input'); el.type=type||'text'; el.value=val==null?'':val; if(ph) el.placeholder=ph; el.style.cssText='border:1px solid var(--border-strong);border-radius:3px;padding:6px 8px;font-size:12.5px;width:'+(type==='number'?'120px':'160px')+';box-sizing:border-box;'; el.addEventListener('input', function(){ onChange(el.value); }); return el; }
+function wYNSelect(val, onChange){ var s=document.createElement('select'); s.style.cssText='border:1px solid var(--border-strong);border-radius:3px;padding:4px 6px;font-size:12px;background:var(--bg);'; var cur=(String(val==null?'':val).trim().toUpperCase()==='N')?'N':'Y'; [['Y','Y — 사용'],['N','N — 미사용']].forEach(function(x){ var o=document.createElement('option'); o.value=x[0]; o.textContent=x[1]; if(x[0]===cur) o.selected=true; s.appendChild(o); }); s.addEventListener('change', function(){ onChange(s.value); }); return s; }
+function renderWeatherScreen(main, crumb){
+  main.innerHTML=''; crumb.innerHTML='';
+  crumb.appendChild(crumbEl('날씨', null, true));
+  ensureGraphDataShape();
+  var rows = DATA.weather.rows;
+  var wrap = document.createElement('div');
+
+  var toolbar = document.createElement('div'); toolbar.className='listToolbar';
+  var title = document.createElement('div'); title.style.cssText='font-weight:700;font-size:13px;'; title.textContent='날씨 목록 ('+rows.length+'개)';
+  var spacer = document.createElement('div'); spacer.style.flex='1';
+  var sqlBtn = document.createElement('button'); sqlBtn.className='ghost'; sqlBtn.textContent='SQL 내보내기';
+  sqlBtn.addEventListener('click', function(){ openWeatherSqlModal(); });
+  var addBtn = document.createElement('button'); addBtn.className='primary'; addBtn.textContent='+ 날씨 추가';
+  addBtn.addEventListener('click', function(){ DATA.weather.rows.push(['','','Y','0','','']); markDirty(); render(); });
+  toolbar.appendChild(title); toolbar.appendChild(spacer); toolbar.appendChild(sqlBtn); toolbar.appendChild(addBtn);
+  wrap.appendChild(toolbar);
+
+  var hint = document.createElement('div'); hint.style.cssText='font-size:11px;color:var(--text-faint);margin:6px 2px 12px;line-height:1.6;';
+  hint.innerHTML='봇이 매일 적용 기간 안의 날씨 중 하나를 골라 게시합니다. <b>내용</b>은 필수 · ⚠ 이모지 등 4바이트 문자는 DB(utf8)에 저장되지 않아요. 시작/종료일은 비우면 상시 출력.';
+  wrap.appendChild(hint);
+
+  if(!rows.length){
+    var empty = document.createElement('div'); empty.style.cssText='color:var(--text-faint);padding:28px;text-align:center;';
+    empty.textContent='아직 날씨가 없습니다. [+ 날씨 추가]로 만들어 보세요.';
+    wrap.appendChild(empty);
+  }
+  rows.forEach(function(r, i){
+    var card = document.createElement('div'); card.style.cssText='border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px;background:var(--surface);';
+    var head = document.createElement('div'); head.style.cssText='display:flex;align-items:center;gap:8px;margin-bottom:6px;';
+    var num = document.createElement('div'); num.style.cssText='font-weight:700;font-size:12px;color:var(--text-dim);'; num.textContent='#'+(i+1);
+    var useWrap = document.createElement('label'); useWrap.style.cssText='font-size:11px;color:var(--text-dim);display:flex;align-items:center;gap:4px;';
+    useWrap.appendChild(document.createTextNode('사용 여부')); useWrap.appendChild(wYNSelect(r[2], function(v){ r[2]=v; markDirty(); }));
+    var del = document.createElement('button'); del.className='ghost'; del.textContent='✕ 삭제'; del.style.marginLeft='auto';
+    del.addEventListener('click', function(){ if(confirm('이 날씨를 삭제할까요?')){ DATA.weather.rows.splice(i,1); markDirty(); render(); } });
+    head.appendChild(num); head.appendChild(useWrap); head.appendChild(del);
+    card.appendChild(head);
+    card.appendChild(wField('내용 * (weather_cn)', wTextarea(r[0], function(v){ r[0]=v; markDirty(); }, 2, '예: 맑은 하늘 아래 산책하기 좋은 날이에요.')));
+    card.appendChild(wField('비고 (weather_comment)', wTextarea(r[1], function(v){ r[1]=v; markDirty(); }, 1, '운영진용 메모(선택)')));
+    var row2 = document.createElement('div'); row2.style.cssText='display:flex;gap:14px;flex-wrap:wrap;';
+    row2.appendChild(wField('발생 횟수 (weather_cnt)', wInput(r[3], 'number', function(v){ r[3]=v; markDirty(); }, '0')));
+    row2.appendChild(wField('적용 시작일', wInput(r[4], 'date', function(v){ r[4]=v; markDirty(); }, '')));
+    row2.appendChild(wField('적용 종료일', wInput(r[5], 'date', function(v){ r[5]=v; markDirty(); }, '')));
+    card.appendChild(row2);
+    wrap.appendChild(card);
+  });
+  main.appendChild(wrap);
+}
+// ---- bot_weather SQL 생성 ----
+var WEATHER_INSERT_COLS = ['weather_cn','weather_comment','use_yn','weather_cnt','weather_start_date','weather_end_date'];
+function wSqlDate(v){ var s=String(v==null?'':v).trim(); if(!s) return {sql:'NULL'}; if(!/^\d{4}-\d{2}-\d{2}$/.test(s)) return {err:true}; var p=s.split('-'), y=+p[0],mo=+p[1],d=+p[2]; var dt=new Date(y,mo-1,d); if(dt.getFullYear()!==y||dt.getMonth()!==mo-1||dt.getDate()!==d) return {err:true}; return {sql:"'"+s+"'"}; }
+function buildBotWeatherSql(){
+  ensureGraphDataShape();
+  var rows = DATA.weather.rows, valueRows=[], errors=[], warnings=[], skipped=0;
+  rows.forEach(function(r, i){
+    var label='#'+(i+1);
+    var cn=String(r[0]==null?'':r[0]).trim();
+    var comment=String(r[1]==null?'':r[1]);
+    var useYn=String(r[2]==null?'':r[2]).trim().toUpperCase();
+    var cnt=String(r[3]==null?'':r[3]).trim();
+    var sd=r[4], ed=r[5];
+    // 내용·비고·날짜가 전부 비어 있으면 미작성 행으로 보고 조용히 건너뜀(기본값 Y/0 무시).
+    if(!cn && !comment.trim() && !String(sd||'').trim() && !String(ed||'').trim()){ skipped++; return; }
+    var e=[];
+    if(!cn) e.push('내용(weather_cn)이 비어 있음(필수)');
+    if(cn && sqlHasAstral(cn)) e.push('내용에 4바이트 문자(이모지 등)');
+    if(comment && sqlHasAstral(comment)) e.push('비고에 4바이트 문자(이모지 등)');
+    var cntVal='0';
+    if(cnt){ if(!/^\d+$/.test(cnt)) e.push('발생 횟수가 숫자가 아님 "'+cnt.slice(0,10)+'"'); else if(cnt.length>10) e.push('발생 횟수 자릿수 초과(최대 10)'); else cntVal=String(parseInt(cnt,10)); }
+    var sdv=wSqlDate(sd); if(sdv.err) e.push('시작일 형식 오류(YYYY-MM-DD)');
+    var edv=wSqlDate(ed); if(edv.err) e.push('종료일 형식 오류(YYYY-MM-DD)');
+    if(!sdv.err && !edv.err && sdv.sql!=='NULL' && edv.sql!=='NULL' && sdv.sql>edv.sql) warnings.push(label+': 시작일이 종료일보다 늦음');
+    if(e.length){ errors.push(label+': '+e.join(', ')); return; }
+    valueRows.push({
+      weather_cn: "'"+sqlEscape(cn)+"'",
+      weather_comment: comment.trim()===''? 'NULL' : "'"+sqlEscape(comment)+"'",
+      use_yn: (useYn==='N'?"'N'":"'Y'"),
+      weather_cnt: cntVal,
+      weather_start_date: sdv.sql,
+      weather_end_date: edv.sql
+    });
+  });
+  var sql='', colList='('+WEATHER_INSERT_COLS.join(', ')+')';
+  if(!valueRows.length){ sql='-- 생성할 유효한 날씨 행이 없습니다. (아래 리포트 확인)'; }
+  for(var b=0;b<valueRows.length;b+=100){
+    var chunk=valueRows.slice(b,b+100).map(function(v){ return '('+WEATHER_INSERT_COLS.map(function(c){return v[c];}).join(', ')+')'; });
+    sql+='INSERT INTO bot_weather\n'+colList+' VALUES\n'+chunk.join(',\n')+';\n\n';
+  }
+  return { sql:sql.trim(), report:{ total:rows.length, inserted:valueRows.length, errorRows:errors.length, skipped:skipped, errors:errors, warnings:warnings } };
+}
+function openWeatherSqlModal(){ document.getElementById('weatherSqlReport').innerHTML=''; document.getElementById('weatherSqlOutput').value=''; document.getElementById('weatherSqlModal').style.display='flex'; }
+(function wireWeatherSqlExport(){
+  function hide(){ document.getElementById('weatherSqlModal').style.display='none'; }
+  function esc(x){ return String(x).replace(/[&<>]/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[m];}); }
+  var close=document.getElementById('btnWeatherSqlClose'); if(close) close.addEventListener('click', hide);
+  var modal=document.getElementById('weatherSqlModal'); if(modal) modal.addEventListener('click', function(e){ if(e.target===modal) hide(); });
+  var gen=document.getElementById('btnWeatherSqlGenerate'); if(gen) gen.addEventListener('click', function(){
+    var out=buildBotWeatherSql();
+    document.getElementById('weatherSqlOutput').value=out.sql;
+    var rep=out.report, html='';
+    html+='<div style="font-weight:700;">생성 완료 · 전체 '+rep.total+'행 → '+rep.inserted+'행 INSERT'+(rep.errorRows?(' · '+rep.errorRows+'행 오류로 제외'):'')+(rep.skipped?(' · 빈행 '+rep.skipped+' 건너뜀'):'')+'</div>';
+    if(rep.errors.length){ html+='<div style="color:#c0392b;margin-top:6px;">제외된 오류 행 '+rep.errors.length+'건 (고친 뒤 다시 생성)</div><ul style="margin:4px 0 0 16px;color:#c0392b;">'+rep.errors.map(function(x){return '<li>'+esc(x)+'</li>';}).join('')+'</ul>'; }
+    if(rep.warnings.length){ html+='<div style="color:#b9770e;margin-top:6px;">경고 '+rep.warnings.length+'건</div><ul style="margin:4px 0 0 16px;color:#b9770e;">'+rep.warnings.map(function(x){return '<li>'+esc(x)+'</li>';}).join('')+'</ul>'; }
+    document.getElementById('weatherSqlReport').innerHTML=html;
+  });
+  var copy=document.getElementById('btnWeatherSqlCopy'); if(copy) copy.addEventListener('click', function(){ var ta=document.getElementById('weatherSqlOutput'); if(!ta.value) return; ta.select(); try{ document.execCommand('copy'); toast('복사했습니다.'); }catch(e){} });
+  var dl=document.getElementById('btnWeatherSqlDownload'); if(dl) dl.addEventListener('click', function(){ var v=document.getElementById('weatherSqlOutput').value||''; if(!v) return; var blob=new Blob([v],{type:'text/sql'}); var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='bot_weather.sql'; a.click(); setTimeout(function(){URL.revokeObjectURL(a.href);},1000); });
+})();
+var BOT_AREA_COLS =['up_area_id','start_point','parent_area_id','area_id','area_name','adjacent_id','incounter_cd','area_cn','target_roll','succ_cn','fail_cn','open_race','race_fail_cn','key_yn','key_id','item_id','item_drop','gold_drop','area_exp','deal_item_id','deal_gold','first_check_yn','check_fail_cn','open_target','area_comment','first_drop_yn','drop_fail_cn','branch_group','no_consume_yn','key_all_yn'];
 
 function sqlDeriveUpAreaId(){
   var H=DATA.sheet1.headers, ai=H.indexOf('지역ID'), ids=[];
