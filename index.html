@@ -4128,6 +4128,7 @@ var FIELD_HINTS = {
   '종족이 아닐 때 스크립트': '해당 종족이 아닐 때 보여줄 글 · 길이 제한 없음 (race_fail_cn)',
   '비고': '운영진용 메모 · 게임에는 안 보임 (area_comment)',
   '개방 조건': '숫자(정수)만 · 개방에 필요한 조건값 · 예: 3 (open_target · INT)',
+  '개방일': '이 날짜(오늘 ≥ 개방일)부터 지역이 열립니다 · 이후 계속 개방 · 비우면 미지정(NULL) · YYYY-MM-DD (open_date · DATE)',
   '최초 유일 지급 여부': '최초 탐사 1인에게만 유일 아이템을 줄지 (first_drop_yn)',
   '유일 아이템 소진 스크립트': '이미 최초 1인이 유일 아이템을 가져간 뒤, 후발 주자가 볼 글 (drop_fail_cn)',
   '갈림길 그룹': '배타적 갈림길 그룹 키 · 같은 값끼리 회차당 택1 · 최대 64자 · 비우면 미적용 (branch_group)',
@@ -4173,7 +4174,16 @@ function fieldInput(label, value, onChange){
   appendFieldHint(wrap, label);
   return wrap;
 }
-var TYPE_CODES = ['INCUNTR_00','INCUNTR_02','INCUNTR_03_ALL','INCUNTR_03_STR','INCUNTR_03_DEX','INCUNTR_03_WIS','INCUNTR_04_IG','INCUNTR_04_II','INCUNTR_04_GI','INCUNTR_99'];
+function fieldDate(label, value, onChange){
+  var wrap = document.createElement('div'); wrap.className='field';
+  var l = document.createElement('label'); l.textContent = label;
+  var inp = document.createElement('input'); inp.type='date'; inp.value = value==null?'':String(value);
+  inp.addEventListener('input', function(){ onChange(inp.value); markDirty(); });
+  wrap.appendChild(l); wrap.appendChild(inp);
+  appendFieldHint(wrap, label);
+  return wrap;
+}
+var TYPE_CODES =['INCUNTR_00','INCUNTR_02','INCUNTR_03_ALL','INCUNTR_03_STR','INCUNTR_03_DEX','INCUNTR_03_WIS','INCUNTR_04_IG','INCUNTR_04_II','INCUNTR_04_GI','INCUNTR_99'];
 
 function typeCodesArray(raw){ return String(raw||'').split(',').map(function(s){return s.trim();}).filter(Boolean); }
 function isDiceType(raw){ return typeCodesArray(raw).some(function(c){return c.indexOf('INCUNTR_03_')===0;}); }
@@ -4712,6 +4722,7 @@ function renderNodePanel(topId, rowId){
   body.appendChild(keyRow);
   var openRow = document.createElement('div'); openRow.className='fieldRow';
   openRow.appendChild(fieldInput('개방 조건', r[C['개방 조건']], function(v){ r[C['개방 조건']]=v; }));
+  openRow.appendChild(fieldDate('개방일', r[C['개방일']], function(v){ r[C['개방일']]=v; }));
   openRow.appendChild(ynSelectField('탐사 기회 미소모 여부', r[C['탐사 기회 미소모 여부']], function(v){ r[C['탐사 기회 미소모 여부']]=v; }, 'N — 기회 소모(기본)', 'Y — 기회 미소모'));
   body.appendChild(openRow);
 
@@ -5351,7 +5362,7 @@ function migrateEntryMarkers(){
   return changed;
 }
 function ensureBotAreaColumns(){
-  var need=['최초 유일 지급 여부','유일 아이템 소진 스크립트','갈림길 그룹','탐사 기회 미소모 여부','키아이템 전원 소모 여부'];
+  var need=['최초 유일 지급 여부','유일 아이템 소진 스크립트','갈림길 그룹','탐사 기회 미소모 여부','키아이템 전원 소모 여부','개방일'];
   if(!DATA||!DATA.sheet1||!DATA.sheet1.headers) return;
   var h=DATA.sheet1.headers, added=false;
   need.forEach(function(n){ if(h.indexOf(n)===-1){ h.push(n); added=true; } });
@@ -6411,7 +6422,7 @@ function openWeatherSqlModal(){ document.getElementById('weatherSqlReport').inne
   var copy=document.getElementById('btnWeatherSqlCopy'); if(copy) copy.addEventListener('click', function(){ var ta=document.getElementById('weatherSqlOutput'); if(!ta.value) return; ta.select(); try{ document.execCommand('copy'); toast('복사했습니다.'); }catch(e){} });
   var dl=document.getElementById('btnWeatherSqlDownload'); if(dl) dl.addEventListener('click', function(){ var v=document.getElementById('weatherSqlOutput').value||''; if(!v) return; var blob=new Blob([v],{type:'text/sql'}); var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='bot_weather.sql'; a.click(); setTimeout(function(){URL.revokeObjectURL(a.href);},1000); });
 })();
-var BOT_AREA_COLS =['up_area_id','start_point','parent_area_id','area_id','area_name','adjacent_id','incounter_cd','area_cn','target_roll','succ_cn','fail_cn','open_race','race_fail_cn','key_yn','key_id','item_id','item_drop','gold_drop','area_exp','deal_item_id','deal_gold','first_check_yn','check_fail_cn','open_target','area_comment','first_drop_yn','drop_fail_cn','branch_group','no_consume_yn','key_all_yn'];
+var BOT_AREA_COLS =['up_area_id','start_point','parent_area_id','area_id','area_name','adjacent_id','incounter_cd','area_cn','target_roll','succ_cn','fail_cn','open_race','race_fail_cn','key_yn','key_id','item_id','item_drop','gold_drop','area_exp','deal_item_id','deal_gold','first_check_yn','check_fail_cn','open_target','area_comment','first_drop_yn','drop_fail_cn','branch_group','no_consume_yn','key_all_yn','open_date'];
 
 function sqlDeriveUpAreaId(){
   var H=DATA.sheet1.headers, ai=H.indexOf('지역ID'), ids=[];
@@ -6460,6 +6471,8 @@ function buildBotAreaSql(opts){
     function pYN(cn,h){ var s=(col(row,h)==null?'':String(col(row,h))).trim().toUpperCase(); if(s==='Y'){vals[cn]="'Y'";} else if(s===''||s==='N'){vals[cn]="'N'";} else {warnings.push(label+': '+cn+' "'+s.slice(0,8)+'" → N 처리'); vals[cn]="'N'";} }
     // 빈 값을 컬럼 기본값(def)으로 매핑하는 Y/N (예: key_all_yn 기본 'Y')
     function pYND(cn,h,def){ var d=(String(def).toUpperCase()==='Y')?'Y':'N'; var s=(col(row,h)==null?'':String(col(row,h))).trim().toUpperCase(); if(s==='Y'){vals[cn]="'Y'";} else if(s==='N'){vals[cn]="'N'";} else if(s===''){vals[cn]="'"+d+"'";} else {warnings.push(label+': '+cn+' "'+s.slice(0,8)+'" → '+d+' 처리'); vals[cn]="'"+d+"'";} }
+    // DATE 칸: 비우면 NULL, YYYY-MM-DD면 그대로, 형식 오류면 행 제외(wSqlDate 재사용)
+    function pDate(cn,h){ var d=wSqlDate(col(row,h)); if(d.err){ e.push(cn+' 날짜 형식 오류(YYYY-MM-DD)'); vals[cn]='NULL'; return; } vals[cn]=d.sql; }
 
     // area_id (필수·varchar100)
     if(areaId.length>100)e.push('area_id 길이>100'); if(sqlHasAstral(areaId))e.push('area_id에 4바이트 문자'); vals.area_id="'"+sqlEscape(areaId)+"'";
@@ -6490,6 +6503,7 @@ function buildBotAreaSql(opts){
     pStr('branch_group','갈림길 그룹');
     pYN('no_consume_yn','탐사 기회 미소모 여부');            // 기본 N
     pYND('key_all_yn','키아이템 전원 소모 여부','Y');        // 기본 Y
+    pDate('open_date','개방일');                            // DATE nullable, NULL=미개방
 
     if(e.length){ errors.push(label+': '+e.join(', ')); continue; }
     valueRows.push(vals);
