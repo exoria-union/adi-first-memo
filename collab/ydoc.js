@@ -39,6 +39,13 @@ export const PERSONAL_KEYS = new Set([
   'tagColors', 'tagOpacity', 'fontSettings', 'customFonts', 'exportNames',
 ]);
 
+// 삭제 금지 최상위 키. 나중에 추가된 섹션(예: 날씨)은 "그 코드가 아직 없는 옛 클라이언트"의
+// DATA엔 없어서, reconcile의 "한쪽에 없는 키 삭제" 규칙에 걸려 공유 문서에서 지워질 수 있다.
+// 이 집합의 키는 incoming data에 없어도 Y.Doc에서 삭제하지 않는다(동기화 자체는 정상 수행).
+export const PROTECTED_KEYS = new Set([
+  'weather',
+]);
+
 const ID_COL = 1; // sheet1 헤더의 "지역ID" 열 인덱스(행 식별자)
 
 // ---------------------------------------------------------------------------
@@ -193,9 +200,9 @@ function deepEq(a, b) {
 export function reconcile(ydoc, data, shadow, origin) {
   const root = ydoc.getMap('project');
   ydoc.transact(() => {
-    // 삭제된 최상위 키
+    // 삭제된 최상위 키(단, 보호 키는 incoming data에 없어도 지우지 않음 — 옛 클라이언트발 유실 방지)
     root.forEach((_v, k) => {
-      if (!(k in data) && !PERSONAL_KEYS.has(k)) root.delete(k);
+      if (!(k in data) && !PERSONAL_KEYS.has(k) && !PROTECTED_KEYS.has(k)) root.delete(k);
     });
     for (const k of Object.keys(data)) {
       if (PERSONAL_KEYS.has(k)) continue;

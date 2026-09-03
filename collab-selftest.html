@@ -124,6 +124,27 @@ try {
     ok('A===B 수렴', JSON.stringify(readProject(docA)) === JSON.stringify(readProject(docB)));
   }
 
+  // ---- 6. 보호 키(weather)는 incoming data에 없어도 삭제되지 않음(옛 클라이언트발 유실 방지) ----
+  {
+    const docW = new Y.Doc();
+    const base = sampleData();
+    base.weather = { headers:['내용','비고'], rows:[['맑음','메모1']] };  // 보호 키
+    base.tempSection = { x: 1 };                                          // 비보호 최상위 키
+    buildProject(docW, clone(base), 'init');
+    ok('weather 초기 존재', !!readProject(docW).weather);
+    ok('tempSection 초기 존재', !!readProject(docW).tempSection);
+    // "weather·tempSection을 모르는 옛 클라이언트"의 push 모사: incoming data에 두 키가 없다.
+    const oldData = readProject(docW);
+    delete oldData.weather; delete oldData.tempSection;
+    const shadow = clone(oldData);
+    oldData.toolTitle = '옛클라 편집';                                    // 옛 클라가 다른 걸 편집
+    reconcile(docW, oldData, shadow, 'app');
+    const after = readProject(docW);
+    ok('보호 키 weather는 삭제되지 않음', !!(after.weather && after.weather.rows && after.weather.rows.length===1 && after.weather.rows[0][0]==='맑음'));
+    ok('비보호 키 tempSection은 삭제됨(기존 동작 유지)', !('tempSection' in after));
+    ok('옛 클라의 다른 편집(제목)은 정상 반영', after.toolTitle === '옛클라 편집');
+  }
+
   log('\n=== ' + pass + ' passed, ' + fail + ' failed ===', fail ? 'fail' : 'pass');
   document.title = fail === 0 ? 'BRIDGE OK' : 'BRIDGE FAIL';
 } catch (e) {
