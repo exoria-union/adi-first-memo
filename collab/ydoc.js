@@ -39,11 +39,13 @@ export const PERSONAL_KEYS = new Set([
   'tagColors', 'tagOpacity', 'fontSettings', 'customFonts', 'exportNames',
 ]);
 
-// 삭제 금지 최상위 키. 나중에 추가된 섹션(예: 날씨)은 "그 코드가 아직 없는 옛 클라이언트"의
+// 삭제 금지 최상위 키. 나중에 추가된 섹션(예: 날씨·에너미)은 "그 코드가 아직 없는 옛 클라이언트"의
 // DATA엔 없어서, reconcile의 "한쪽에 없는 키 삭제" 규칙에 걸려 공유 문서에서 지워질 수 있다.
 // 이 집합의 키는 incoming data에 없어도 Y.Doc에서 삭제하지 않는다(동기화 자체는 정상 수행).
+// ⚠ index.html에 새 최상위 데이터 섹션(탭)을 추가하면 반드시 여기에도 그 키를 넣을 것.
 export const PROTECTED_KEYS = new Set([
   'weather',
+  'enemy',
 ]);
 
 const ID_COL = 1; // sheet1 헤더의 "지역ID" 열 인덱스(행 식별자)
