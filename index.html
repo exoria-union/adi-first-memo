@@ -58,14 +58,14 @@
   #topbar>*{flex-shrink:0;}
   #topbar::-webkit-scrollbar{height:6px;}
   #topbar::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:99px;}
-  #topbar button{font-size:14px;font-weight:600;padding:7px 13px;}
-  #topbar button.tbIconOnly{font-size:16px;padding:6px 10px;line-height:1;}
+  #topbar button{font-size:15px;font-weight:600;padding:7px 13px;}
+  #topbar button.tbIconOnly{font-size:17px;padding:6px 10px;line-height:1;}
   /* 자주 안 쓰는 설정(태그색·글꼴·시트이름)은 한 단계 덜 눈에 띄게 */
   #tagColorWrap>button, #fontMenuWrap>button, #exportSettingsWrap>button{color:var(--text-faint);font-weight:500;}
   #tagColorWrap>button:hover, #fontMenuWrap>button:hover, #exportSettingsWrap>button:hover{color:var(--text-dim);}
-  #topbar h1{font-size:16px;font-weight:700;margin:0;white-space:nowrap;letter-spacing:-0.02em;}
+  #topbar h1{font-size:17px;font-weight:700;margin:0;white-space:nowrap;letter-spacing:-0.02em;}
   #toolTitleInput{
-    font-size:16px;font-weight:700;border:1px solid transparent;background:transparent;color:var(--text);
+    font-size:17px;font-weight:700;border:1px solid transparent;background:transparent;color:var(--text);
     padding:5px 9px;border-radius:var(--radius-sm);font-family:var(--sans);min-width:140px;letter-spacing:-0.02em;
   }
   #toolTitleInput:hover{border-color:var(--border-strong);}
@@ -75,7 +75,7 @@
   #exportWrap{position:relative;display:inline-block;}
   .tbMenu{position:fixed;z-index:1400;background:var(--surface);border:1px solid var(--border-strong);border-radius:var(--radius-sm);box-shadow:0 6px 18px rgba(0,0,0,.13);padding:5px;min-width:250px;display:none;}
   .tbMenu.open{display:block;}
-  .tbMenuItem{display:block;width:100%;text-align:left;border:none;background:transparent;padding:10px 12px;font-size:14px;border-radius:var(--radius-sm);color:var(--text);white-space:nowrap;font-weight:500;}
+  .tbMenuItem{display:block;width:100%;text-align:left;border:none;background:transparent;padding:10px 12px;font-size:15px;border-radius:var(--radius-sm);color:var(--text);white-space:nowrap;font-weight:500;}
   .tbMenuItem:hover{background:var(--accent-soft);color:var(--accent);}
   .tbMenuItem .tbMenuSub{display:block;font-size:12px;color:var(--text-faint);font-weight:400;margin-top:2px;}
   .tbMenuItem:hover .tbMenuSub{color:var(--accent);}
@@ -84,13 +84,13 @@
   #settingsMenu{min-width:300px;max-height:calc(100vh - 96px);overflow:auto;padding:0;}
   .setSection{padding:13px 15px;border-bottom:1px solid var(--border);}
   .setSection:last-child{border-bottom:none;}
-  .setHead{font-size:13px;font-weight:800;color:var(--text);margin-bottom:9px;letter-spacing:-0.01em;}
+  .setHead{font-size:14px;font-weight:800;color:var(--text);margin-bottom:9px;letter-spacing:-0.01em;}
   /* 옮겨온 개별 메뉴는 패널 안에서 항상 펼쳐진 정적 섹션으로(절대위치·장식·토글 해제) */
   #settingsMenu #tagColorMenu, #settingsMenu #fontMenu, #settingsMenu #exportSettingsMenu{
     display:block !important;position:static !important;top:auto;right:auto;
     box-shadow:none;border:none;padding:0;min-width:0;background:none;z-index:auto;
   }
-  #cloudStatus{font-size:13px;color:var(--text-faint);white-space:nowrap;}
+  #cloudStatus{font-size:13.5px;color:var(--text-faint);white-space:nowrap;}
   #authOverlay{position:fixed;inset:0;background:rgba(246,246,247,.96);z-index:1200;display:flex;align-items:center;justify-content:center;}
   #authCard{width:390px;max-width:92vw;background:#fff;border:1px solid var(--border-strong);border-radius:4px;box-shadow:0 10px 40px rgba(0,0,0,.12);padding:24px;}
   #authCard h2{margin:0 0 8px;font-size:20px;font-weight:700;letter-spacing:-0.02em;}
@@ -124,7 +124,7 @@
     border-radius:3px;font-size:13px;line-height:1;padding:5px 8px;cursor:pointer;
   }
   .projectRow .prDel:hover{border-color:#c0392b;color:#c0392b;background:#fdecea;}
-  #savestate{font-size:13px;color:var(--text-faint);display:flex;align-items:center;gap:5px;white-space:nowrap;}
+  #savestate{font-size:13.5px;color:var(--text-faint);display:flex;align-items:center;gap:5px;white-space:nowrap;}
   #savestate .dot{width:6px;height:6px;border-radius:50%;background:var(--text-faint);}
   #savestate.saved .dot{background:var(--success);}
   #savestate.saved{color:var(--success);}
@@ -132,11 +132,11 @@
 
   #tabbar{display:flex;gap:4px;padding:0 20px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0;}
   .maintab{
-    display:flex;align-items:center;gap:7px;padding:13px 18px;font-size:15px;font-weight:600;
+    display:flex;align-items:center;gap:7px;padding:13px 18px;font-size:16px;font-weight:600;
     color:var(--text-dim);cursor:pointer;border-bottom:3px solid transparent;user-select:none;
     letter-spacing:-0.01em;transition:color .12s,border-color .12s,background .12s;border-radius:8px 8px 0 0;
   }
-  .maintab .tabIco{font-size:17px;line-height:1;}
+  .maintab .tabIco{font-size:18px;line-height:1;}
   .maintab:hover{color:var(--text);background:#f5f6f8;}
   .maintab.active{color:var(--accent);border-bottom-color:var(--accent);font-weight:700;}
 
@@ -228,7 +228,7 @@
 
   .regionHeaderCard{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:16px 18px;}
   .regionHeaderCard .rtitle{font-size:17px;font-weight:700;}
-  .regionHeaderCard .rscript{color:var(--text-dim);font-size:13.5px;margin-top:6px;white-space:pre-wrap;}
+  .regionHeaderCard .rscript{color:var(--text-dim);font-size:14.5px;margin-top:6px;white-space:pre-wrap;}
 
   /* focused drill-down flow view */
   .focusTrail{display:flex;flex-wrap:wrap;align-items:center;gap:2px;margin-bottom:12px;min-height:20px;}
@@ -264,7 +264,7 @@
   .badge.typecode{background:var(--bg);color:var(--text-dim);border:1px solid var(--border-strong);font-family:var(--mono);}
   .badge.note{background:#fff3cd;color:#8a6d1a;font-weight:800;cursor:default;}
   .badge.note{background:#fff3cd;color:#8a6d1a;font-weight:800;cursor:default;}
-  .currentCard .ccScript{font-size:13px;color:var(--text-dim);white-space:pre-wrap;line-height:1.6;}
+  .currentCard .ccScript{font-size:14.5px;color:var(--text-dim);white-space:pre-wrap;line-height:1.6;}
   .currentCard .ccEditBtn{
     flex-shrink:0;border:1px solid var(--border-strong);background:var(--bg);border-radius:var(--radius-sm);
     padding:5px 11px;font-size:13px;color:var(--text-dim);cursor:pointer;
@@ -275,7 +275,7 @@
   .choiceGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;margin-bottom:16px;}
   .choiceCard{
     background:var(--surface);border:1px solid var(--border-strong);border-radius:var(--radius-sm);
-    padding:14px 16px;cursor:pointer;font-size:14px;font-weight:600;text-align:left;
+    padding:14px 16px;cursor:pointer;font-size:15px;font-weight:600;text-align:left;
     transition:border-color .1s,box-shadow .1s,background .1s;
   }
   .choiceCard:hover{border-color:var(--accent);background:var(--accent-soft);box-shadow:0 2px 8px rgba(0,0,0,.06);}
@@ -287,12 +287,12 @@
   /* choice editor inside node panel */
   .choiceEditList{display:flex;flex-direction:column;gap:5px;}
   .choiceEditRow{display:flex;gap:5px;align-items:center;}
-  .choiceEditRow input{flex:1;border:1px solid var(--border-strong);border-radius:var(--radius-sm);padding:6px 8px;font-size:13px;background:var(--bg);}
+  .choiceEditRow input{flex:1;border:1px solid var(--border-strong);border-radius:var(--radius-sm);padding:6px 8px;font-size:14px;background:var(--bg);}
   .choiceEditRow input:focus{outline:none;border-color:var(--accent);background:#fff;}
   .choiceEditRow button{padding:4px 8px;flex-shrink:0;}
   .choiceEditRow select.choiceTarget{
     flex:1;min-width:0;border:1px solid var(--border-strong);border-radius:var(--radius-sm);padding:6px 8px;
-    font-size:13px;background:var(--bg);font-family:inherit;color:var(--text);cursor:pointer;
+    font-size:14px;background:var(--bg);font-family:inherit;color:var(--text);cursor:pointer;
   }
   .choiceEditRow select.choiceTarget:focus{outline:none;border-color:var(--accent);background:#fff;}
   .choiceEditRow select.choiceTarget.choiceDangling{border-color:#c0392b;background:#fdecea;color:#c0392b;font-weight:600;}
@@ -301,7 +301,7 @@
   #nodePanelOverlay{position:fixed;inset:0;background:rgba(0,0,0,.28);z-index:300;display:none;}
   #nodePanelOverlay.open{display:block;}
   #nodePanel{
-    position:fixed;top:0;right:0;bottom:0;width:560px;max-width:94vw;background:var(--surface);
+    position:fixed;top:0;right:0;bottom:0;width:760px;max-width:94vw;background:var(--surface);
     box-shadow:-8px 0 40px rgba(0,0,0,.18);z-index:301;transform:translateX(100%);
     transition:transform .18s ease;display:flex;flex-direction:column;
   }
@@ -314,21 +314,22 @@
   #nodePanel .npHead input:focus{outline:none;border-color:var(--accent);background:var(--accent-soft);}
   #nodePanel .npBody{flex:1;overflow:auto;padding:20px 22px;display:flex;flex-direction:column;gap:18px;}
   .field{display:flex;flex-direction:column;gap:6px;}
-  .field label{font-size:13.5px;font-weight:700;color:var(--text-dim);letter-spacing:-0.01em;}
+  .field label{font-size:14.5px;font-weight:700;color:var(--text-dim);letter-spacing:-0.01em;}
   .field textarea, .field input[type=text], .field input[type=number], .field input[type=date]{
-    border:1px solid var(--border-strong);border-radius:var(--radius-sm);padding:9px 11px;font-size:14px;
+    border:1px solid var(--border-strong);border-radius:var(--radius-sm);padding:9px 11px;font-size:15.5px;
     background:var(--bg);font-family:var(--sans);resize:vertical;width:100%;box-sizing:border-box;line-height:1.6;
   }
   .field textarea:focus, .field input:focus{outline:none;border-color:var(--accent);background:#fff;}
   .fieldRow{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
   .fieldRow3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;}
   .choiceList{display:flex;flex-direction:column;gap:5px;}
-  .choiceBtn{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 10px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);background:var(--bg);cursor:pointer;font-size:13px;}
+  .choiceBtn{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 10px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);background:var(--bg);cursor:pointer;font-size:14px;}
   .choiceBtn:hover{border-color:var(--accent);background:var(--accent-soft);}
   .choiceBtn .missing{color:var(--text-faint);font-style:italic;}
 
   /* ============ LIST SCREENS (items/subquests) ============ */
-  #main.listscreen{max-width:1240px;margin:0 auto;}
+  #main.listscreen{max-width:1600px;margin:0 auto;}
+  #main.detailscreen{max-width:1080px;margin:0 auto;}
   .listToolbar{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;}
   .regionPick{
     width:100%;font-size:12px;padding:3px 5px;border:1px solid var(--border);border-radius:var(--radius-sm);
@@ -356,7 +357,7 @@
   .itemGrid.viewList{display:flex;flex-direction:column;gap:6px;}
   .itemGrid.viewList .itemCard{display:flex;align-items:center;gap:12px;padding:9px 14px;}
   .itemGrid.viewList .itemCard .icListThumb{width:36px;height:36px;flex-shrink:0;border-radius:var(--radius-sm);background:var(--bg) center/cover no-repeat;}
-  .itemGrid.viewList .itemCard .icname{font-size:13.5px;}
+  .itemGrid.viewList .itemCard .icname{font-size:15px;}
   .itemGrid.viewList .itemCard .iccat{margin-top:0;}
   .itemGrid.viewList .itemCard .icListBody{flex:1;display:flex;flex-direction:column;gap:1px;min-width:0;}
   .itemGrid.viewGallery .itemCard{padding:0;overflow:hidden;}
@@ -364,7 +365,7 @@
   .itemGrid.viewGallery .itemCard .icGalleryBody{padding:12px 14px;}
   .itemCard{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;cursor:pointer;}
   .itemCard:hover{border-color:var(--accent);box-shadow:0 2px 8px rgba(0,0,0,.06);}
-  .itemCard .icname{font-weight:600;font-size:13px;}
+  .itemCard .icname{font-weight:600;font-size:15px;}
   .itemCard .iccat{font-size:12px;color:var(--text-faint);margin-top:2px;}
   .itemCard .ictags{margin-top:6px;display:flex;flex-wrap:wrap;gap:3px;}
   .sqtag{font-size:12px;font-weight:700;border-radius:999px;padding:1.5px 8px;cursor:default;}
@@ -373,12 +374,14 @@
   .sqlist.viewGrid .sqrow{flex-direction:column;align-items:flex-start;}
   .sqrow{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;}
   .sqrow:hover{border-color:var(--accent);}
-  .sqrow .sqname{font-weight:600;font-size:13px;}
+  .sqrow .sqname{font-weight:600;font-size:15px;}
   .sqrow .sqid{font-family:var(--mono);font-size:12px;color:var(--text-faint);}
   .sqrow .sqitemtags{display:flex;gap:4px;flex-wrap:wrap;}
 
-  .detailCard{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:18px 20px;max-width:640px;}
-  .detailCard.wide{max-width:960px;}
+  .detailCard{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:20px 24px;max-width:860px;}
+  .detailCard.wide{max-width:1240px;}
+  /* 상세 화면에서는 카드가 #main(detailscreen) 폭을 꽉 채운다 — 오른쪽 빈 공간/중간 스크롤 방지 */
+  #main.detailscreen .detailCard{max-width:none;}
   .backlink{font-size:13px;color:var(--accent);cursor:pointer;margin-bottom:10px;display:inline-block;}
   .backlink:hover{text-decoration:underline;}
 
@@ -2475,13 +2478,11 @@ function render(){
     else if(nav.view==='canvas') renderClusterCanvasScreen(main, crumb);
     else renderMapScreen(main, crumb);
   } else if(nav.main==='items'){
-    main.className='listscreen';
-    if(nav.itemId!=null) renderItemDetail(main, crumb);
-    else renderItemsScreen(main, crumb);
+    if(nav.itemId!=null){ main.className='detailscreen'; renderItemDetail(main, crumb); }
+    else { main.className='listscreen'; renderItemsScreen(main, crumb); }
   } else if(nav.main==='subquests'){
-    main.className='listscreen';
-    if(nav.sqId!=null) renderSubquestDetail(main, crumb);
-    else renderSubquestsScreen(main, crumb);
+    if(nav.sqId!=null){ main.className='detailscreen'; renderSubquestDetail(main, crumb); }
+    else { main.className='listscreen'; renderSubquestsScreen(main, crumb); }
   } else if(nav.main==='weather'){
     main.className='listscreen';
     renderWeatherScreen(main, crumb);
@@ -4211,7 +4212,7 @@ function appendFieldHint(wrap, label){
 function ynSelectField(label, value, onChange, nText, yText, defYN){
   var w=document.createElement('div');w.className='field';
   var l=document.createElement('label');l.textContent=label;w.appendChild(l);
-  var sel=document.createElement('select');sel.style.cssText='border:1px solid var(--border-strong);border-radius:var(--radius-sm);padding:9px 11px;font-size:14px;background:var(--bg);font-family:var(--sans);width:100%;box-sizing:border-box;';
+  var sel=document.createElement('select');sel.style.cssText='border:1px solid var(--border-strong);border-radius:var(--radius-sm);padding:9px 11px;font-size:15px;background:var(--bg);font-family:var(--sans);width:100%;box-sizing:border-box;';
   // 값이 비어 있으면 컬럼 기본값(defYN)을 따른다. defYN 없으면 기존대로 N.
   var t=String(value==null?'':value).trim().toUpperCase();
   var cur=(t==='Y')?'Y':(t==='N'?'N':((defYN!=null&&String(defYN).toUpperCase()==='Y')?'Y':'N'));
@@ -4313,7 +4314,7 @@ function typeTagsForRow(row){
   if(m.length)tags.push({text:'⚠ 필수 '+m.length+'건',cls:'warn',title:m.join(', ')});
   return tags;
 }
-function itemSelectField(label,value,onChange,required){ var w=document.createElement('div');w.className='field';var l=document.createElement('label');l.innerHTML=escapeHtml(label)+(required?'<span class="requiredMark">*</span>':'');w.appendChild(l);var sel=document.createElement('select');sel.style.cssText='border:1px solid var(--border-strong);border-radius:var(--radius-sm);padding:9px 11px;font-size:14px;background:var(--bg);font-family:var(--sans);width:100%;box-sizing:border-box;';var b=document.createElement('option');b.value='';b.textContent='선택하세요';sel.appendChild(b);var rows=(DATA.items.rows||[]).concat(DATA.keyItems.rows||[]),seen={};rows.forEach(function(r){var id=String(r[0]||'');if(!id||seen[id])return;seen[id]=1;var o=document.createElement('option');o.value=id;o.textContent='['+id+'] '+String(r[1]||'');if(String(value||'')===id)o.selected=true;sel.appendChild(o);});if(value&&!seen[String(value)]){var ox=document.createElement('option');ox.value=String(value);ox.textContent='['+value+'] (목록에 없음)';ox.selected=true;sel.appendChild(ox);}sel.addEventListener('change',function(){onChange(sel.value);markDirty();});w.appendChild(sel);return w;}
+function itemSelectField(label,value,onChange,required){ var w=document.createElement('div');w.className='field';var l=document.createElement('label');l.innerHTML=escapeHtml(label)+(required?'<span class="requiredMark">*</span>':'');w.appendChild(l);var sel=document.createElement('select');sel.style.cssText='border:1px solid var(--border-strong);border-radius:var(--radius-sm);padding:9px 11px;font-size:15px;background:var(--bg);font-family:var(--sans);width:100%;box-sizing:border-box;';var b=document.createElement('option');b.value='';b.textContent='선택하세요';sel.appendChild(b);var rows=(DATA.items.rows||[]).concat(DATA.keyItems.rows||[]),seen={};rows.forEach(function(r){var id=String(r[0]||'');if(!id||seen[id])return;seen[id]=1;var o=document.createElement('option');o.value=id;o.textContent='['+id+'] '+String(r[1]||'');if(String(value||'')===id)o.selected=true;sel.appendChild(o);});if(value&&!seen[String(value)]){var ox=document.createElement('option');ox.value=String(value);ox.textContent='['+value+'] (목록에 없음)';ox.selected=true;sel.appendChild(ox);}sel.addEventListener('change',function(){onChange(sel.value);markDirty();});w.appendChild(sel);return w;}
 function firstExplorationField(row){
   var w=document.createElement('div');w.className='field';
   var l=document.createElement('label');l.textContent='최초 탐사 여부';w.appendChild(l);
@@ -4327,7 +4328,7 @@ function firstExplorationField(row){
 function raceSpecificField(row){
   var w=document.createElement('div');w.className='field';
   var l=document.createElement('label');l.textContent='종족 전용 여부';w.appendChild(l);
-  var sel=document.createElement('select');sel.style.cssText='border:1px solid var(--border-strong);border-radius:var(--radius-sm);padding:9px 11px;font-size:14px;background:var(--bg);font-family:var(--sans);width:100%;box-sizing:border-box;';
+  var sel=document.createElement('select');sel.style.cssText='border:1px solid var(--border-strong);border-radius:var(--radius-sm);padding:9px 11px;font-size:15px;background:var(--bg);font-family:var(--sans);width:100%;box-sizing:border-box;';
   [['','없음'],['H_ALL','H_ALL'],['VAM','VAM'],['GAG','GAG'],['BAN','BAN'],['CYC','CYC']].forEach(function(x){var o=document.createElement('option');o.value=x[0];o.textContent=x[1];if(String(row[C['종족 전용']]||'')===x[0])o.selected=true;sel.appendChild(o);});
   sel.addEventListener('change',function(){row[C['종족 전용']]=sel.value;markDirty();refreshNodeEditorTags(row);});
   w.appendChild(sel);var h=document.createElement('div');h.style.cssText='font-size:12px;color:var(--text-faint);margin-top:3px;';h.textContent='값이 있으면 「종족이 아닐 때 스크립트」가 필수입니다.';w.appendChild(h);return w;
@@ -4425,7 +4426,7 @@ function fieldSelect(label, value, options, onChange){
   var wrap = document.createElement('div'); wrap.className='field';
   var l = document.createElement('label'); l.textContent = label;
   var sel = document.createElement('select');
-  sel.style.cssText = 'border:1px solid var(--border-strong);border-radius:var(--radius-sm);padding:9px 11px;font-size:14px;background:var(--bg);font-family:var(--sans);width:100%;box-sizing:border-box;';
+  sel.style.cssText = 'border:1px solid var(--border-strong);border-radius:var(--radius-sm);padding:9px 11px;font-size:15px;background:var(--bg);font-family:var(--sans);width:100%;box-sizing:border-box;';
   options.forEach(function(opt){
     var o = document.createElement('option'); o.value = opt; o.textContent = opt;
     if(opt === value) o.selected = true;
@@ -5164,9 +5165,16 @@ function renderItemDetail(main, crumb){
   topRow.appendChild(back); topRow.appendChild(delBtn);
   card.appendChild(topRow);
 
-  var h = document.createElement('div'); h.style.fontSize='16px'; h.style.fontWeight='700'; h.style.margin='10px 0';
+  var h = document.createElement('div'); h.style.fontSize='18px'; h.style.fontWeight='700'; h.style.margin='10px 0';
   h.textContent = r[1] + '  (#' + r[0] + ')';
   card.appendChild(h);
+
+  // 2단 배치: 왼쪽=식별/분류/이미지, 오른쪽=획득처/설명/메모 — 상세가 세로 스크롤 없이 한 화면에 들어오게
+  var grid = document.createElement('div');
+  grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px 22px;align-items:start;';
+  var colL = document.createElement('div'); colL.style.cssText = 'display:flex;flex-direction:column;gap:14px;min-width:0;';
+  var colR = document.createElement('div'); colR.style.cssText = 'display:flex;flex-direction:column;gap:14px;min-width:0;';
+  card.appendChild(grid); grid.appendChild(colL); grid.appendChild(colR);
 
   var idField = document.createElement('div'); idField.className='field';
   var idLabel = document.createElement('label'); idLabel.textContent = 'ID (코드)';
@@ -5177,7 +5185,7 @@ function renderItemDetail(main, crumb){
     go({itemId:newId});
   });
   idField.appendChild(idLabel); idField.appendChild(idInput);
-  card.appendChild(idField);
+  colL.appendChild(idField);
 
   if(!DATA.itemImages) DATA.itemImages = {};
   var imgWrap = document.createElement('div'); imgWrap.className='itemImgWrap';
@@ -5223,10 +5231,10 @@ function renderItemDetail(main, crumb){
   });
   controls.appendChild(fileInp); controls.appendChild(removeBtn);
   imgWrap.appendChild(thumb); imgWrap.appendChild(controls);
-  card.appendChild(imgWrap);
+  colL.appendChild(imgWrap);
 
-  card.appendChild(fieldInput('이름', r[1], function(v){ r[1]=v; }));
-  card.appendChild(fieldInput('분류', r[2], function(v){ r[2]=v; }));
+  colL.appendChild(fieldInput('이름', r[1], function(v){ r[1]=v; }));
+  colL.appendChild(fieldInput('분류', r[2], function(v){ r[2]=v; }));
   var acqField = fieldTextarea(isKey?'용도':'획득처', r[3], function(v){ r[3]=v; }, 2);
   if(!isKey){
     var acqHelp = document.createElement('div');
@@ -5234,17 +5242,17 @@ function renderItemDetail(main, crumb){
     acqHelp.textContent = '맨 앞의 지역명이 지도상의 위치입니다. 지도에서 다른 칸으로 끌어다 놓으면 이 지역명이 자동으로 바뀌고, 뒤의 세부 경로는 그대로 유지돼요.';
     acqField.appendChild(acqHelp);
   }
-  card.appendChild(acqField);
-  card.appendChild(fieldTextarea('설명', r[4], function(v){ r[4]=v; }, 3));
+  colR.appendChild(acqField);
+  colR.appendChild(fieldTextarea('설명', r[4], function(v){ r[4]=v; }, 3));
   var memoCol = itemMemoCol(isKey);
-  card.appendChild(fieldTextarea('메모', r[memoCol], function(v){ r[memoCol]=v; }, 2));
+  colR.appendChild(fieldTextarea('메모', r[memoCol], function(v){ r[memoCol]=v; }, 2));
 
   if(!isKey && itemCategoryBucket(r[2])==='product'){
     statCols();
     var statRow = document.createElement('div'); statRow.className='fieldRow';
     statRow.appendChild(fieldInput('HP 회복량', r[HP_COL], function(v){ r[HP_COL]=v; }));
     statRow.appendChild(fieldInput('SP 회복량', r[SP_COL], function(v){ r[SP_COL]=v; }));
-    card.appendChild(statRow);
+    colL.appendChild(statRow);
   }
 
   var sqIds = DATA.itemSubquests[r[0]] || [];
@@ -5259,7 +5267,7 @@ function renderItemDetail(main, crumb){
       b.addEventListener('click', function(){ go({main:'subquests', sqId:sid, itemId:null}); });
       sqWrap.appendChild(b);
     });
-    card.appendChild(sqWrap);
+    colR.appendChild(sqWrap);
   }
 
   main.appendChild(card);
@@ -5349,9 +5357,16 @@ function renderSubquestDetail(main, crumb){
   topRow.appendChild(back); topRow.appendChild(delBtn);
   card.appendChild(topRow);
 
-  var h = document.createElement('div'); h.style.fontSize='16px'; h.style.fontWeight='700'; h.style.margin='10px 0';
+  var h = document.createElement('div'); h.style.fontSize='18px'; h.style.fontWeight='700'; h.style.margin='10px 0';
   h.textContent = r[1];
   card.appendChild(h);
+
+  // 2단 배치: 왼쪽=식별/내용, 오른쪽=지역/보상 — 상세가 세로 스크롤 없이 한 화면에 들어오게
+  var grid = document.createElement('div');
+  grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px 22px;align-items:start;';
+  var colL = document.createElement('div'); colL.style.cssText = 'display:flex;flex-direction:column;gap:14px;min-width:0;';
+  var colR = document.createElement('div'); colR.style.cssText = 'display:flex;flex-direction:column;gap:14px;min-width:0;';
+  card.appendChild(grid); grid.appendChild(colL); grid.appendChild(colR);
 
   var idField = document.createElement('div'); idField.className='field';
   var idLabel = document.createElement('label'); idLabel.textContent = 'ID (코드)';
@@ -5362,14 +5377,14 @@ function renderSubquestDetail(main, crumb){
     go({sqId:newId});
   });
   idField.appendChild(idLabel); idField.appendChild(idInput);
-  card.appendChild(idField);
+  colL.appendChild(idField);
 
-  card.appendChild(fieldInput('이름', r[1], function(v){ r[1]=v; }));
-  card.appendChild(fieldInput('의뢰 지역', r[2], function(v){ r[2]=v; }));
-  card.appendChild(fieldInput('재료 지역', r[3], function(v){ r[3]=v; }));
-  card.appendChild(fieldInput('보고 지역', r[4], function(v){ r[4]=v; }));
-  card.appendChild(fieldTextarea('내용 요약', r[5], function(v){ r[5]=v; }, 3));
-  card.appendChild(fieldInput('보상', r[6], function(v){ r[6]=v; }));
+  colL.appendChild(fieldInput('이름', r[1], function(v){ r[1]=v; }));
+  colL.appendChild(fieldTextarea('내용 요약', r[5], function(v){ r[5]=v; }, 3));
+  colR.appendChild(fieldInput('의뢰 지역', r[2], function(v){ r[2]=v; }));
+  colR.appendChild(fieldInput('재료 지역', r[3], function(v){ r[3]=v; }));
+  colR.appendChild(fieldInput('보고 지역', r[4], function(v){ r[4]=v; }));
+  colR.appendChild(fieldInput('보상', r[6], function(v){ r[6]=v; }));
 
   main.appendChild(card);
 }
