@@ -671,6 +671,27 @@
   </div>
 </div>
 
+<div id="enemySqlModal" style="position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:1300;display:none;align-items:center;justify-content:center;">
+  <div style="width:760px;max-width:95vw;max-height:92vh;overflow:auto;background:var(--surface);border:1px solid var(--border-strong);border-radius:6px;box-shadow:0 14px 44px rgba(0,0,0,.28);padding:18px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+      <div style="font-size:16px;font-weight:700;">bot_enemy SQL 내보내기</div>
+      <button class="ghost" id="btnEnemySqlClose">닫기</button>
+    </div>
+    <div style="font-size:13px;color:var(--text-dim);margin:6px 0 12px;line-height:1.6;">
+      현재 프로젝트의 '에너미' 데이터를 <b>bot_enemy</b> 테이블용 <b>INSERT문</b>으로 만듭니다.
+      생성 전에 검증해서 <b>오류가 날 행(코드·이름 비어있음·이모지 등 4바이트 문자·숫자칸 비숫자·길이 초과)은 제외</b>하고 아래에 리포트로 알려줍니다.
+      <br>※ <code>enemy_id</code>(자동)·<code>cre_dt</code>(자동)·<code>enemy_cnt</code>(런타임)는 넣지 않습니다. 다시 실행하면 새 행으로 추가됩니다.
+    </div>
+    <div style="margin-bottom:12px;"><button class="primary" id="btnEnemySqlGenerate" style="padding:7px 16px;">생성</button></div>
+    <div id="enemySqlReport" style="font-size:13px;margin-bottom:8px;min-height:18px;"></div>
+    <textarea id="enemySqlOutput" readonly placeholder="[생성] 버튼을 누르면 여기에 INSERT문이 나옵니다." style="width:100%;height:280px;font-family:var(--mono);font-size:13px;white-space:pre;overflow:auto;border:1px solid var(--border);border-radius:4px;padding:8px;box-sizing:border-box;background:var(--bg);color:var(--text);"></textarea>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px;">
+      <button class="ghost" id="btnEnemySqlCopy">📋 전체 복사</button>
+      <button class="primary" id="btnEnemySqlDownload">⬇ .sql 다운로드</button>
+    </div>
+  </div>
+</div>
+
 <!-- ===== SQL 매뉴얼 팝업 (DB를 잘 모르는 사용자용) ===== -->
 <div id="sqlManualModal" style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1400;display:none;align-items:center;justify-content:center;">
   <div style="width:640px;max-width:94vw;max-height:90vh;overflow:auto;background:var(--surface);border:1px solid var(--border-strong);border-radius:6px;box-shadow:0 14px 44px rgba(0,0,0,.3);padding:20px;line-height:1.7;font-size:13px;">
@@ -824,6 +845,7 @@
   <div class="maintab" data-maintab="items"><span class="tabIco">🎒</span>아이템</div>
   <div class="maintab" data-maintab="subquests"><span class="tabIco">📜</span>서브퀘스트</div>
   <div class="maintab" data-maintab="weather"><span class="tabIco">☁️</span>날씨</div>
+  <div class="maintab" data-maintab="enemy"><span class="tabIco">👹</span>에너미</div>
 </div>
 
 <div id="breadcrumb"></div>
@@ -2486,6 +2508,9 @@ function render(){
   } else if(nav.main==='weather'){
     main.className='listscreen';
     renderWeatherScreen(main, crumb);
+  } else if(nav.main==='enemy'){
+    main.className='listscreen';
+    renderEnemyScreen(main, crumb);
   }
 }
 
@@ -3015,6 +3040,8 @@ function stepKey(step){
 //   [0]내용(weather_cn·필수) [1]비고(weather_comment) [2]사용 여부(use_yn) [3]발생 횟수(weather_cnt)
 //   [4]적용 시작일(date) [5]적용 종료일(date). ensureGraphDataShape() 호출보다 먼저 정의해야 함.
 var WEATHER_COLS = ['내용','비고','사용 여부','발생 횟수','적용 시작일','적용 종료일'];
+// 에너미(bot_enemy) 편집 컬럼 — 행은 이 순서의 배열(enemy_id·cre_dt·enemy_cnt는 자동/런타임이라 제외). ENEMY_INSERT_COLS와 순서 일치.
+var ENEMY_COLS = ['난이도','코드','이름','HP','노력토큰','출현스크립트','공격성공장면','회피성공장면','대미지','공격요구스탯','드롭아이템ID','드롭개수','공격실패장면','회피실패장면','회피요구스탯','선제공격','사용여부','헌터전용HP','비고'];
 ensureGraphDataShape();
 function canvasPosKey(topId, rowId){ return topId+'#'+rowId; }
 function ensureGraphDataShape(){
@@ -3029,6 +3056,10 @@ function ensureGraphDataShape(){
   // "한쪽에 없는 최상위 키"를 지우는 것을 방지 — 배포 후 팀원 새로고침 권장).
   if(!DATA.weather || typeof DATA.weather !== 'object' || !Array.isArray(DATA.weather.rows)){
     DATA.weather = { headers: WEATHER_COLS.slice(), rows: [] };
+  }
+  // 에너미 데이터 — 날씨와 동일하게 항상 최상위 키를 보장(협업 reconcile이 한쪽에 없는 키를 지우는 것 방지).
+  if(!DATA.enemy || typeof DATA.enemy !== 'object' || !Array.isArray(DATA.enemy.rows)){
+    DATA.enemy = { headers: ENEMY_COLS.slice(), rows: [] };
   }
 }
 // 지도 칸은 gridPositions로만 자리를 잡고, gridPositions는 엑셀 '지역목록' 시트의 좌표 칸에서만 온다.
@@ -6543,6 +6574,170 @@ function openWeatherSqlModal(){ document.getElementById('weatherSqlReport').inne
   });
   var copy=document.getElementById('btnWeatherSqlCopy'); if(copy) copy.addEventListener('click', function(){ var ta=document.getElementById('weatherSqlOutput'); if(!ta.value) return; ta.select(); try{ document.execCommand('copy'); toast('복사했습니다.'); }catch(e){} });
   var dl=document.getElementById('btnWeatherSqlDownload'); if(dl) dl.addEventListener('click', function(){ var v=document.getElementById('weatherSqlOutput').value||''; if(!v) return; var blob=new Blob([v],{type:'text/sql'}); var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='bot_weather.sql'; a.click(); setTimeout(function(){URL.revokeObjectURL(a.href);},1000); });
+})();
+/* =========================================================
+   에너미(bot_enemy) 탭 — 입력 편집기 + SQL 내보내기 (날씨 탭과 동일 패턴)
+   ========================================================= */
+var ENEMY_LEVEL_OPTS = [['EASY','EASY'],['NORMAL','NORMAL'],['HARD','HARD'],['NIGHTMARE','NIGHTMARE']];
+var ENEMY_STAT_OPTS = [['STR','STR (힘)'],['DEX','DEX (솜씨)'],['WIS','WIS (지혜)']];
+var ENEMY_STAT_DODGE_OPTS = [['STR','STR (힘)'],['DEX','DEX (솜씨)'],['WIS','WIS (지혜)'],['ALL','ALL (무관)']];
+// 행 배열 순서 = ENEMY_INSERT_COLS 순서. [0]난이도 [1]코드 [2]이름 [3]HP [4]토큰 [5]출현 [6]공격성공 [7]회피성공 [8]대미지
+//   [9]공격스탯 [10]드롭아이템 [11]드롭개수 [12]공격실패 [13]회피실패 [14]회피스탯 [15]선제공격 [16]사용 [17]헌터HP [18]비고
+function newEnemyRow(){ return ['NORMAL','','','','','','','','','STR','','','','','ALL','Y','Y','','']; }
+function enemySelect(val, opts, onChange){ var s=document.createElement('select'); s.style.cssText='border:1px solid var(--border-strong);border-radius:3px;padding:6px 8px;font-size:13.5px;background:var(--bg);width:100%;box-sizing:border-box;'; var cur=String(val==null?'':val).trim().toUpperCase(); opts.forEach(function(o){ var op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; if(o[0]===cur) op.selected=true; s.appendChild(op); }); s.addEventListener('change', function(){ onChange(s.value); }); return s; }
+function enemyInput(val, type, onChange, ph){ var el=wInput(val, type, onChange, ph); el.style.width='100%'; return el; }
+function enemyYNLabel(labelText, val, onChange){ var w=document.createElement('label'); w.style.cssText='font-size:12.5px;color:var(--text-dim);display:flex;align-items:center;gap:4px;'; w.appendChild(document.createTextNode(labelText)); w.appendChild(wYNSelect(val, onChange)); return w; }
+function enemyRowGrid(min){ var d=document.createElement('div'); d.style.cssText='display:grid;grid-template-columns:repeat(auto-fit,minmax('+min+'px,1fr));gap:10px 14px;align-items:start;'; return d; }
+function renderEnemyScreen(main, crumb){
+  main.innerHTML=''; crumb.innerHTML='';
+  crumb.appendChild(crumbEl('에너미', null, true));
+  ensureGraphDataShape();
+  var rows = DATA.enemy.rows;
+  var wrap = document.createElement('div');
+
+  var toolbar = document.createElement('div'); toolbar.className='listToolbar';
+  var title = document.createElement('div'); title.style.cssText='font-weight:700;font-size:13px;'; title.textContent='에너미 목록 ('+rows.length+'개)';
+  var spacer = document.createElement('div'); spacer.style.flex='1';
+  var sqlBtn = document.createElement('button'); sqlBtn.className='ghost'; sqlBtn.textContent='SQL 내보내기';
+  sqlBtn.addEventListener('click', function(){ openEnemySqlModal(); });
+  var addBtn = document.createElement('button'); addBtn.className='primary'; addBtn.textContent='+ 에너미 추가';
+  addBtn.addEventListener('click', function(){ DATA.enemy.rows.push(newEnemyRow()); markDirty(); render(); });
+  toolbar.appendChild(title); toolbar.appendChild(spacer); toolbar.appendChild(sqlBtn); toolbar.appendChild(addBtn);
+  wrap.appendChild(toolbar);
+
+  var hint = document.createElement('div'); hint.style.cssText='font-size:12.5px;color:var(--text-faint);margin:6px 2px 12px;line-height:1.6;';
+  hint.innerHTML='봇 탐사 중 등장하는 에너미(적)입니다. <b>코드·이름</b>은 필수 · ⚠ 이모지 등 4바이트 문자는 DB(utf8)에 저장되지 않아요 · 숫자 칸을 비우면 NULL로 들어갑니다.';
+  wrap.appendChild(hint);
+
+  if(!rows.length){
+    var empty = document.createElement('div'); empty.style.cssText='color:var(--text-faint);padding:28px;text-align:center;';
+    empty.textContent='아직 에너미가 없습니다. [+ 에너미 추가]로 만들어 보세요.';
+    wrap.appendChild(empty);
+  }
+  rows.forEach(function(r, i){ wrap.appendChild(enemyCard(r, i)); });
+  main.appendChild(wrap);
+}
+function enemyCard(r, i){
+  var card = document.createElement('div'); card.style.cssText='border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:10px;background:var(--surface);';
+
+  var head = document.createElement('div'); head.style.cssText='display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap;';
+  var num = document.createElement('div'); num.style.cssText='font-weight:700;font-size:14px;color:var(--text-dim);'; num.textContent='#'+(i+1);
+  head.appendChild(num);
+  var lvWrap = document.createElement('label'); lvWrap.style.cssText='font-size:12.5px;color:var(--text-dim);display:flex;align-items:center;gap:4px;';
+  lvWrap.appendChild(document.createTextNode('난이도'));
+  var lvSel = enemySelect(r[0], ENEMY_LEVEL_OPTS, function(v){ r[0]=v; markDirty(); }); lvSel.style.width='auto';
+  lvWrap.appendChild(lvSel); head.appendChild(lvWrap);
+  head.appendChild(enemyYNLabel('선제공격', r[15], function(v){ r[15]=v; markDirty(); }));
+  head.appendChild(enemyYNLabel('사용', r[16], function(v){ r[16]=v; markDirty(); }));
+  var del = document.createElement('button'); del.className='ghost'; del.textContent='✕ 삭제'; del.style.marginLeft='auto';
+  del.addEventListener('click', function(){ if(confirm('이 에너미를 삭제할까요?')){ DATA.enemy.rows.splice(i,1); markDirty(); render(); } });
+  head.appendChild(del);
+  card.appendChild(head);
+
+  var r1 = enemyRowGrid(220);
+  r1.appendChild(wField('코드(영문) * (enemy_code)', enemyInput(r[1],'text',function(v){r[1]=v;markDirty();},'예: SLIME_A')));
+  r1.appendChild(wField('이름 * (enemy_name)', enemyInput(r[2],'text',function(v){r[2]=v;markDirty();},'예: 진흙 슬라임')));
+  card.appendChild(r1);
+
+  var r2 = enemyRowGrid(150);
+  r2.appendChild(wField('HP (enemy_hp)', enemyInput(r[3],'number',function(v){r[3]=v;markDirty();},'')));
+  r2.appendChild(wField('헌터 전용 HP (hunter_only_hp)', enemyInput(r[17],'number',function(v){r[17]=v;markDirty();},'')));
+  r2.appendChild(wField('노력 토큰 (enemy_token)', enemyInput(r[4],'number',function(v){r[4]=v;markDirty();},'')));
+  r2.appendChild(wField('대미지 (enemy_damage)', enemyInput(r[8],'number',function(v){r[8]=v;markDirty();},'')));
+  card.appendChild(r2);
+
+  var r3 = enemyRowGrid(200);
+  r3.appendChild(wField('공격 요구 스탯 (enemy_status)', enemySelect(r[9], ENEMY_STAT_OPTS, function(v){r[9]=v;markDirty();})));
+  r3.appendChild(wField('회피 요구 스탯 (enemy_status_dodge)', enemySelect(r[14], ENEMY_STAT_DODGE_OPTS, function(v){r[14]=v;markDirty();})));
+  r3.appendChild(wField('드롭 아이템 ID (enemy_item_id)', enemyInput(r[10],'text',function(v){r[10]=v;markDirty();},'예: 2040')));
+  r3.appendChild(wField('드롭 개수 (enemy_drop)', enemyInput(r[11],'number',function(v){r[11]=v;markDirty();},'')));
+  card.appendChild(r3);
+
+  card.appendChild(wField('출현 스크립트 (enemy_app)', wTextarea(r[5],function(v){r[5]=v;markDirty();},2,'에너미가 나타났을 때 보여줄 묘사')));
+
+  var r4 = enemyRowGrid(300);
+  r4.appendChild(wField('공격 성공 장면 (enemy_attack_succ_scene)', wTextarea(r[6],function(v){r[6]=v;markDirty();},2,'')));
+  r4.appendChild(wField('공격 실패 장면 (enemy_attack_fail_scene)', wTextarea(r[12],function(v){r[12]=v;markDirty();},2,'')));
+  card.appendChild(r4);
+
+  var r5 = enemyRowGrid(300);
+  r5.appendChild(wField('회피 성공 장면 (enemy_dodge_succ_scene)', wTextarea(r[7],function(v){r[7]=v;markDirty();},2,'')));
+  r5.appendChild(wField('회피 실패 장면 (enemy_dodge_fail_scene)', wTextarea(r[13],function(v){r[13]=v;markDirty();},2,'')));
+  card.appendChild(r5);
+
+  card.appendChild(wField('비고 (enemy_comment)', wTextarea(r[18],function(v){r[18]=v;markDirty();},1,'운영진용 메모(선택)')));
+  return card;
+}
+// ---- bot_enemy SQL 생성 ----
+var ENEMY_INSERT_COLS = ['enemy_level','enemy_code','enemy_name','enemy_hp','enemy_token','enemy_app','enemy_attack_succ_scene','enemy_dodge_succ_scene','enemy_damage','enemy_status','enemy_item_id','enemy_drop','enemy_attack_fail_scene','enemy_dodge_fail_scene','enemy_status_dodge','first_attack_yn','use_yn','hunter_only_hp','enemy_comment'];
+function buildBotEnemySql(){
+  ensureGraphDataShape();
+  var rows = DATA.enemy.rows, valueRows=[], errors=[], warnings=[], skipped=0;
+  rows.forEach(function(r, i){
+    var label='#'+(i+1);
+    var g=function(idx){ return String(r[idx]==null?'':r[idx]); };
+    var code=g(1).trim(), name=g(2).trim();
+    // 코드·이름·출현/장면이 모두 비면 미작성 행으로 보고 조용히 건너뜀.
+    if(!code && !name && !g(5).trim() && !g(6).trim() && !g(7).trim() && !g(12).trim() && !g(13).trim()){ skipped++; return; }
+    var e=[];
+    if(!name) e.push('이름(enemy_name)이 비어 있음(필수)');
+    if(!code) e.push('코드(enemy_code)가 비어 있음(필수)');
+    [['코드',1],['이름',2],['출현 스크립트',5],['공격 성공 장면',6],['회피 성공 장면',7],['드롭 아이템 ID',10],['공격 실패 장면',12],['회피 실패 장면',13],['비고',18]].forEach(function(tf){ if(sqlHasAstral(g(tf[1]))) e.push(tf[0]+'에 4바이트 문자(이모지 등)'); });
+    if(code.length>100) e.push('코드 100자 초과');
+    if(name.length>100) e.push('이름 100자 초과');
+    if(g(10).trim().length>100) e.push('드롭 아이템 ID 100자 초과');
+    function intv(idx, nm){ var s=g(idx).trim(); if(!s) return 'NULL'; if(!/^\d+$/.test(s)){ e.push(nm+'가 숫자가 아님 "'+s.slice(0,10)+'"'); return null; } if(s.length>10){ e.push(nm+' 자릿수 초과(최대 10)'); return null; } return String(parseInt(s,10)); }
+    var hp=intv(3,'HP'), token=intv(4,'노력 토큰'), damage=intv(8,'대미지'), drop=intv(11,'드롭 개수'), honly=intv(17,'헌터 전용 HP');
+    if(e.length){ errors.push(label+': '+e.join(', ')); return; }
+    function strv(idx){ var s=g(idx); return s.trim()===''? 'NULL' : "'"+sqlEscape(s)+"'"; }
+    function enumv(idx, allowed, def){ var u=g(idx).trim().toUpperCase(); return allowed.indexOf(u)!==-1? u : def; }
+    valueRows.push({
+      enemy_level: "'"+enumv(0,['EASY','NORMAL','HARD','NIGHTMARE'],'NORMAL')+"'",
+      enemy_code: "'"+sqlEscape(code)+"'",
+      enemy_name: "'"+sqlEscape(name)+"'",
+      enemy_hp: hp,
+      enemy_token: token,
+      enemy_app: strv(5),
+      enemy_attack_succ_scene: strv(6),
+      enemy_dodge_succ_scene: strv(7),
+      enemy_damage: damage,
+      enemy_status: "'"+enumv(9,['STR','DEX','WIS'],'STR')+"'",
+      enemy_item_id: strv(10),
+      enemy_drop: drop,
+      enemy_attack_fail_scene: strv(12),
+      enemy_dodge_fail_scene: strv(13),
+      enemy_status_dodge: "'"+enumv(14,['STR','DEX','WIS','ALL'],'ALL')+"'",
+      first_attack_yn: (enumv(15,['Y','N'],'Y')==='N'?"'N'":"'Y'"),
+      use_yn: (enumv(16,['Y','N'],'Y')==='N'?"'N'":"'Y'"),
+      hunter_only_hp: honly,
+      enemy_comment: strv(18)
+    });
+  });
+  var sql='', colList='('+ENEMY_INSERT_COLS.join(', ')+')';
+  if(!valueRows.length){ sql='-- 생성할 유효한 에너미 행이 없습니다. (아래 리포트 확인)'; }
+  for(var b=0;b<valueRows.length;b+=100){
+    var chunk=valueRows.slice(b,b+100).map(function(v){ return '('+ENEMY_INSERT_COLS.map(function(c){return v[c];}).join(', ')+')'; });
+    sql+='INSERT INTO bot_enemy\n'+colList+' VALUES\n'+chunk.join(',\n')+';\n\n';
+  }
+  return { sql:sql.trim(), report:{ total:rows.length, inserted:valueRows.length, errorRows:errors.length, skipped:skipped, errors:errors, warnings:warnings } };
+}
+function openEnemySqlModal(){ document.getElementById('enemySqlReport').innerHTML=''; document.getElementById('enemySqlOutput').value=''; document.getElementById('enemySqlModal').style.display='flex'; }
+(function wireEnemySqlExport(){
+  function hide(){ document.getElementById('enemySqlModal').style.display='none'; }
+  function esc(x){ return String(x).replace(/[&<>]/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[m];}); }
+  var close=document.getElementById('btnEnemySqlClose'); if(close) close.addEventListener('click', hide);
+  var modal=document.getElementById('enemySqlModal'); if(modal) modal.addEventListener('click', function(e){ if(e.target===modal) hide(); });
+  var gen=document.getElementById('btnEnemySqlGenerate'); if(gen) gen.addEventListener('click', function(){
+    var out=buildBotEnemySql();
+    document.getElementById('enemySqlOutput').value=out.sql;
+    var rep=out.report, html='';
+    html+='<div style="font-weight:700;">생성 완료 · 전체 '+rep.total+'행 → '+rep.inserted+'행 INSERT'+(rep.errorRows?(' · '+rep.errorRows+'행 오류로 제외'):'')+(rep.skipped?(' · 빈행 '+rep.skipped+' 건너뜀'):'')+'</div>';
+    if(rep.errors.length){ html+='<div style="color:#c0392b;margin-top:6px;">제외된 오류 행 '+rep.errors.length+'건 (고친 뒤 다시 생성)</div><ul style="margin:4px 0 0 16px;color:#c0392b;">'+rep.errors.map(function(x){return '<li>'+esc(x)+'</li>';}).join('')+'</ul>'; }
+    if(rep.warnings.length){ html+='<div style="color:#b9770e;margin-top:6px;">경고 '+rep.warnings.length+'건</div><ul style="margin:4px 0 0 16px;color:#b9770e;">'+rep.warnings.map(function(x){return '<li>'+esc(x)+'</li>';}).join('')+'</ul>'; }
+    document.getElementById('enemySqlReport').innerHTML=html;
+  });
+  var copy=document.getElementById('btnEnemySqlCopy'); if(copy) copy.addEventListener('click', function(){ var ta=document.getElementById('enemySqlOutput'); if(!ta.value) return; ta.select(); try{ document.execCommand('copy'); toast('복사했습니다.'); }catch(e){} });
+  var dl=document.getElementById('btnEnemySqlDownload'); if(dl) dl.addEventListener('click', function(){ var v=document.getElementById('enemySqlOutput').value||''; if(!v) return; var blob=new Blob([v],{type:'text/sql'}); var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='bot_enemy.sql'; a.click(); setTimeout(function(){URL.revokeObjectURL(a.href);},1000); });
 })();
 var BOT_AREA_COLS =['up_area_id','start_point','parent_area_id','area_id','area_name','adjacent_id','incounter_cd','area_cn','target_roll','succ_cn','fail_cn','open_race','race_fail_cn','key_yn','key_id','item_id','item_drop','gold_drop','area_exp','deal_item_id','deal_gold','first_check_yn','check_fail_cn','open_target','area_comment','first_drop_yn','drop_fail_cn','branch_group','no_consume_yn','key_all_yn','open_date'];
 
