@@ -4374,7 +4374,18 @@ function refreshNodeEditorTags(row){
     e.innerHTML='';
     typeTagsForRow(row).forEach(function(t){var b=document.createElement('span');b.className='badge typeTag '+t.cls;b.textContent=t.text;if(t.title)b.title=t.title;e.appendChild(b);});
   }
+  updateTradeUsageHint(row);
   applyRequiredHighlights(row);
+}
+// IG/GI/II 지역거래가 '실제로 쓰는 칸'을 선택된 종류 코드에 맞춰 실시간 안내(코드 바꾸면 즉시 갱신).
+function updateTradeUsageHint(row){
+  var th=document.getElementById('npTradeHint'); if(!th) return;
+  var codes=typeCodesArray(row[C['종류 코드']]), lines=[];
+  if(codes.indexOf('INCUNTR_04_IG')!==-1) lines.push('IG(아이템→골드): 「교단원이 낼 아이템」을 내고 → 「파밍 골드」를 받아요.  ※「교단원이 낼 골드 상한가」는 사용 안 함');
+  if(codes.indexOf('INCUNTR_04_GI')!==-1) lines.push('GI(골드→아이템): 「교단원이 낼 골드 상한가」만큼 내고 → 「파밍 아이템」을 받아요.  ※「교단원이 낼 아이템」은 사용 안 함');
+  if(codes.indexOf('INCUNTR_04_II')!==-1) lines.push('II(아이템→아이템): 「교단원이 낼 아이템」을 내고 → 「파밍 아이템」을 받아요.');
+  if(lines.length){ th.style.display=''; th.textContent='💱 지역거래 실제 사용 칸\n'+lines.join('\n'); }
+  else { th.style.display='none'; th.textContent=''; }
 }
 /* 필수인데 비어 있는 칸을 편집기에서 직접 짚어 준다.
    각 필드 wrap에 붙여 둔 data-col 로 찾아 표시하고, 채워지면 즉시 표시가 걷힌다.
@@ -4801,6 +4812,7 @@ function renderNodePanel(topId, rowId){
   var tradeRow=document.createElement('div');tradeRow.className='fieldRow';
   tradeRow.appendChild(markFieldCol(itemSelectField('지역거래 시, 교단원이 낼 아이템',r[C['지역거래 시, 교단원이 낼 아이템ID']],function(v){r[C['지역거래 시, 교단원이 낼 아이템ID']]=v;refreshNodeEditorTags(r);},is04II(r[C['종류 코드']])), '지역거래 시, 교단원이 낼 아이템ID'));
   tradeRow.appendChild(markFieldCol(fieldInput('지역거래 시, 교단원이 낼 골드 상한가',r[C['지역거래 시, 교단원이 낼 골드 상한가']],function(v){r[C['지역거래 시, 교단원이 낼 골드 상한가']]=v;refreshNodeEditorTags(r);}), '지역거래 시, 교단원이 낼 골드 상한가'));body.appendChild(tradeRow);
+  var tradeHint=document.createElement('div');tradeHint.id='npTradeHint';tradeHint.style.cssText='display:none;font-size:12.5px;line-height:1.7;color:var(--text-dim);background:var(--accent-soft);border:1px solid var(--accent-soft-border);border-radius:6px;padding:8px 10px;margin-top:4px;white-space:pre-line;';body.appendChild(tradeHint);
 
   var conditionRow = document.createElement('div'); conditionRow.className='fieldRow';
   conditionRow.appendChild(firstExplorationField(r));
