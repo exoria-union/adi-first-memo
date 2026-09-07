@@ -146,8 +146,8 @@ export function createSim(data, opts = {}) {
         let raceOk = true;
         if (area.open_race) { const rk = String(area.open_race); raceOk = rk === 'H_ALL' ? HALF_HUMAN.has(ch.ch_class) : ch.ch_class === RACE_TO_CLASS[rk]; }
         if (!raceOk) text = safeStr(area.race_fail_cn);
-        else if (fDrop === 'N') itemEvent = true;
         else if (fDrop === 'Y') { if (personalFirst) { itemEvent = true; markGranted = true; } else if (area.drop_fail_cn) text = safeStr(area.drop_fail_cn); }
+        else itemEvent = true;   // 'N' 또는 미지정(공란) → 매번 지급. (공란인 파밍 노드가 지급 안 되던 버그 수정)
       }
     }
     // 태그 치환

@@ -4303,10 +4303,9 @@ function nodeValidationDetailed(row){
 
   need(isDiceType(code)&&!String(row[C['주사위 목표치']]||'').trim(), '주사위 목표치', '주사위 목표치');
   if(is04IGGI(code)){
+    // IG/GI: 교단원 거래 아이템·골드 상한가는 필수 아님. 값이 입력돼 있으면 존재 여부만 점검.
     var tradeItem=String(row[C[TRADE_ITEM]]||'').trim();
-    if(!tradeItem) need(true, '교단원이 낼 아이템', TRADE_ITEM);
-    else need(!itemExistsById(tradeItem), '존재하지 않는 교단원 거래 아이템', TRADE_ITEM);
-    need(!String(row[C[TRADE_GOLD]]||'').trim(), '교단원이 낼 골드 상한가', TRADE_GOLD);
+    if(tradeItem) need(!itemExistsById(tradeItem), '존재하지 않는 교단원 거래 아이템', TRADE_ITEM);
   }
   if(is04II(code)){
     var farmItem=String(row[C['파밍 아이템 ID']]||'').trim();
@@ -4800,8 +4799,8 @@ function renderNodePanel(topId, rowId){
   farmRow2.appendChild(fieldInput('파밍 골드',r[C['파밍 골드']],function(v){r[C['파밍 골드']]=v;}));
   farmRow2.appendChild(fieldInput('파밍 경험치',r[C['파밍 경험치']],function(v){r[C['파밍 경험치']]=v;}));body.appendChild(farmRow2);
   var tradeRow=document.createElement('div');tradeRow.className='fieldRow';
-  tradeRow.appendChild(markFieldCol(itemSelectField('지역거래 시, 교단원이 낼 아이템',r[C['지역거래 시, 교단원이 낼 아이템ID']],function(v){r[C['지역거래 시, 교단원이 낼 아이템ID']]=v;refreshNodeEditorTags(r);},isTradeType(r[C['종류 코드']])), '지역거래 시, 교단원이 낼 아이템ID'));
-  tradeRow.appendChild(markFieldCol(fieldInput('지역거래 시, 교단원이 낼 골드 상한가'+(is04IGGI(r[C['종류 코드']])?' *':''),r[C['지역거래 시, 교단원이 낼 골드 상한가']],function(v){r[C['지역거래 시, 교단원이 낼 골드 상한가']]=v;refreshNodeEditorTags(r);}), '지역거래 시, 교단원이 낼 골드 상한가'));body.appendChild(tradeRow);
+  tradeRow.appendChild(markFieldCol(itemSelectField('지역거래 시, 교단원이 낼 아이템',r[C['지역거래 시, 교단원이 낼 아이템ID']],function(v){r[C['지역거래 시, 교단원이 낼 아이템ID']]=v;refreshNodeEditorTags(r);},is04II(r[C['종류 코드']])), '지역거래 시, 교단원이 낼 아이템ID'));
+  tradeRow.appendChild(markFieldCol(fieldInput('지역거래 시, 교단원이 낼 골드 상한가',r[C['지역거래 시, 교단원이 낼 골드 상한가']],function(v){r[C['지역거래 시, 교단원이 낼 골드 상한가']]=v;refreshNodeEditorTags(r);}), '지역거래 시, 교단원이 낼 골드 상한가'));body.appendChild(tradeRow);
 
   var conditionRow = document.createElement('div'); conditionRow.className='fieldRow';
   conditionRow.appendChild(firstExplorationField(r));
