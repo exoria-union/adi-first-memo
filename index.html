@@ -2016,6 +2016,9 @@ function sortByNodeRecency(entries){
   });
   return entries;
 }
+// 한국어 가나다순 비교기 + 이름순 정렬(선택지 표시·대상 목록에 사용).
+function koCompare(a,b){ return String(a==null?'':a).localeCompare(String(b==null?'':b),'ko'); }
+function sortByNodeName(entries){ entries.sort(function(a,b){ return koCompare(a.name,b.name); }); return entries; }
 /* 세부지역 명단(regionsTree)을 근거로 각 노드의 "집"(소속 세부지역 root의 행 ID)을 채운다.
    rebuildRegionsTreeFromSheet1이 돌 때는 거기서 바로 기록하지만, 부팅 직후처럼 저장된
    regionsTree를 그대로 쓰는 경로에서는 기록이 비어 있어 이 함수가 한 번 메워준다. */
@@ -4075,7 +4078,7 @@ function renderClusterScreen(main, crumb){
       wrap.appendChild(lab);
     }
     var grid = document.createElement('div'); grid.className='choiceGrid';
-    choiceNames.forEach(function(choiceName){
+    choiceNames.slice().sort(koCompare).forEach(function(choiceName){
       var card = document.createElement('div'); card.className='choiceCard';
       if(choiceName === '이동한다'){
         card.classList.add('moveCard');
@@ -4110,7 +4113,7 @@ function renderClusterScreen(main, crumb){
       var lab2 = document.createElement('div'); lab2.className='choiceSectionLabel'; lab2.textContent='연결된 지역';
       wrap.appendChild(lab2);
       var grid2 = document.createElement('div'); grid2.className='choiceGrid';
-      regionChoices.forEach(function(regionDisplayName){
+      regionChoices.slice().sort(koCompare).forEach(function(regionDisplayName){
         var rid = DATA.nameToId[regionDisplayName];
         var card2 = document.createElement('div'); card2.className='choiceCard';
         if(rid){
@@ -4573,7 +4576,7 @@ function scriptFieldEditor(label, topId, row, colName){
       var entry = nodeRecencyKey(topId, nm);
       (!cl || byNm[nm].home ? here : other).push(entry);
     });
-    return { here: sortByNodeRecency(here), other: sortByNodeRecency(other),
+    return { here: sortByNodeName(here), other: sortByNodeName(other),
              scoped: !!cl && !sel.__showAllTargets, hasCluster: !!cl,
              clusterName: cl ? cl.root : null };
   }
