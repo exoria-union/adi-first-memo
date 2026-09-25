@@ -4708,12 +4708,26 @@ function scriptFieldEditor(label, topId, row, colName){
   parsed.links.forEach(function(l){ addChoiceRow(l.name, l.cmd); });
 
   var addBtn = document.createElement('button'); addBtn.className='ghost'; addBtn.textContent='+ 선택지 추가';
-  addBtn.style.cssText='align-self:flex-start;margin-top:4px;';
   addBtn.title = '빈 선택지 한 줄만 추가합니다. 기존 노드를 고르거나 "새 노드를 만들어 연결"을 직접 선택하세요.';
   addBtn.addEventListener('click', function(){
     addChoiceRow('');
   });
-  wrap.appendChild(addBtn);
+  // 추가한 선택지들을 대상 노드 이름 기준 가나다순으로 재정렬(스크립트 저장 순서 자체가 바뀜 · 빈 줄/미선택은 맨 아래로).
+  var sortBtn = document.createElement('button'); sortBtn.className='ghost'; sortBtn.textContent='↕ 가나다순 정렬';
+  sortBtn.title = '추가한 선택지들을 대상 노드 이름 기준 가나다순으로 재정렬합니다. 스크립트에 저장되는 순서가 바뀝니다.';
+  sortBtn.addEventListener('click', function(){
+    var rowsArr = Array.prototype.slice.call(choicesWrap.querySelectorAll('.choiceEditRow'));
+    if(rowsArr.length < 2) return;
+    function keyOf(rowEl){ var s=rowEl.querySelector('select.choiceTarget'); var v=s?s.value:''; return (!v || v==='__new__' || v==='__showall__') ? null : v; }
+    rowsArr.sort(function(a,b){ var ka=keyOf(a), kb=keyOf(b); if(ka===null&&kb===null) return 0; if(ka===null) return 1; if(kb===null) return -1; return koCompare(ka,kb); });
+    rowsArr.forEach(function(r){ choicesWrap.appendChild(r); });
+    sync(true);
+    refreshGraphBehindPanel();
+    toast('선택지를 가나다순으로 정렬했어요');
+  });
+  var choiceBtnRow = document.createElement('div'); choiceBtnRow.style.cssText='display:flex;gap:6px;align-items:center;margin-top:4px;flex-wrap:wrap;';
+  choiceBtnRow.appendChild(addBtn); choiceBtnRow.appendChild(sortBtn);
+  wrap.appendChild(choiceBtnRow);
 
   narrativeTa.addEventListener('input', sync);
 
