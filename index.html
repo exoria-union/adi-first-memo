@@ -505,7 +505,7 @@
   .canvasNode.dragLocked{cursor:pointer;}
   .canvasEdge.edgeHighlight{stroke-width:2.6;opacity:1;}
   .canvasEdge.edgeDimmed{opacity:.15;}
-  .canvasLegend{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--text-faint);}
+  .canvasLegend{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--text-faint);flex-wrap:wrap;}
   .canvasLegend i{display:inline-block;width:9px;height:9px;border-radius:var(--radius-sm);margin-right:4px;vertical-align:-1px;}
   .dupNameWarn{
     background:#fff3cd;border:1px solid #e0c069;color:#8a6d1a;border-radius:3px;
@@ -3436,6 +3436,23 @@ function autoLayoutNodes(topId, rootId, idSet, moveRowId){
    - canvasSelectedId: 선택한 노드. 선택 노드와 그 앞/뒤 노드를 강조하는 데 쓴다.
    - canvasDragLocked: 드래그 잠금. 켜 두면 클릭(선택/편집)만 되고 위치는 움직이지 않는다. */
 var canvasSelectedId = null;
+var canvasHoverId = null;
+// 그래프 표시용 이름: 선택지 명령(:sq: 등)은 배지/간선칩으로 보여주므로 이름에선 뗀다(데이터 원본은 그대로).
+function displayNodeName(name){ return String(name==null?'':name).replace(/:[A-Za-z0-9_]+:/g,'').replace(/\s{2,}/g,' ').trim(); }
+// 간선이 향하는 대상 노드의 명령/키게이트 정보 → 간선 칩(아이콘)·점선에 사용.
+function edgeTargetInfo(trow){
+  if(!trow) return {icon:null, fg:null, keyGate:false};
+  var m={}; (String(trow[C['지역명']]||'').match(/:[A-Za-z0-9_]+:/g)||[]).forEach(function(t){ m[t.toLowerCase()]=true; });
+  var keyGate = (trow[C['키아이템 필요 여부']]==='Y'||trow[C['키아이템 필요 여부']]==='y'||!!m[':k:']);
+  var icon=null, fg=null;
+  if(m[':sq:']){icon='📜';fg='#6b46c1';}
+  else if(m[':g1:']){icon='🌱';fg='#1a8a4a';}
+  else if(m[':sd1:']||m[':sd2:']||m[':sd3:']||m[':sd4:']){icon='🌰';fg='#8a6d1a';}
+  else if(m[':g2:']){icon='🌿';fg='#0e8a7a';}
+  else if(m[':a:']||m[':b:']||m[':c:']||m[':d:']){icon='🧺';fg='#b8860b';}
+  else if(m[':kw:']){icon='💬';fg='#5a5a63';}
+  return {icon:icon, fg:fg, keyGate:keyGate};
+}
 var CANVAS_LOCK_KEY = 'lumkingdom_map_editor_graph_drag_lock_v1';
 var canvasDragLocked = false;
 try{ canvasDragLocked = localStorage.getItem(CANVAS_LOCK_KEY)==='1'; }catch(e){}
@@ -3518,7 +3535,14 @@ function renderClusterCanvasScreen(main, crumb){
   var legend = document.createElement('span'); legend.className='canvasLegend';
   legend.innerHTML = '<span><i style="background:var(--accent);"></i>선택</span>'
     + '<span><i style="background:#d9822b;"></i>앞(들어옴)</span>'
-    + '<span><i style="background:var(--success);"></i>뒤(나감)</span>';
+    + '<span><i style="background:var(--success);"></i>뒤(나감)</span>'
+    + '<span style="opacity:.35;">·</span>'
+    + '<span title="키 아이템 필요">🔑키</span>'
+    + '<span title="서브퀘스트(:sq:)">📜서브</span>'
+    + '<span title="새싹(:g1:)">🌱새싹</span>'
+    + '<span title="파밍">🌾파밍</span>'
+    + '<span title="다이스">🎲다이스</span>'
+    + '<span title="거래">💰거래</span>';
   toolbar.appendChild(backBtn); toolbar.appendChild(resetBtn); toolbar.appendChild(hierarchySwapBtn);
   toolbar.appendChild(lockBtn); toolbar.appendChild(legend); toolbar.appendChild(hint);
   wrap.appendChild(toolbar);
@@ -3694,41 +3718,59 @@ function renderClusterCanvasScreen(main, crumb){
 
   function drawEdges(){
     var parts = [];
+    // 1) 간선 수집(해석된 대상 id까지) — {from, to, cls}
+    var edges = [];
     allIds.forEach(function(rid){
       var row = DATA.sheet1.rows[rowById[rid]];
       if(!row) return;
-      var fromPos = nodePos(rid);
-      var fromEl = nodeEls[rid];
-      var fw = fromEl ? fromEl.offsetWidth : 150;
-      var fh = fromEl ? fromEl.offsetHeight : 50;
       var edgeUse = {};
-      function edgeTo(targetName, cls){
-        var list = layout.edgeTargets && layout.edgeTargets[rid] && layout.edgeTargets[rid][targetName];
-        var nth = edgeUse[targetName] || 0;
-        var tid = list && list[nth] ? list[nth]
-          : (targetName==='이동한다' ? tree.moveRowId : resolveNodeIdForLink(topId, targetName, idSet));
-        edgeUse[targetName] = nth + 1;
-        edgeToId(tid, cls);
+      function collect(names, cls){
+        names.forEach(function(targetName){
+          var list = layout.edgeTargets && layout.edgeTargets[rid] && layout.edgeTargets[rid][targetName];
+          var nth = edgeUse[targetName] || 0;
+          var tid = list && list[nth] ? list[nth]
+            : (targetName==='이동한다' ? tree.moveRowId : resolveNodeIdForLink(topId, targetName, idSet));
+          edgeUse[targetName] = nth + 1;
+          if(tid && nodeEls[tid]) edges.push({from:rid, to:tid, cls:cls});
+        });
       }
-      function edgeToId(tid, cls){
-        if(!tid || !nodeEls[tid]) return;
-        var toPos = nodePos(tid);
-        var toEl = nodeEls[tid];
-        var th = toEl.offsetHeight;
-        var x1 = fromPos.x + fw, y1 = fromPos.y + fh/2;
-        var x2 = toPos.x, y2 = toPos.y + th/2;
-        var mx = (x1+x2)/2;
-        var d = 'M '+x1+' '+y1+' C '+mx+' '+y1+', '+mx+' '+y2+', '+x2+' '+y2;
-        // 선택된 노드에 닿는 간선만 진하게, 나머지는 눌러서 앞뒤 흐름이 한눈에 보이게 한다.
-        var sel = canvasSelectedId;
-        var selCls = !sel ? '' : ((rid===sel || tid===sel) ? ' edgeHighlight' : ' edgeDimmed');
-        parts.push('<path class="canvasEdge '+cls+selCls+'" d="'+d+'" marker-end="url(#arrowhead)"></path>');
-      }
-      parseChoices(row[C['스크립트(내용)']]).forEach(function(n){ edgeTo(n, ''); });
-      parseChoices(row[C['성공 스크립트']]||'').forEach(function(n){ edgeTo(n, 'succEdge'); });
-      parseChoices(row[C['실패 스크립트']]||'').forEach(function(n){ edgeTo(n, 'failEdge'); });
+      collect(parseChoices(row[C['스크립트(내용)']]), '');
+      collect(parseChoices(row[C['성공 스크립트']]||''), 'succEdge');
+      collect(parseChoices(row[C['실패 스크립트']]||''), 'failEdge');
     });
-    svg.innerHTML = '<defs><marker id="arrowhead" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--border-strong)"></path></marker></defs>' + parts.join('');
+    // 2) 노드별 나가는/들어오는 간선 인덱스 → 시작/끝점을 노드 가장자리에 분산(겹침·다중간선 완화)
+    var outList = {}, inList = {};
+    edges.forEach(function(e){ (outList[e.from]=outList[e.from]||[]).push(e); (inList[e.to]=inList[e.to]||[]).push(e); });
+    Object.keys(outList).forEach(function(k){ var a=outList[k]; a.forEach(function(e,i){ e.oi=i; e.oc=a.length; }); });
+    Object.keys(inList).forEach(function(k){ var a=inList[k]; a.forEach(function(e,i){ e.ii=i; e.ic=a.length; }); });
+    function spread(base, h, idx, n){ if(!n || n<=1) return base + h/2; var pad=Math.min(h*0.72, (n-1)*13)/2; return base + h/2 - pad + (2*pad/(n-1))*idx; }
+    var sel = canvasSelectedId || canvasHoverId;
+    // 3) 그리기
+    edges.forEach(function(e){
+      var fromEl=nodeEls[e.from], toEl=nodeEls[e.to];
+      if(!fromEl || !toEl) return;
+      var fromPos=nodePos(e.from), toPos=nodePos(e.to);
+      var fw=fromEl.offsetWidth, fh=fromEl.offsetHeight, th=toEl.offsetHeight;
+      var x1=fromPos.x+fw, y1=spread(fromPos.y, fh, e.oi, e.oc);
+      var x2=toPos.x, y2=spread(toPos.y, th, e.ii, e.ic);
+      var mx=(x1+x2)/2;
+      var d='M '+x1+' '+y1+' C '+mx+' '+y1+', '+mx+' '+y2+', '+x2+' '+y2;
+      var selCls = !sel ? '' : ((e.from===sel || e.to===sel) ? ' edgeHighlight' : ' edgeDimmed');
+      var info = edgeTargetInfo(DATA.sheet1.rows[rowById[e.to]]);
+      var marker = e.cls==='succEdge' ? 'arrowSucc' : (e.cls==='failEdge' ? 'arrowFail' : 'arrowhead');
+      var dash = info.keyGate ? ' stroke-dasharray="6 4"' : '';
+      parts.push('<path class="canvasEdge '+e.cls+selCls+'" d="'+d+'"'+dash+' marker-end="url(#'+marker+')"></path>');
+      if(info.icon && (!sel || e.from===sel || e.to===sel)){
+        var cxm=(x1+x2)/2, cym=(y1+y2)/2;
+        parts.push('<circle cx="'+cxm+'" cy="'+cym+'" r="10" fill="#fff" stroke="'+(info.fg||'#c9c9ce')+'" stroke-width="1.3"></circle>');
+        parts.push('<text x="'+cxm+'" y="'+cym+'" text-anchor="middle" dominant-baseline="central" font-size="12" style="pointer-events:none;">'+info.icon+'</text>');
+      }
+    });
+    svg.innerHTML = '<defs>'
+      + '<marker id="arrowhead" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--border-strong)"></path></marker>'
+      + '<marker id="arrowSucc" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--success)"></path></marker>'
+      + '<marker id="arrowFail" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#c0392b"></path></marker>'
+      + '</defs>' + parts.join('');
     svg.setAttribute('width', maxX+200);
     svg.setAttribute('height', maxY+120);
     inner.style.width = (maxX+200)+'px';
@@ -3756,7 +3798,8 @@ function renderClusterCanvasScreen(main, crumb){
   }
   function applySelectionHighlight(){
     if(canvasSelectedId && !nodeEls[canvasSelectedId]) canvasSelectedId = null;
-    var sel = canvasSelectedId;
+    if(canvasHoverId && !nodeEls[canvasHoverId]) canvasHoverId = null;
+    var sel = canvasSelectedId || canvasHoverId;
     var inSet = {}, outSet = {}, inCount = 0, outCount = 0;
     if(sel){
       outgoingIdsOf(sel).forEach(function(id){ if(!outSet[id]){ outSet[id]=true; outCount++; } });
@@ -3778,8 +3821,8 @@ function renderClusterCanvasScreen(main, crumb){
     if(!hierarchySwapMode){
       if(sel){
         var selRow = DATA.sheet1.rows[rowById[sel]];
-        hint.textContent = '선택: '+(selRow ? selRow[C['지역명']] : sel)
-          + ' · 앞 '+inCount+'개 / 뒤 '+outCount+'개 연결 · 빈 곳 클릭: 선택 해제';
+        hint.textContent = (canvasSelectedId?'선택: ':'미리보기: ')+(selRow ? displayNodeName(selRow[C['지역명']]) : sel)
+          + ' · 앞 '+inCount+'개 / 뒤 '+outCount+'개 연결'+(canvasSelectedId?' · 빈 곳 클릭: 선택 해제':'');
       } else {
         hint.textContent = IDLE_HINT;
       }
@@ -3796,6 +3839,24 @@ function renderClusterCanvasScreen(main, crumb){
     if(!canvasSelectedId) return;
     canvasSelectedId = null;
     applySelectionHighlight();
+  });
+
+  // 진입 선택지 명령(:sq:/:g1: 등)을 대상 노드별로 모은다 → 노드 배지로 "이 지역이 요구/부여하는 것" 표시.
+  var incomingCmds = {};
+  allIds.forEach(function(fromRid){
+    var frow = DATA.sheet1.rows[rowById[fromRid]];
+    if(!frow) return;
+    var use = {};
+    ['스크립트(내용)','성공 스크립트','실패 스크립트'].forEach(function(col){
+      parseChoiceLinks(frow[C[col]]||'').forEach(function(lk){
+        var list = layout.edgeTargets && layout.edgeTargets[fromRid] && layout.edgeTargets[fromRid][lk.name];
+        var nth = use[lk.name] || 0;
+        var tid = list && list[nth] ? list[nth]
+          : (lk.name==='이동한다' ? tree.moveRowId : resolveNodeIdForLink(topId, lk.name, idSet));
+        use[lk.name] = nth + 1;
+        if(tid && lk.cmd){ (incomingCmds[tid] = incomingCmds[tid] || {})[lk.cmd] = true; }
+      });
+    });
   });
 
   allIds.forEach(function(rid){
@@ -3857,7 +3918,7 @@ function renderClusterCanvasScreen(main, crumb){
     }
     if(cnToolbar.children.length) box.appendChild(cnToolbar);
 
-    var nameDiv = document.createElement('div'); nameDiv.className='cnName'; nameDiv.textContent = row[C['지역명']];
+    var nameDiv = document.createElement('div'); nameDiv.className='cnName'; nameDiv.textContent = displayNodeName(row[C['지역명']]);
     if(dupIdSet[rid]){
       box.classList.add('dupNameNode');
       var dupBadge = document.createElement('span'); dupBadge.className='cnDupBadge';
@@ -3868,11 +3929,18 @@ function renderClusterCanvasScreen(main, crumb){
     var typeDiv = document.createElement('div'); typeDiv.className='cnType'; typeDiv.textContent = row[C['종류 코드']]||'';
     box.appendChild(nameDiv); box.appendChild(typeDiv);
     var metaDiv = document.createElement('div'); metaDiv.className='cnMeta';
-    if(row[C['파밍 아이템 ID']]){ var m1=document.createElement('span'); m1.style.cssText='background:var(--success-soft);color:var(--success);'; m1.textContent='획득'; metaDiv.appendChild(m1); }
-    if(row[C['키아이템 필요 여부']]==='Y'||row[C['키아이템 필요 여부']]==='y'){ var m2=document.createElement('span'); m2.style.cssText='background:#fde8e8;color:#c0392b;'; m2.textContent='열쇠'; metaDiv.appendChild(m2); }
+    var badgeKeys = canvasNodeBadges(row, incomingCmds[rid]);
+    badgeKeys.forEach(function(k){
+      var bspec = CANVAS_BADGES[k]; if(!bspec) return;
+      var sp = document.createElement('span'); sp.style.cssText='background:'+bspec.bg+';color:'+bspec.fg+';';
+      sp.textContent = bspec.icon + ' ' + (k==='race' ? raceCode(row) : bspec.label);
+      sp.title = bspec.title || bspec.label;
+      metaDiv.appendChild(sp);
+    });
+    var missN = nodeValidation(row);
+    if(missN.length){ var wsp=document.createElement('span'); wsp.style.cssText='background:#fff3cd;color:#8a6d1a;'; wsp.textContent='⚠ '+missN.length; wsp.title=missN.join(', '); metaDiv.appendChild(wsp); }
     if(metaDiv.children.length) box.appendChild(metaDiv);
-    typeTagsForRow(row).forEach(function(t){var mt=document.createElement('span');mt.className='typeTag '+t.cls;mt.textContent=t.text;if(t.title)mt.title=t.title;metaDiv.appendChild(mt);});
-    if(metaDiv.children.length) box.appendChild(metaDiv);
+    if(badgeKeys.length) box.style.borderLeft = '4px solid ' + CANVAS_BADGES[badgeKeys[0]].fg;
 
     nodeEls[rid] = box;
     inner.appendChild(box);
@@ -3920,6 +3988,9 @@ function renderClusterCanvasScreen(main, crumb){
       box.addEventListener('pointermove', onMove);
       box.addEventListener('pointerup', onUp);
     });
+    // 호버 강조: 선택이 없을 때 노드에 마우스를 올리면 그 노드의 앞/뒤 연결을 잠깐 강조.
+    box.addEventListener('mouseenter', function(){ if(!canvasSelectedId && !hierarchySwapMode){ canvasHoverId = rid; applySelectionHighlight(); } });
+    box.addEventListener('mouseleave', function(){ if(!canvasSelectedId && canvasHoverId===rid){ canvasHoverId = null; applySelectionHighlight(); } });
   });
 
   drawEdges();
@@ -4346,6 +4417,46 @@ function typeTagsForRow(row){
   var m=nodeValidation(row);
   if(m.length)tags.push({text:'⚠ 필수 '+m.length+'건',cls:'warn',title:m.join(', ')});
   return tags;
+}
+// 그래프(캔버스) 노드 유형 배지 — 아이콘+색으로 한눈에. 서브퀘스트/새싹 등은 진입 선택지 명령(:sq:/:g1: 등) 기준.
+var CANVAS_BADGES = {
+  key:     {icon:'🔑', label:'키',     bg:'#fde8e8', fg:'#c0392b', title:'키 아이템 필요'},
+  sub:     {icon:'📜', label:'서브',   bg:'#f0eafc', fg:'#6b46c1', title:'서브퀘스트(:sq:)'},
+  sprout:  {icon:'🌱', label:'새싹',   bg:'#e8f7ee', fg:'#1a8a4a', title:'새싹(:g1:)'},
+  seed:    {icon:'🌰', label:'씨앗',   bg:'#f3ecd8', fg:'#8a6d1a', title:'씨앗(:sd1~4:)'},
+  seedling:{icon:'🌿', label:'모종',   bg:'#e2f6f3', fg:'#0e8a7a', title:'모종(:g2:)'},
+  harvest: {icon:'🧺', label:'수확',   bg:'#fdf3dd', fg:'#b8860b', title:'수확(:a~d:)'},
+  keyword: {icon:'💬', label:'키워드', bg:'#eef0f3', fg:'#5a5a63', title:'키워드(:kw:)'},
+  farm:    {icon:'🌾', label:'파밍',   bg:'#e8f7ee', fg:'#1a8a4a', title:'파밍 아이템 지급'},
+  dice:    {icon:'🎲', label:'다이스', bg:'#fdf3dd', fg:'#b8860b', title:'능력 판정(다이스)'},
+  trade:   {icon:'💰', label:'거래',   bg:'#e2f6f3', fg:'#0e8a7a', title:'교단원 거래(IG/II/GI)'},
+  first:   {icon:'⭐', label:'최초',   bg:'#eaefff', fg:'#3457d5', title:'최초 탐사 노드'},
+  race:    {icon:'🧬', label:'',       bg:'#fbeae5', fg:'#c65b3f', title:'종족 전용'}
+};
+// 노드의 배지 키 목록(우선순위 순 — 첫 항목이 좌측 색 띠). cmds = 이 노드로 들어오는 선택지 명령 집합.
+function canvasNodeBadges(row, cmds){
+  // 선택지 명령(:sq:/:g1: 등)은 이 데이터에선 노드 이름 안에 붙어 있다(예: "성물의 관리 절차 :SQ:").
+  // 진입 간선의 명령(대괄호 뒤)과 노드 이름의 명령을 모두 모아 소문자로 정규화한다.
+  var merged = {};
+  Object.keys(cmds||{}).forEach(function(k){ merged[String(k).toLowerCase()] = true; });
+  var nmCmds = String(row[C['지역명']]||'').match(/:[A-Za-z0-9_]+:/g);
+  if(nmCmds) nmCmds.forEach(function(t){ merged[t.toLowerCase()] = true; });
+  var out = [];
+  var keyY = (row[C['키아이템 필요 여부']]==='Y'||row[C['키아이템 필요 여부']]==='y');
+  if(keyY || merged[':k:']) out.push('key');
+  if(merged[':sq:']) out.push('sub');
+  if(merged[':g1:']) out.push('sprout');
+  if(merged[':sd1:']||merged[':sd2:']||merged[':sd3:']||merged[':sd4:']) out.push('seed');
+  if(merged[':g2:']) out.push('seedling');
+  if(merged[':a:']||merged[':b:']||merged[':c:']||merged[':d:']) out.push('harvest');
+  if(merged[':kw:']) out.push('keyword');
+  var code=String(row[C['종류 코드']]||'');
+  if(String(row[C['파밍 아이템 ID']]||'').trim()) out.push('farm');
+  if(isDiceType(code)) out.push('dice');
+  if(isTradeType(code)) out.push('trade');
+  if(isFirstExploration(row)) out.push('first');
+  if(raceCode(row)) out.push('race');
+  return out;
 }
 function itemSelectField(label,value,onChange,required){ var w=document.createElement('div');w.className='field';var l=document.createElement('label');l.innerHTML=escapeHtml(label)+(required?'<span class="requiredMark">*</span>':'');w.appendChild(l);var sel=document.createElement('select');sel.style.cssText='border:1px solid var(--border-strong);border-radius:var(--radius-sm);padding:9px 11px;font-size:15px;background:var(--bg);font-family:var(--sans);width:100%;box-sizing:border-box;';var b=document.createElement('option');b.value='';b.textContent='선택하세요';sel.appendChild(b);var rows=(DATA.items.rows||[]).concat(DATA.keyItems.rows||[]),seen={};rows.forEach(function(r){var id=String(r[0]||'');if(!id||seen[id])return;seen[id]=1;var o=document.createElement('option');o.value=id;o.textContent='['+id+'] '+String(r[1]||'');if(String(value||'')===id)o.selected=true;sel.appendChild(o);});if(value&&!seen[String(value)]){var ox=document.createElement('option');ox.value=String(value);ox.textContent='['+value+'] (목록에 없음)';ox.selected=true;sel.appendChild(ox);}sel.addEventListener('change',function(){onChange(sel.value);markDirty();});w.appendChild(sel);return w;}
 function firstExplorationField(row){
