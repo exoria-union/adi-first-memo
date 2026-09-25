@@ -2110,6 +2110,36 @@ function deleteNode(topId, rowId, opts){
   toast('연결을 해제했어요 · 노드와 하위 선택지를 고아 노드로 보존했습니다');
   return true;
 }
+// 여러 고아 노드를 한 번에 완전 삭제한다(개별 confirm/스냅샷 없이 딱 한 번). rowIds = 삭제할 고아 노드 ID 목록.
+// ⚠ 삭제로 그 지역에서 "완전히 사라진 이름"의 링크만 정리한다. 같은 이름의 살아있는 노드가 남아 있으면
+//    그 이름 링크는 건드리지 않아, 동명의 정상 노드가 덩달아 끊겨 고아가 되는 사고를 막는다.
+function deleteOrphanNodes(topId, rowIds){
+  var tree = DATA.regionsTree[topId];
+  if(!tree) return 0;
+  var ids = (rowIds||[]).filter(function(rid){
+    return rid && rid!==tree.headerRowId && rid!==tree.moveRowId && rowById[rid]!==undefined;
+  });
+  if(!ids.length){ toast('삭제할 고아 노드가 없어요'); return 0; }
+  if(!confirm('고아 노드 '+ids.length+'개를 한꺼번에 완전히 삭제할까요?\n연결이 끊긴 노드들의 행 데이터까지 지웁니다. 되돌릴 수 없어요.\n(되돌리기 지점은 남겨둡니다.)')) return 0;
+  takeSnapshot('고아 노드 일괄 삭제 직전 ('+ids.length+'개)');
+  var idSet={}, delNames={};
+  ids.forEach(function(rid){
+    idSet[rid]=true;
+    var row = DATA.sheet1.rows[rowById[rid]];
+    if(row) delNames[row[C['지역명']]] = true;
+  });
+  DATA.sheet1.rows = DATA.sheet1.rows.filter(function(r){ return !idSet[r[C['지역ID']]]; });
+  (tree.clusters||[]).forEach(function(c){
+    if(c.nodeIds) c.nodeIds = c.nodeIds.filter(function(id){ return !idSet[id]; });
+  });
+  if(DATA.nodeCanvasPos) ids.forEach(function(rid){ delete DATA.nodeCanvasPos[canvasPosKey(topId, rid)]; });
+  rebuildIndexes();
+  Object.keys(delNames).forEach(function(nm){ if(!idsForName(topId, nm).length) stripLinksToNodeName(topId, nm); });
+  rebuildIndexes();
+  markDirty();
+  toast('고아 노드 '+ids.length+'개를 완전히 삭제했어요');
+  return ids.length;
+}
 // Removes a cluster entry from the region header, but preserves every node row.
 // The preserved nodes become region-level orphans and remain visible/editable.
 function deleteCluster(topId, clusterIdx){
@@ -3715,7 +3745,23 @@ function renderClusterCanvasScreen(main, crumb){
   if(orphanIds.length > 0){
     var orphanLabel = document.createElement('div'); orphanLabel.className = 'orphanSectionLabel';
     orphanLabel.style.left = '20px'; orphanLabel.style.top = (orphanBaseY - 26) + 'px';
-    orphanLabel.textContent = '⚠ 고아 노드 ' + orphanIds.length + '개 — 연결이 끊겼지만 데이터는 보존되어 있습니다 (× 를 누르면 완전히 삭제)';
+    var orphanTxt = document.createElement('span');
+    orphanTxt.textContent = '⚠ 고아 노드 ' + orphanIds.length + '개 — 연결이 끊겼지만 데이터는 보존되어 있습니다 (× 를 누르면 완전히 삭제)';
+    orphanLabel.appendChild(orphanTxt);
+    // 한꺼번에 전체 삭제 버튼 — 여기 보이는 고아 노드를 개별 확인 없이 한 번에 완전 삭제한다.
+    var delAllBtn = document.createElement('button'); delAllBtn.className = 'ghost';
+    delAllBtn.textContent = '고아 노드 ' + orphanIds.length + '개 모두 삭제';
+    delAllBtn.title = '이 그래프에 보이는 고아 노드를 한꺼번에 완전히 삭제해요';
+    delAllBtn.style.cssText = 'margin-left:10px;color:#c0392b;border-color:#f0c4bd;font-size:12px;padding:2px 8px;vertical-align:middle;';
+    delAllBtn.addEventListener('click', function(e){
+      e.stopPropagation();
+      var toDelete = orphanIds.slice();
+      if(deleteOrphanNodes(topId, toDelete)){
+        if(canvasSelectedId && toDelete.indexOf(canvasSelectedId)!==-1) canvasSelectedId = null;
+        render();
+      }
+    });
+    orphanLabel.appendChild(delAllBtn);
     inner.appendChild(orphanLabel);
   }
 
