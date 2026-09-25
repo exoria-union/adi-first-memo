@@ -2019,6 +2019,9 @@ function sortByNodeRecency(entries){
 // 한국어 가나다순 비교기 + 이름순 정렬(선택지 표시·대상 목록에 사용).
 function koCompare(a,b){ return String(a==null?'':a).localeCompare(String(b==null?'':b),'ko'); }
 function sortByNodeName(entries){ entries.sort(function(a,b){ return koCompare(a.name,b.name); }); return entries; }
+// 서브퀘스트 ID(SQ_003 등)에서 번호만 뽑아 오름차순 비교. 번호가 없으면 맨 뒤로.
+function sqNumOf(id){ var m=/(\d+)/.exec(String(id==null?'':id)); return m ? parseInt(m[1],10) : Number.MAX_SAFE_INTEGER; }
+function sqNumCompare(a,b){ var na=sqNumOf(a&&a[0]), nb=sqNumOf(b&&b[0]); return na!==nb ? na-nb : koCompare(a&&a[0], b&&b[0]); }
 /* 세부지역 명단(regionsTree)을 근거로 각 노드의 "집"(소속 세부지역 root의 행 ID)을 채운다.
    rebuildRegionsTreeFromSheet1이 돌 때는 거기서 바로 기록하지만, 부팅 직후처럼 저장된
    regionsTree를 그대로 쓰는 경로에서는 기록이 비어 있어 이 함수가 한 번 메워준다. */
@@ -4458,7 +4461,7 @@ function canvasNodeBadges(row, cmds){
   if(raceCode(row)) out.push('race');
   return out;
 }
-function itemSelectField(label,value,onChange,required){ var w=document.createElement('div');w.className='field';var l=document.createElement('label');l.innerHTML=escapeHtml(label)+(required?'<span class="requiredMark">*</span>':'');w.appendChild(l);var sel=document.createElement('select');sel.style.cssText='border:1px solid var(--border-strong);border-radius:var(--radius-sm);padding:9px 11px;font-size:15px;background:var(--bg);font-family:var(--sans);width:100%;box-sizing:border-box;';var b=document.createElement('option');b.value='';b.textContent='선택하세요';sel.appendChild(b);var rows=(DATA.items.rows||[]).concat(DATA.keyItems.rows||[]),seen={};rows.forEach(function(r){var id=String(r[0]||'');if(!id||seen[id])return;seen[id]=1;var o=document.createElement('option');o.value=id;o.textContent='['+id+'] '+String(r[1]||'');if(String(value||'')===id)o.selected=true;sel.appendChild(o);});if(value&&!seen[String(value)]){var ox=document.createElement('option');ox.value=String(value);ox.textContent='['+value+'] (목록에 없음)';ox.selected=true;sel.appendChild(ox);}sel.addEventListener('change',function(){onChange(sel.value);markDirty();});w.appendChild(sel);return w;}
+function itemSelectField(label,value,onChange,required){ var w=document.createElement('div');w.className='field';var l=document.createElement('label');l.innerHTML=escapeHtml(label)+(required?'<span class="requiredMark">*</span>':'');w.appendChild(l);var sel=document.createElement('select');sel.style.cssText='border:1px solid var(--border-strong);border-radius:var(--radius-sm);padding:9px 11px;font-size:15px;background:var(--bg);font-family:var(--sans);width:100%;box-sizing:border-box;';var b=document.createElement('option');b.value='';b.textContent='선택하세요';sel.appendChild(b);var rows=(DATA.items.rows||[]).concat(DATA.keyItems.rows||[]).sort(function(a,b){return koCompare(a&&a[1],b&&b[1]);}),seen={};rows.forEach(function(r){var id=String(r[0]||'');if(!id||seen[id])return;seen[id]=1;var o=document.createElement('option');o.value=id;o.textContent='['+id+'] '+String(r[1]||'');if(String(value||'')===id)o.selected=true;sel.appendChild(o);});if(value&&!seen[String(value)]){var ox=document.createElement('option');ox.value=String(value);ox.textContent='['+value+'] (목록에 없음)';ox.selected=true;sel.appendChild(ox);}sel.addEventListener('change',function(){onChange(sel.value);markDirty();});w.appendChild(sel);return w;}
 function firstExplorationField(row){
   var w=document.createElement('div');w.className='field';
   var l=document.createElement('label');l.textContent='최초 탐사 여부';w.appendChild(l);
@@ -4593,6 +4596,30 @@ function fieldSelect(label, value, options, onChange){
   }
   sel.addEventListener('change', function(){ onChange(sel.value); markDirty(); });
   wrap.appendChild(l); wrap.appendChild(sel);
+  appendFieldHint(wrap, label);
+  return wrap;
+}
+// 지역명을 가나다순으로 고르는 select 필드(서브퀘스트의 의뢰/재료/보고 지역용). 현재 값이 목록에
+// 없으면(지역이 지워졌거나 자유 입력이던 값) 그 값도 옵션으로 남겨 데이터가 사라지지 않게 한다.
+function fieldRegionSelect(label, value, onChange){
+  var wrap=document.createElement('div'); wrap.className='field';
+  var l=document.createElement('label'); l.textContent=label; wrap.appendChild(l);
+  var sel=document.createElement('select');
+  sel.style.cssText='border:1px solid var(--border-strong);border-radius:var(--radius-sm);padding:9px 11px;font-size:15px;background:var(--bg);font-family:var(--sans);width:100%;box-sizing:border-box;';
+  var none=document.createElement('option'); none.value=''; none.textContent='— 지역 없음 —'; sel.appendChild(none);
+  var names=sortedRegionNames();
+  names.forEach(function(n){ var o=document.createElement('option'); o.value=n; o.textContent=n; if(n===value)o.selected=true; sel.appendChild(o); });
+  if(value && names.indexOf(value)===-1){
+    // 기존 값이 목록에 정확히 없더라도, 지역명으로 시작하면(예: "대도서관 - 필사실") 실제로는
+    // 그 지역과 연결된다(교차참조가 접두사 기준). 그럴 땐 알람처럼 보이는 '없는 지역' 대신
+    // 세부 위치가 붙은 값임을 알린다. 아무 지역으로도 시작 안 하면 진짜 '없는 지역'.
+    var startsWithRegion = names.some(function(n){ return String(value).indexOf(n)===0; });
+    var ox=document.createElement('option'); ox.value=value;
+    ox.textContent=value+(startsWithRegion?' (세부 위치 포함)':' (없는 지역)'); ox.selected=true; sel.appendChild(ox);
+  }
+  sel.value = value || '';
+  sel.addEventListener('change', function(){ onChange(sel.value); markDirty(); });
+  wrap.appendChild(sel);
   appendFieldHint(wrap, label);
   return wrap;
 }
@@ -4900,13 +4927,29 @@ function renderNodePanel(topId, rowId){
   var head = document.createElement('div'); head.className='npHead';
   var nameInput = document.createElement('input');
   nameInput.value = r[C['지역명']];
-  nameInput.addEventListener('input', function(){
+  /* 이름 변경은 '입력 중(input)'이 아니라 '입력 완료(change=blur/Enter)'에만 반영한다.
+     예전에는 글자마다 이름 기반 cascade가 돌아, 원하는 이름을 치는 중간에 스쳐 가는 문자열이
+     다른 노드의 이름과 겹치면 그 노드까지 함께 이름이 바뀌거나(데이터 훼손) 링크가 엉켜
+     고아가 생겼다. 완료 시점 한 번만, 이 노드만 바꾸면 그런 사고가 없다. */
+  function commitNodeRename(){
     var oldName = r[C['지역명']];
-    var newName = nameInput.value;
-    if(oldName===newName) return;
-    renameNodeCascade(topId, oldName, newName);
+    var typed = String(nameInput.value==null?'':nameInput.value).trim();
+    if(typed===oldName){ if(nameInput.value!==oldName) nameInput.value=oldName; return; }
+    if(!typed){ nameInput.value=oldName; toast('노드 이름은 비워 둘 수 없어요'); return; }  // 빈 이름은 링크가 못 가리켜 고아를 만든다
+    var wasDup = idsForName(topId, oldName).length > 1;                     // 바꾸기 전, 옛 이름이 이미 중복이었나
+    renameNodeCascade(topId, oldName, typed, r[C['지역ID']]);                 // 이 노드 하나만 바꾼다
+    nameInput.value = typed;
+    var nowDup = idsForName(topId, typed).filter(function(id){ return id!==r[C['지역ID']]; }).length > 0;
     markDirty();
-  });
+    refreshGraphBehindPanel();
+    if(wasDup){
+      toast('이름을 바꿨어요 · 이 노드로 "들어오던" 연결은 아직 "'+oldName+'" 이름에 남아 있어요. 필요하면 선택지에서 다시 연결해 주세요.');
+    } else if(nowDup){
+      toast('주의: 이 지역에 "'+typed+'" 이름의 노드가 이미 있어요 · 이름 기반 연결이 서로 섞일 수 있어요.');
+    }
+  }
+  nameInput.addEventListener('change', commitNodeRename);
+  nameInput.addEventListener('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); nameInput.blur(); } });
   var closeBtn = document.createElement('button'); closeBtn.className='ghost'; closeBtn.textContent='✕';
   closeBtn.title = '닫기';
   closeBtn.addEventListener('click', closeNodePanel);
@@ -4983,7 +5026,13 @@ function renderNodePanel(topId, rowId){
   refreshNodeEditorTags(r);
 }
 
-function renameNodeCascade(topId, oldName, newName){
+/* onlyRowId 를 주면 "그 노드 하나"의 이름만 바꾼다. 같은 이름이 여러 노드에 있을 때(중복),
+   예전에는 이 함수가 같은 이름의 노드를 전부 바꿔 버려서 → 하나만 다른 이름으로 고치려 해도
+   중복이 그대로 남았다("다른 이름으로 수정해도 계속 같은 이름"). 또한 이름 기반 링크(▶[지역/…])
+   재작성은 "이름이 그 지역에서 유일할 때만" 안전하다. 중복이면 어느 링크가 이 노드를 가리키는지
+   구분할 수 없어, 바꾸면 엉뚱한 노드로 연결이 튀어(고아 발생) → 중복일 때는 링크를 건드리지 않는다. */
+function renameNodeCascade(topId, oldName, newName, onlyRowId){
+  var dupOld = idsForName(topId, oldName).length > 1;
   var idxs = [];
   DATA.sheet1.rows.forEach(function(r,i){
     var top = r[C['상위지역ID(부모ID)']] || r[C['지역ID']];
@@ -4991,21 +5040,23 @@ function renameNodeCascade(topId, oldName, newName){
   });
   idxs.forEach(function(i){
     var r = DATA.sheet1.rows[i];
-    if(r[C['지역명']]===oldName) r[C['지역명']] = newName;
-    ['스크립트(내용)','성공 스크립트','실패 스크립트'].forEach(function(col){
-      var v = r[C[col]];
-      if(v && v.indexOf('▶[지역/'+oldName+']')!==-1){
-        r[C[col]] = v.split('▶[지역/'+oldName+']').join('▶[지역/'+newName+']');
-      }
-      v = r[C[col]];
-      if(v && v.indexOf('▶[진입/'+oldName+']')!==-1){
-        r[C[col]] = v.split('▶[진입/'+oldName+']').join('▶[진입/'+newName+']');
-      }
-    });
+    if(r[C['지역명']]===oldName && (!onlyRowId || r[C['지역ID']]===onlyRowId)) r[C['지역명']] = newName;
+    if(!dupOld){   // 이름이 유일할 때만 링크를 따라 바꾼다
+      ['스크립트(내용)','성공 스크립트','실패 스크립트'].forEach(function(col){
+        var v = r[C[col]];
+        if(v && v.indexOf('▶[지역/'+oldName+']')!==-1){
+          r[C[col]] = v.split('▶[지역/'+oldName+']').join('▶[지역/'+newName+']');
+        }
+        v = r[C[col]];
+        if(v && v.indexOf('▶[진입/'+oldName+']')!==-1){
+          r[C[col]] = v.split('▶[진입/'+oldName+']').join('▶[진입/'+newName+']');
+        }
+      });
+    }
   });
-  // cluster root names are captured by name at parse time - keep them in sync too
+  // cluster root names are captured by name at parse time - keep them in sync too(유일할 때만)
   var tree = DATA.regionsTree[topId];
-  if(tree){
+  if(tree && !dupOld){
     tree.clusters.forEach(function(cl){
       if(cl.root===oldName) cl.root = newName;
     });
@@ -5479,7 +5530,8 @@ function renderSubquestsScreen(main, crumb){
   wrap.appendChild(toolbar);
 
   var list = document.createElement('div'); list.className='sqlist'+(nav.sqView==='grid'?' viewGrid':'');
-  DATA.subquests.rows.forEach(function(r){
+  // SQ 번호 오름차순으로 실시간 정렬(표시만 정렬 — 저장 순서는 건드리지 않아 협업 동기화에 안전).
+  DATA.subquests.rows.slice().sort(sqNumCompare).forEach(function(r){
     var row = document.createElement('div'); row.className='sqrow';
     row.style.borderLeft = '3px solid ' + tagColor('subquest');
     var left = document.createElement('div');
@@ -5554,11 +5606,11 @@ function renderSubquestDetail(main, crumb){
   idField.appendChild(idLabel); idField.appendChild(idInput);
   colL.appendChild(idField);
 
-  colL.appendChild(fieldInput('이름', r[1], function(v){ r[1]=v; }));
+  colL.appendChild(fieldInput('이름', r[1], function(v){ r[1]=v; h.textContent=v; }));
   colL.appendChild(fieldTextarea('내용 요약', r[5], function(v){ r[5]=v; }, 3));
-  colR.appendChild(fieldInput('의뢰 지역', r[2], function(v){ r[2]=v; }));
-  colR.appendChild(fieldInput('재료 지역', r[3], function(v){ r[3]=v; }));
-  colR.appendChild(fieldInput('보고 지역', r[4], function(v){ r[4]=v; }));
+  colR.appendChild(fieldRegionSelect('의뢰 지역', r[2], function(v){ r[2]=v; }));
+  colR.appendChild(fieldRegionSelect('재료 지역', r[3], function(v){ r[3]=v; }));
+  colR.appendChild(fieldRegionSelect('보고 지역', r[4], function(v){ r[4]=v; }));
   colR.appendChild(fieldInput('보상', r[6], function(v){ r[6]=v; }));
 
   main.appendChild(card);
@@ -5637,16 +5689,32 @@ function rebuildProjectView(opts){
   // 프로젝트를 바꾸거나 원격 데이터를 받아도 프로젝트당 1회만 수행된다.
   migratePlacementNotesToMemo();
   rebuildAllCrossRefs();
-  var preserveView = opts.preserveView !== false && previousNav && previousNav.main==='map';
-  if(preserveView && previousNav.view==='canvas'){
-    var pt=DATA.regionsTree && previousNav.regionId ? DATA.regionsTree[previousNav.regionId] : null;
-    if(!pt || !pt.clusters || !pt.clusters[previousNav.clusterIdx]) preserveView=false;
-  } else if(preserveView && previousNav.view==='cluster'){
-    var pt2=DATA.regionsTree && previousNav.regionId ? DATA.regionsTree[previousNav.regionId] : null;
-    if(!pt2 || !pt2.clusters || !pt2.clusters[previousNav.clusterIdx]) preserveView=false;
-  } else if(preserveView && previousNav.view==='region'){
-    if(!DATA.regionsTree || !DATA.regionsTree[previousNav.regionId]) preserveView=false;
+  // 지도 탭뿐 아니라 아이템·서브퀘스트·날씨·에너미 탭도 보존한다. 예전에는 previousNav.main==='map'
+  // 일 때만 보존해서, 다른 탭을 보던 중 원격 동기화(applyRemoteData)나 collabRefreshViews가 재빌드를
+  // 돌리면 화면이 갑자기 지도로 튕겨 나갔다("아이템/서브퀘스트 탭이 조금 있으면 메인으로 돌아감").
+  var preserveView = opts.preserveView !== false && !!previousNav;
+  if(preserveView && previousNav.main==='map'){
+    if(previousNav.view==='canvas'){
+      var pt=DATA.regionsTree && previousNav.regionId ? DATA.regionsTree[previousNav.regionId] : null;
+      if(!pt || !pt.clusters || !pt.clusters[previousNav.clusterIdx]) preserveView=false;
+    } else if(previousNav.view==='cluster'){
+      var pt2=DATA.regionsTree && previousNav.regionId ? DATA.regionsTree[previousNav.regionId] : null;
+      if(!pt2 || !pt2.clusters || !pt2.clusters[previousNav.clusterIdx]) preserveView=false;
+    } else if(previousNav.view==='region'){
+      if(!DATA.regionsTree || !DATA.regionsTree[previousNav.regionId]) preserveView=false;
+    }
+  } else if(preserveView && previousNav.main==='items'){
+    // 열려 있던 아이템이 (원격 삭제 등으로) 사라졌으면 상세 대신 목록으로만 물러나고 탭은 유지한다.
+    if(previousNav.itemId!=null){
+      var stillItem=((DATA.items&&DATA.items.rows)||[]).some(function(r){return r[0]===previousNav.itemId;})
+                  ||((DATA.keyItems&&DATA.keyItems.rows)||[]).some(function(r){return r[0]===previousNav.itemId;});
+      if(!stillItem) previousNav.itemId=null;
+    }
+  } else if(preserveView && previousNav.main==='subquests'){
+    // 열려 있던 서브퀘스트가 사라졌으면 목록으로만 물러난다.
+    if(previousNav.sqId!=null && !(((DATA.subquests&&DATA.subquests.rows)||[]).some(function(r){return r[0]===previousNav.sqId;}))) previousNav.sqId=null;
   }
+  // main==='weather'/'enemy'는 별도 하위 상태가 없어 탭만 그대로 두면 된다.
   if(!preserveView){
     nav={main:'map',view:'map',regionId:null,clusterIdx:null,itemCat:null,itemId:null,sqId:null,itemView:'grid',sqView:'list'};
     focusPath={};
