@@ -4702,7 +4702,12 @@ function scriptFieldEditor(label, topId, row, colName){
     CHOICE_CMDS.forEach(function(x){ var o=document.createElement('option'); o.value=x[0]; o.textContent=(x[0]?x[1]+' ('+x[0]+')':x[1]); if(x[0]===curCmd){o.selected=true;known=true;} esel.appendChild(o); });
     if(curCmd && !known){ var o=document.createElement('option'); o.value=curCmd; o.textContent=curCmd+' (직접 입력)'; o.selected=true; esel.appendChild(o); }
     esel.addEventListener('change', function(){ sync(false); });
-    rowEl.appendChild(sel); rowEl.appendChild(esel); rowEl.appendChild(jumpBtn); rowEl.appendChild(rm);
+    // 위/아래 버튼으로 선택지 순서를 직접 조정(사용자 지정 순서). 이동 즉시 스크립트에 저장된다.
+    var upBtn = document.createElement('button'); upBtn.className='ghost'; upBtn.textContent='▲'; upBtn.title='이 선택지를 위로 이동';
+    upBtn.addEventListener('click', function(){ var prev=rowEl.previousElementSibling; if(prev){ choicesWrap.insertBefore(rowEl, prev); sync(true); refreshGraphBehindPanel(); } });
+    var downBtn = document.createElement('button'); downBtn.className='ghost'; downBtn.textContent='▼'; downBtn.title='이 선택지를 아래로 이동';
+    downBtn.addEventListener('click', function(){ var next=rowEl.nextElementSibling; if(next){ choicesWrap.insertBefore(next, rowEl); sync(true); refreshGraphBehindPanel(); } });
+    rowEl.appendChild(sel); rowEl.appendChild(esel); rowEl.appendChild(upBtn); rowEl.appendChild(downBtn); rowEl.appendChild(jumpBtn); rowEl.appendChild(rm);
     choicesWrap.appendChild(rowEl);
   }
   parsed.links.forEach(function(l){ addChoiceRow(l.name, l.cmd); });
