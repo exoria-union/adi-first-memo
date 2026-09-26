@@ -3575,7 +3575,8 @@ function renderClusterCanvasScreen(main, crumb){
     + '<span title="새싹(:g1:)">🌱새싹</span>'
     + '<span title="파밍">🌾파밍</span>'
     + '<span title="다이스">🎲다이스</span>'
-    + '<span title="거래">💰거래</span>';
+    + '<span title="거래">💰거래</span>'
+    + '<span title="배타적 갈림길(회차당 택1)">🔀택1</span>';
   toolbar.appendChild(backBtn); toolbar.appendChild(resetBtn); toolbar.appendChild(hierarchySwapBtn);
   toolbar.appendChild(lockBtn); toolbar.appendChild(legend); toolbar.appendChild(hint);
   wrap.appendChild(toolbar);
@@ -4480,7 +4481,8 @@ var CANVAS_BADGES = {
   dice:    {icon:'🎲', label:'다이스', bg:'#fdf3dd', fg:'#b8860b', title:'능력 판정(다이스)'},
   trade:   {icon:'💰', label:'거래',   bg:'#e2f6f3', fg:'#0e8a7a', title:'교단원 거래(IG/II/GI)'},
   first:   {icon:'⭐', label:'최초',   bg:'#eaefff', fg:'#3457d5', title:'최초 탐사 노드'},
-  race:    {icon:'🧬', label:'',       bg:'#fbeae5', fg:'#c65b3f', title:'종족 전용'}
+  race:    {icon:'🧬', label:'',       bg:'#fbeae5', fg:'#c65b3f', title:'종족 전용'},
+  branch:  {icon:'🔀', label:'택1',    bg:'#eef0f3', fg:'#5a5a63', title:'배타적 갈림길 · 회차당 택1(같은 그룹 코드끼리)'}
 };
 // 노드의 배지 키 목록(우선순위 순 — 첫 항목이 좌측 색 띠). cmds = 이 노드로 들어오는 선택지 명령 집합.
 function canvasNodeBadges(row, cmds){
@@ -4505,6 +4507,7 @@ function canvasNodeBadges(row, cmds){
   if(isTradeType(code)) out.push('trade');
   if(isFirstExploration(row)) out.push('first');
   if(raceCode(row)) out.push('race');
+  if(C['갈림길 그룹']!=null && String(row[C['갈림길 그룹']]||'').trim()) out.push('branch');
   return out;
 }
 function itemSelectField(label,value,onChange,required){ var w=document.createElement('div');w.className='field';var l=document.createElement('label');l.innerHTML=escapeHtml(label)+(required?'<span class="requiredMark">*</span>':'');w.appendChild(l);var sel=document.createElement('select');sel.style.cssText='border:1px solid var(--border-strong);border-radius:var(--radius-sm);padding:9px 11px;font-size:15px;background:var(--bg);font-family:var(--sans);width:100%;box-sizing:border-box;';var b=document.createElement('option');b.value='';b.textContent='선택하세요';sel.appendChild(b);var rows=(DATA.items.rows||[]).concat(DATA.keyItems.rows||[]).sort(function(a,b){return koCompare(a&&a[1],b&&b[1]);}),seen={};rows.forEach(function(r){var id=String(r[0]||'');if(!id||seen[id])return;seen[id]=1;var o=document.createElement('option');o.value=id;o.textContent='['+id+'] '+String(r[1]||'');if(String(value||'')===id)o.selected=true;sel.appendChild(o);});if(value&&!seen[String(value)]){var ox=document.createElement('option');ox.value=String(value);ox.textContent='['+value+'] (목록에 없음)';ox.selected=true;sel.appendChild(ox);}sel.addEventListener('change',function(){onChange(sel.value);markDirty();});w.appendChild(sel);return w;}
@@ -4689,6 +4692,18 @@ var CHOICE_CMDS = [
   [':g1:', '새싹'], [':g2:', '모종'],
   [':a:', '수확1'], [':b:', '수확2'], [':c:', '수확3'], [':d:', '수확4']
 ];
+// 이 지역에서 다음 배타적 갈림길 그룹 코드({topId}_FORK{n})를 만든다. 규칙 30(공백 없음·64자 이내) 충족.
+function nextBranchGroupCode(topId){
+  var col = C['갈림길 그룹'];
+  if(col==null) return String(topId)+'_FORK1';
+  var maxN = 0, re = new RegExp('^'+String(topId).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'_FORK(\\d+)$');
+  DATA.sheet1.rows.forEach(function(r){
+    var m = re.exec(String(r[col]||'').trim());
+    if(m){ var n=parseInt(m[1],10); if(n>maxN) maxN=n; }
+  });
+  var code = String(topId)+'_FORK'+(maxN+1);
+  return code.length>64 ? code.slice(0,64) : code;
+}
 // narrative text + a structured, editable list of "▶[지역/X]" choices, kept in sync with the
 // underlying script column. Each choice has its own jump-to-that-node shortcut + emoji command.
 function scriptFieldEditor(label, topId, row, colName){
@@ -4917,6 +4932,89 @@ function scriptFieldEditor(label, topId, row, colName){
   var choiceBtnRow = document.createElement('div'); choiceBtnRow.style.cssText='display:flex;gap:6px;align-items:center;margin-top:4px;flex-wrap:wrap;';
   choiceBtnRow.appendChild(addBtn); choiceBtnRow.appendChild(sortBtn);
   wrap.appendChild(choiceBtnRow);
+
+  // ── 배타적 갈래(회차당 택1) 자동 묶기 ─────────────────────────────
+  // 이 갈림길 노드의 선택지 노드 여러 개에 같은 '갈림길 그룹' 코드를 자동 부여한다. 코드를 노드마다
+  // 일일이 입력할 필요 없이, 여기서 고른 갈래들을 한 번에 묶는다. 코드는 {지역ID}_FORK{n}로 자동 생성.
+  if(colName==='스크립트(내용)' && !isHeaderMainScript){
+    var branchBtn = document.createElement('button'); branchBtn.className='ghost'; branchBtn.textContent='🔀 배타적 갈래로 묶기';
+    branchBtn.title='이 선택지들 중 여러 개를 "회차당 택1"로 묶어요 · 그룹 코드는 자동 생성됩니다(직접 입력할 필요 없음)';
+    var branchPanel = document.createElement('div');
+    branchPanel.style.cssText='display:none;margin-top:6px;padding:9px 11px;border:1px solid var(--accent-soft-border);background:var(--accent-soft);border-radius:6px;font-size:13px;';
+    branchBtn.addEventListener('click', function(){
+      if(branchPanel.style.display==='none'){ buildBranchPanel(); branchPanel.style.display=''; }
+      else branchPanel.style.display='none';
+    });
+    choiceBtnRow.appendChild(branchBtn);
+    wrap.appendChild(branchPanel);
+
+    function buildBranchPanel(){
+      branchPanel.innerHTML='';
+      if(C['갈림길 그룹']==null) ensureBotAreaColumns();
+      var bgCol = C['갈림길 그룹'];
+      // 현재 선택지 → 대상 노드 ID 해석("이동한다"·미해석·중복 제외)
+      var seen={}, targets=[];
+      collectLinks().forEach(function(lk){
+        if(!lk.name || lk.name==='이동한다') return;
+        var nid = resolveNodeIdForLink(topId, lk.name);
+        if(!nid || seen[nid]) return; seen[nid]=true;
+        var trow = DATA.sheet1.rows[rowById[nid]];
+        targets.push({ id:nid, name:lk.name, group:String((trow&&bgCol!=null?trow[bgCol]:'')||'').trim() });
+      });
+      var title=document.createElement('div'); title.style.cssText='font-weight:700;margin-bottom:6px;';
+      title.textContent='배타적 갈래(회차당 택1)로 묶기';
+      branchPanel.appendChild(title);
+      if(targets.length<2){
+        var warn=document.createElement('div'); warn.style.color='var(--text-dim)';
+        warn.textContent='먼저 "다음 노드로 이어지는 선택지"를 2개 이상 만들어 주세요. 하나뿐이면 잠글 형제 갈래가 없어 의미가 없어요.';
+        branchPanel.appendChild(warn); return;
+      }
+      var hintD=document.createElement('div'); hintD.style.cssText='color:var(--text-dim);margin-bottom:6px;';
+      hintD.textContent='묶을 갈래를 고르면, 한 탐사(회차)에서 그중 하나로 들어가면 나머지는 잠깁니다.';
+      branchPanel.appendChild(hintD);
+      var checks=[], existing={};
+      targets.forEach(function(t){
+        var lab=document.createElement('label'); lab.style.cssText='display:flex;align-items:center;gap:7px;padding:2px 0;cursor:pointer;';
+        var cb=document.createElement('input'); cb.type='checkbox'; cb.checked=true; cb.__t=t;
+        var span=document.createElement('span'); span.textContent=displayNodeName(t.name)+(t.group?('  · 현재: '+t.group):'');
+        lab.appendChild(cb); lab.appendChild(span); branchPanel.appendChild(lab); checks.push(cb);
+        if(t.group) existing[t.group]=1;
+      });
+      var existingCodes=Object.keys(existing);
+      var codeRow=document.createElement('div'); codeRow.style.cssText='display:flex;align-items:center;gap:6px;margin:8px 0 4px;';
+      var codeLbl=document.createElement('span'); codeLbl.textContent='그룹 코드:';
+      var codeInp=document.createElement('input'); codeInp.type='text';
+      codeInp.style.cssText='flex:1;min-width:0;padding:5px 7px;border:1px solid var(--border-strong);border-radius:5px;font-family:var(--mono);font-size:12.5px;background:var(--bg);';
+      codeInp.value = existingCodes.length===1 ? existingCodes[0] : nextBranchGroupCode(topId);
+      codeInp.title='자동 생성된 코드예요. 그대로 두면 됩니다(원하면 직접 바꿔도 돼요 · 공백 없이 64자 이내).';
+      codeRow.appendChild(codeLbl); codeRow.appendChild(codeInp); branchPanel.appendChild(codeRow);
+      var btnRow=document.createElement('div'); btnRow.style.cssText='display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;';
+      var applyBtn=document.createElement('button'); applyBtn.className='primary'; applyBtn.textContent='택1로 묶기';
+      applyBtn.addEventListener('click', function(){
+        var picked=checks.filter(function(c){return c.checked;}).map(function(c){return c.__t;});
+        if(picked.length<2){ toast('배타적 갈래는 2개 이상 골라야 해요'); return; }
+        var code=String(codeInp.value||'').replace(/\s+/g,'').slice(0,64);
+        if(!code){ toast('그룹 코드를 비워 둘 수 없어요'); return; }
+        if(bgCol==null){ ensureBotAreaColumns(); bgCol=C['갈림길 그룹']; }
+        picked.forEach(function(t){ var trow=DATA.sheet1.rows[rowById[t.id]]; if(trow) trow[bgCol]=code; });
+        markDirty(); refreshGraphBehindPanel();
+        toast(picked.length+'개 갈래를 "'+code+'"로 묶었어요 · 회차당 하나만 진입할 수 있어요');
+        buildBranchPanel();
+      });
+      var clearBtn=document.createElement('button'); clearBtn.className='ghost'; clearBtn.textContent='묶기 해제';
+      clearBtn.title='선택한 갈래의 그룹 코드를 지웁니다(다시 자유롭게 진입 가능)';
+      clearBtn.addEventListener('click', function(){
+        var picked=checks.filter(function(c){return c.checked;}).map(function(c){return c.__t;});
+        if(!picked.length){ toast('해제할 갈래를 선택하세요'); return; }
+        if(bgCol==null){ ensureBotAreaColumns(); bgCol=C['갈림길 그룹']; }
+        var n=0; picked.forEach(function(t){ var trow=DATA.sheet1.rows[rowById[t.id]]; if(trow && String(trow[bgCol]||'').trim()){ trow[bgCol]=''; n++; } });
+        markDirty(); refreshGraphBehindPanel();
+        toast(n?('갈래 '+n+'개의 묶기를 해제했어요'):'해제할 묶기가 없었어요');
+        buildBranchPanel();
+      });
+      btnRow.appendChild(applyBtn); btnRow.appendChild(clearBtn); branchPanel.appendChild(btnRow);
+    }
+  }
 
   narrativeTa.addEventListener('input', sync);
 
