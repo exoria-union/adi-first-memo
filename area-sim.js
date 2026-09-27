@@ -190,14 +190,17 @@ export function createSim(data, opts = {}) {
   function requiredStats(inc) { const s = safeStr(inc).toUpperCase(), r = []; if (s.includes('STR')) r.push('힘'); if (s.includes('WIS')) r.push('지혜'); if (s.includes('DEX')) r.push('솜씨'); if (s.includes('ALL')) r.push('무관'); return r; }
   function handleSkill(area, action, potion, name) {
     const stats = requiredStats(area.incounter_cd);
+    // 이 다이스(능력 판정) 노드가 도전을 기다릴 때 버튼으로 제안할 스탯: 무관이면 셋 다, 아니면 필요한 스탯만.
+    const promptStats = stats.includes('무관') ? ['힘', '솜씨', '지혜'] : stats.filter(s => s !== '무관');
+    const skillPrompt = promptStats.length ? { name, stats: promptStats } : null;
     if (!STAT_KOR.includes(action)) {
-      if (area.area_cn) return { msg: join(extractCn(area, '')), status: 'ING' };
+      if (area.area_cn) return { msg: join(extractCn(area, '')), status: 'ING', skillPrompt };
       const req = stats[0] && stats[0] !== '무관' ? stats[0] : '원하는 스탯';
-      return { msg: `이곳을 통과하려면 능력을 발휘해야 할 것 같다. [지역/${name}/${req}]을 입력해 도전해 보자.`, status: 'ING' };
+      return { msg: `이곳을 통과하려면 능력을 발휘해야 할 것 같다. [지역/${name}/${req}]을 입력해 도전해 보자.`, status: 'ING', skillPrompt };
     }
     if (!stats.includes('무관') && !stats.includes(action)) {
       if (!stats.length) return { msg: '이 행동은 통하지 않을 것 같다! 다른 방식으로 도전해 보자.', status: 'ING' };
-      return { msg: `이 행동은 통하지 않을 것 같다! 침착하게, 다른 방식으로 도전해 보자.\n 가령, ${stats[0]}을(를) 살린다면 어떨까?\n\n▶[지역/${name}/${stats[0]}]`, status: 'ING' };
+      return { msg: `이 행동은 통하지 않을 것 같다! 침착하게, 다른 방식으로 도전해 보자.\n 가령, ${stats[0]}을(를) 살린다면 어떨까?\n\n▶[지역/${name}/${stats[0]}]`, status: 'ING', skillPrompt };
     }
     if (potion) {
       const sv = safeInt(ch[STAT_COL[action]], 0);
@@ -284,6 +287,14 @@ export function createSim(data, opts = {}) {
     else res = handlePass(area);
     // 선택지는 실제로 표시된 메시지에서만 추출(성공→성공스크립트, 실패→실패스크립트, 완료→인접지역).
     let choices = choicesFromText(res.msg);
+    // 다이스(능력 판정) 노드가 스탯 입력을 기다리는 중이면, 필요한 스탯으로 도전하는 버튼을 앞에 붙인다.
+    // 버튼 = 봇 명령 [지역/이름/스탯] 그대로라, 힘/지혜/솜씨를 손으로 타이핑할 필요 없이 클릭해서 굴린다.
+    if (res.skillPrompt && res.skillPrompt.stats && res.skillPrompt.stats.length) {
+      const sp = res.skillPrompt;
+      const statChoices = sp.stats.map(s => ({ label: '🎲 ' + (s === '힘' ? '힘으로' : s + '로') + ' 도전', cmd: sp.name + '/' + s }));
+      const dup = {}; statChoices.forEach(c => { dup[c.cmd] = true; });
+      choices = statChoices.concat(choices.filter(c => !dup[c]));   // 스크립트에서 뽑힌 동일 명령(name/stat) 중복 제거
+    }
     if (res.status === 'FAIL') choices = ['포기'];   // 실패 후엔 ▶포기(경험치 소액) 또는 같은 명령 재입력
     return { msg: res.msg, area, choices, status: res.status };
   }
@@ -405,7 +416,13 @@ export function openAreaTestUI(container, data, opts = {}) {
   }
   function renderChoices(list) {
     choicesBar.innerHTML = '';
-    (list || []).forEach(name => { const c = el('button', 'font-size:12px;padding:5px 11px;border-radius:999px;', '▶ ' + name); c.className = 'ghost'; c.addEventListener('click', () => submit(name)); choicesBar.appendChild(c); });
+    (list || []).forEach(item => {
+      const isStr = (typeof item === 'string');
+      const label = isStr ? item : item.label;   // 문자열=노드 이름, 객체={label, cmd}(다이스 스탯 버튼 등)
+      const cmd = isStr ? item : item.cmd;
+      const c = el('button', 'font-size:12px;padding:5px 11px;border-radius:999px;', (isStr ? '▶ ' : '') + label);
+      c.className = 'ghost'; c.addEventListener('click', () => submit(cmd)); choicesBar.appendChild(c);
+    });
   }
   function submit(raw) {
     if (!sim) { bubble('먼저 [탐사 시작]을 눌러주세요.', 'bot'); return; }
