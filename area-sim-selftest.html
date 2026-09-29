@@ -4,7 +4,7 @@
 <h3>자동봇 테스트모드 엔진 자체 테스트</h3>
 <pre id="out"></pre>
 <script type="module">
-import { createSim, buildAreas, parseAreaInput } from './area-sim.js';
+import { createSim, buildAreas, parseAreaInput, withAutoRetryChoice } from './area-sim.js';
 const out=document.getElementById('out'); let pass=0,fail=0;
 const log=(m,c)=>{out.innerHTML+=(c?`<span class="${c}">${m}</span>`:m)+'\n';};
 const ok=(n,c)=>{if(c){pass++;log('PASS  '+n,'p');}else{fail++;log('FAIL  '+n,'f');}};
@@ -127,10 +127,24 @@ try{
   // 17) 스킬 실패(목표7=항상실패) → status FAIL, 포기 선택지, 미션 유지 → 재도전 인-컨텍스트
   var sf=createSim({rows,headers:H},{character:{str:3}}); sf.command('종탑'); r=sf.command('절벽','힘');
   ok('스킬 실패: status=FAIL', r.status==='FAIL');
-  ok('스킬 실패: 선택지=[포기]', r.choices.length===1 && r.choices[0]==='포기');
+  ok('스킬 실패: 선택지 없는 실패 스크립트 → 빈 줄 + ▶[재도전/지역] 자동', r.msg.includes('추락했다...\n\n▶[재도전/지역]'));
+  ok('스킬 실패: 선택지=[재도전, 포기]', r.choices.length===2 && r.choices[0].cmd==='재도전/지역' && r.choices[1]==='포기');
   ok('스킬 실패: 미션 유지(재도전 가능)', !!sf.mission);
   var r2=sf.command('절벽','힘');
   ok('스킬 재도전: 인-컨텍스트 재판정(주사위 재표기)', r2.msg.includes('D6>=7'));
+  // 17-1) ▶[재도전/지역] 버튼 → 실패한 다이스 노드의 도전 대기(스탯 버튼) 재표시
+  var rq=pi('▶[재도전/지역]'); ok('파싱: ▶[재도전/지역] → 재도전', rq.name==='재도전');
+  var r3=sf.command(rq.name, rq.action, rq.potion);
+  ok('재도전: 도전 대기(status ING) + 본문 재표시', r3.status==='ING' && r3.msg.includes('까마득한 절벽'));
+  ok('재도전: 힘 도전 버튼 제공', r3.choices.some(c=>c&&c.cmd==='절벽/힘'));
+  var r4=sf.command('절벽','힘'); ok('재도전 후 다시 굴림 → 재판정', r4.msg.includes('D6>=7') && r4.status==='FAIL');
+  var nr=createSim({rows,headers:H}); nr.command('종탑');
+  ok('재도전: 다이스 노드가 아니면 안내만', nr.command('재도전','지역').msg.includes('다시 도전할 판정이 없'));
+  // 17-2) 자동 재도전 규칙(SQL 내보내기와 동일): 다이스 + 선택지 없음일 때만
+  ok('자동 재도전: 선택지 있으면 그대로', withAutoRetryChoice('미끄러졌다.\n\n▶[지역/종탑]','INCUNTR_03_STR')==='미끄러졌다.\n\n▶[지역/종탑]');
+  ok('자동 재도전: 끝 공백 정리 후 빈 줄 하나', withAutoRetryChoice('떨어졌다.\n','INCUNTR_03_DEX')==='떨어졌다.\n\n▶[재도전/지역]');
+  ok('자동 재도전: 빈 실패 스크립트', withAutoRetryChoice('','INCUNTR_03_ALL')==='\n▶[재도전/지역]');
+  ok('자동 재도전: 다이스 아니면 그대로', withAutoRetryChoice('끝.','INCUNTR_00')==='끝.');
   // 18) 완료 후 status 비고착: 다른 노드로 이동하면 ING(완료 안내 재출력 안 됨)
   var sc=createSim({rows,headers:H},{character:{gold:500}}); sc.command('종탑'); sc.command('종을 친다');
   r=sc.command('상인');

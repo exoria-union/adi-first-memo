@@ -4407,6 +4407,21 @@ var TYPE_CODES =['INCUNTR_00','INCUNTR_02','INCUNTR_03_ALL','INCUNTR_03_STR','IN
 
 function typeCodesArray(raw){ return String(raw||'').split(',').map(function(s){return s.trim();}).filter(Boolean); }
 function isDiceType(raw){ return typeCodesArray(raw).some(function(c){return c.indexOf('INCUNTR_03_')===0;}); }
+// 다이스 노드의 실패 스크립트에 선택지(▶[…])를 하나도 고르지 않았으면, 봇이 보여줄 fail_cn 끝에
+// 재도전 선택지를 자동으로 붙인다. 편집기 데이터는 그대로 두고 SQL 내보내기에서만 적용한다.
+// area-sim.js의 withAutoRetryChoice(테스트 모드)와 같은 규칙 — 한쪽을 바꾸면 다른 쪽도 맞출 것.
+var AUTO_RETRY_CHOICE = '▶[재도전/지역]';
+function needsAutoRetryChoice(failCn, typeCode){ return isDiceType(typeCode) && !/▶\s*\[/.test(String(failCn==null?'':failCn)); }
+function withAutoRetryChoice(failCn, typeCode){
+  if(!needsAutoRetryChoice(failCn, typeCode)) return failCn;
+  var body = String(failCn==null?'':failCn).replace(/\s+$/,'');
+  // 선택지 앞엔 빈 줄 하나. 실패 스크립트가 비어 있으면 봇이 앞에 붙이는 주사위 결과 줄과 빈 줄로 띄운다.
+  return (body ? body+'\n\n' : '\n') + AUTO_RETRY_CHOICE;
+}
+function updateAutoRetryNote(row){
+  var n=document.getElementById('npAutoRetryNote'); if(!n) return;
+  n.style.display = needsAutoRetryChoice(row[C['실패 스크립트']], row[C['종류 코드']]) ? '' : 'none';
+}
 function isTradeType(raw){ return typeCodesArray(raw).some(function(c){return c==='INCUNTR_04_IG'||c==='INCUNTR_04_II'||c==='INCUNTR_04_GI';}); }
 function is04IGGI(raw){ var a=typeCodesArray(raw); return a.indexOf('INCUNTR_04_IG')!==-1 || a.indexOf('INCUNTR_04_GI')!==-1; }
 function is04II(raw){ return typeCodesArray(raw).indexOf('INCUNTR_04_II')!==-1; }
@@ -4541,6 +4556,7 @@ function refreshNodeEditorTags(row){
     typeTagsForRow(row).forEach(function(t){var b=document.createElement('span');b.className='badge typeTag '+t.cls;b.textContent=t.text;if(t.title)b.title=t.title;e.appendChild(b);});
   }
   updateTradeUsageHint(row);
+  updateAutoRetryNote(row);
   applyRequiredHighlights(row);
 }
 // IG/GI/II 지역거래가 '실제로 쓰는 칸'을 선택된 종류 코드에 맞춰 실시간 안내(코드 바꾸면 즉시 갱신).
@@ -4738,6 +4754,7 @@ function scriptFieldEditor(label, topId, row, colName){
   }
   function sync(structural){
     row[C[colName]] = joinScript(narrativeTa.value, collectLinks(), writeKeyword);
+    if(colName==='실패 스크립트') updateAutoRetryNote(row);
     // 선택지 구조가 바뀐 경우에는 파생 regionsTree도 즉시 다시 만든다.
     // 이 단계가 빠지면 고아 노드를 다시 골라도 cluster.nodeIds가 예전 상태라 연결이 안 된 것처럼 보인다.
     if(structural){
@@ -4932,6 +4949,15 @@ function scriptFieldEditor(label, topId, row, colName){
   var choiceBtnRow = document.createElement('div'); choiceBtnRow.style.cssText='display:flex;gap:6px;align-items:center;margin-top:4px;flex-wrap:wrap;';
   choiceBtnRow.appendChild(addBtn); choiceBtnRow.appendChild(sortBtn);
   wrap.appendChild(choiceBtnRow);
+
+  // 다이스 노드 실패 스크립트: 선택지를 안 고르면 내보낼 때 재도전 선택지가 자동으로 붙는다는 안내.
+  if(colName==='실패 스크립트'){
+    var retryNote = document.createElement('div'); retryNote.id='npAutoRetryNote';
+    retryNote.style.cssText='font-size:12px;color:var(--text-faint);margin-top:4px;';
+    retryNote.textContent='선택지를 고르지 않으면 실패 시 '+AUTO_RETRY_CHOICE+'이 자동으로 붙어요 (SQL 내보내기·테스트 모드)';
+    retryNote.style.display = needsAutoRetryChoice(row[C[colName]], row[C['종류 코드']]) ? '' : 'none';
+    wrap.appendChild(retryNote);
+  }
 
   // ── 배타적 갈래(회차당 택1) 자동 묶기 ─────────────────────────────
   // 이 갈림길 노드의 선택지 노드 여러 개에 같은 '갈림길 그룹' 코드를 자동 부여한다. 코드를 노드마다
@@ -7118,7 +7144,7 @@ function buildBotAreaSql(opts){
   var idx={}; H.forEach(function(h,i){ idx[h]=i; });
   function col(row,name){ var i=idx[name]; return (i==null)?null:row[i]; }
   var LIMIT={parent_area_id:100,area_id:100,area_name:100,adjacent_id:100,key_id:100,item_id:100,deal_item_id:100,incounter_cd:35,open_race:5,item_drop:10,branch_group:64};
-  var errors=[],warnings=[],valueRows=[],seen={},skipped=0,moveSkipped=0;
+  var errors=[],warnings=[],valueRows=[],seen={},skipped=0,moveSkipped=0,autoRetry=0;
   var upAreaId=(opts.upAreaId||'').trim(), startId=(opts.startPoint||'').trim();
 
   if(!upAreaId) warnings.push("up_area_id(최상위 지역 ID)가 비어 있어 모든 행 up_area_id=NULL로 들어갑니다.");
@@ -7139,7 +7165,7 @@ function buildBotAreaSql(opts){
     vals.up_area_id = upAreaId ? "'"+sqlEscape(upAreaId)+"'" : 'NULL';
     vals.start_point = (startId && areaId===startId) ? "'Y'" : "'N'";
     function pStr(cn,h){ var v=col(row,h); if(v==null||v===''){vals[cn]='NULL';return;} v=String(v); if(sqlHasAstral(v))e.push(cn+'에 4바이트 문자'); var L=LIMIT[cn]; if(L&&v.length>L)e.push(cn+' 길이 '+v.length+'>'+L); vals[cn]="'"+sqlEscape(v)+"'"; }
-    function pTxt(cn,h){ var v=col(row,h); if(v==null||v===''){vals[cn]='NULL';return;} v=String(v); if(sqlHasAstral(v))e.push(cn+'에 4바이트 문자(이모지 등)'); vals[cn]="'"+sqlEscape(v)+"'"; }
+    function pTxt(cn,h,ov){ var v=(ov===undefined)?col(row,h):ov; if(v==null||v===''){vals[cn]='NULL';return;} v=String(v); if(sqlHasAstral(v))e.push(cn+'에 4바이트 문자(이모지 등)'); vals[cn]="'"+sqlEscape(v)+"'"; }
     function pInt(cn,h){ var v=col(row,h); if(v==null||String(v).trim()===''){vals[cn]='NULL';return;} var s=String(v).trim(); if(!/^-?\d+$/.test(s)){e.push(cn+'(숫자 칸)에 비숫자 값 "'+s.slice(0,16)+'"');vals[cn]='NULL';return;} vals[cn]=s; }
     function pYN(cn,h){ var s=(col(row,h)==null?'':String(col(row,h))).trim().toUpperCase(); if(s==='Y'){vals[cn]="'Y'";} else if(s===''||s==='N'){vals[cn]="'N'";} else {warnings.push(label+': '+cn+' "'+s.slice(0,8)+'" → N 처리'); vals[cn]="'N'";} }
     // 빈 값을 컬럼 기본값(def)으로 매핑하는 Y/N (예: key_all_yn 기본 'Y')
@@ -7156,7 +7182,8 @@ function buildBotAreaSql(opts){
     pTxt('area_cn','스크립트(내용)');
     pInt('target_roll','주사위 목표치');
     pTxt('succ_cn','성공 스크립트');
-    pTxt('fail_cn','실패 스크립트');
+    var failRaw=col(row,'실패 스크립트'), addRetry=needsAutoRetryChoice(failRaw, incounter);
+    pTxt('fail_cn','실패 스크립트', withAutoRetryChoice(failRaw, incounter));   // 다이스 노드 + 선택지 없음 → ▶[재도전/지역] 자동
     pStr('open_race','종족 전용');
     pTxt('race_fail_cn','종족이 아닐 때 스크립트');
     pYN('key_yn','키아이템 필요 여부');
@@ -7180,6 +7207,7 @@ function buildBotAreaSql(opts){
 
     if(e.length){ errors.push(label+': '+e.join(', ')); continue; }
     valueRows.push(vals);
+    if(addRetry) autoRetry++;
   }
 
   var mode=opts.mode||'ignore';
@@ -7192,7 +7220,7 @@ function buildBotAreaSql(opts){
     var chunk=valueRows.slice(b,b+100).map(function(v){ return '('+BOT_AREA_COLS.map(function(c){return v[c];}).join(', ')+')'; });
     sql+=head+'\n'+colList+' VALUES\n'+chunk.join(',\n')+tail+';\n\n';
   }
-  return { sql:sql.trim(), report:{ total:rows.length, inserted:valueRows.length, errorRows:errors.length, skipped:skipped, moveSkipped:moveSkipped, errors:errors, warnings:warnings } };
+  return { sql:sql.trim(), report:{ total:rows.length, inserted:valueRows.length, errorRows:errors.length, skipped:skipped, moveSkipped:moveSkipped, autoRetry:autoRetry, errors:errors, warnings:warnings } };
 }
 
 (function wireSqlExport(){
@@ -7230,6 +7258,7 @@ function buildBotAreaSql(opts){
     if(rp.errorRows) html+=' · <b style="color:var(--coral)">'+rp.errorRows+'행 오류로 제외</b>';
     if(rp.skipped) html+=' · '+rp.skipped+'행 지역ID없음';
     if(rp.moveSkipped) html+=' · '+rp.moveSkipped+"행 '이동한다' 제외";
+    if(rp.autoRetry) html+=' · 다이스 '+rp.autoRetry+'행 실패 스크립트에 '+esc(AUTO_RETRY_CHOICE)+' 자동 추가';
     html+='</div>';
     if(rp.errors.length){ html+='<details open style="margin-top:6px;"><summary style="cursor:pointer;color:var(--coral);font-weight:600;">제외된 오류 행 '+rp.errors.length+'건 (고친 뒤 다시 생성)</summary><div style="max-height:120px;overflow:auto;font-size:12.5px;color:var(--text-dim);margin-top:4px;white-space:pre-wrap;">'+rp.errors.map(esc).join('\n')+'</div></details>'; }
     if(rp.warnings.length){ html+='<details style="margin-top:6px;"><summary style="cursor:pointer;color:var(--amber);font-weight:600;">경고 '+rp.warnings.length+'건</summary><div style="max-height:100px;overflow:auto;font-size:12.5px;color:var(--text-dim);margin-top:4px;white-space:pre-wrap;">'+rp.warnings.map(esc).join('\n')+'</div></details>'; }

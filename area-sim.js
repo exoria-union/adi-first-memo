@@ -37,6 +37,17 @@ const safeInt = (v, d = 0) => { const n = parseInt(String(v == null ? '' : v).tr
 const safeStr = (v, d = '') => (v == null ? d : String(v));
 const rint = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
 
+// 다이스(능력 판정) 노드의 실패 스크립트에 선택지(▶[…])가 하나도 없으면 끝에 재도전 선택지를 붙인다.
+// index.html의 withAutoRetryChoice(SQL 내보내기 fail_cn)와 같은 규칙 — 한쪽을 바꾸면 다른 쪽도 맞출 것.
+export const AUTO_RETRY_CHOICE = '▶[재도전/지역]';
+const RETRY_BUTTON = { label: '▶ 재도전', cmd: '재도전/지역' };
+export function withAutoRetryChoice(failCn, inc) {
+  const s = safeStr(failCn);
+  if (!safeStr(inc).includes('INCUNTR_03') || /▶\s*\[/.test(s)) return failCn;
+  const body = s.replace(/\s+$/, '');
+  return (body ? body + '\n\n' : '\n') + AUTO_RETRY_CHOICE;   // 선택지 앞 빈 줄(비었으면 주사위 결과 줄과 띄움)
+}
+
 // XdY = X개 Y면 주사위 합
 function randomDice(count, sides) { let s = 0; const c = safeInt(count, 1), n = safeInt(sides, 6); for (let i = 0; i < c; i++) s += rint(1, n); return s; }
 function rollDiceExpr(expr, def = 1) {
@@ -72,6 +83,7 @@ export function buildAreas(rows, headers) {
     a.area_id = String(a.area_id);
     a.parent_area_id = a.parent_area_id == null ? '' : String(a.parent_area_id);
     a.area_name = safeStr(a.area_name);
+    a.fail_cn = withAutoRetryChoice(a.fail_cn, a.incounter_cd);   // SQL 내보내기와 같은 fail_cn
     areas.push(a); byId[a.area_id] = a;
   });
   // 지역 루트(최상위 조상) 계산 → 같은 루트 안에서 선택지 이름 해석
@@ -244,6 +256,13 @@ export function createSim(data, opts = {}) {
     const norm = safeStr(areaName).replace(/\s/g, '');
     if (norm === '포기') { if (!mission) return { msg: '아직 지역 임무에 도전하지 않았던 것 같다. 임무를 수행하러 가볼까?' }; ch.exp += 5; mission = null; return { msg: `지역 임무를 포기하고 돌아가기로 했다.\n실패는 성공의 어머니다.\n\n지역 임무를 하면서 5시간의 경험이 쌓였다. (누적 ${ch.exp}시간)`, ended: true }; }
     if (safeInt(ch.max_hp, 0) - safeInt(ch.hp, 0) < 1) return { msg: '지금 몸 상태로 임무에 나가는 것은 무리다……. 우선 체력부터 회복하고 보자.' };
+    // ▶[재도전/지역]: 실패한 다이스 노드의 도전 대기(스탯 버튼)를 다시 띄운다. 이름 재해석·게이트 없이 현재 노드 그대로.
+    //   (단일 플레이어 근사 — 봇 쪽 재도전 횟수/조건은 재현하지 않는다.)
+    if (norm === '재도전') {
+      const cur = mission && A.byId[mission.area_id];
+      if (!cur || !safeStr(cur.incounter_cd).includes('INCUNTR_03')) return { msg: '지금은 다시 도전할 판정이 없는 것 같다.' };
+      return respond(cur, handleSkill(cur, '', false, cur.area_name));
+    }
 
     // 지역 해석: 미션 중이면 현재 루트 안에서 → 전역, 없으면 새 미션(최상위 진입)
     let area, isNew = false;
@@ -285,6 +304,11 @@ export function createSim(data, opts = {}) {
     else if (inc.includes('INCUNTR_03')) res = handleSkill(area, action, potion, area.area_name);
     else if (inc === 'INCUNTR_99') res = handleComplete(area);
     else res = handlePass(area);
+    return respond(area, res);
+  }
+
+  // 핸들러 결과 → 응답(선택지 버튼 구성). 재도전도 같은 경로를 쓴다.
+  function respond(area, res) {
     // 선택지는 실제로 표시된 메시지에서만 추출(성공→성공스크립트, 실패→실패스크립트, 완료→인접지역).
     let choices = choicesFromText(res.msg);
     // 다이스(능력 판정) 노드가 스탯 입력을 기다리는 중이면, 필요한 스탯으로 도전하는 버튼을 앞에 붙인다.
@@ -295,7 +319,8 @@ export function createSim(data, opts = {}) {
       const dup = {}; statChoices.forEach(c => { dup[c.cmd] = true; });
       choices = statChoices.concat(choices.filter(c => !dup[c]));   // 스크립트에서 뽑힌 동일 명령(name/stat) 중복 제거
     }
-    if (res.status === 'FAIL') choices = ['포기'];   // 실패 후엔 ▶포기(경험치 소액) 또는 같은 명령 재입력
+    // 실패 후엔 ▶포기(경험치 소액) 또는 같은 명령 재입력. 실패 스크립트에 ▶[재도전/지역]이 있으면 재도전 버튼도.
+    if (res.status === 'FAIL') choices = res.msg.includes(AUTO_RETRY_CHOICE) ? [RETRY_BUTTON, '포기'] : ['포기'];
     return { msg: res.msg, area, choices, status: res.status };
   }
 
@@ -428,13 +453,13 @@ export function openAreaTestUI(container, data, opts = {}) {
     if (!sim) { bubble('먼저 [탐사 시작]을 눌러주세요.', 'bot'); return; }
     const { name, action, potion } = parseAreaInput(raw);
     if (!name) return;
-    bubble('[지역/' + name + (action ? '/' + action : '') + (potion ? '/포션' : '') + ']', 'user');
+    bubble(name === '재도전' ? '[재도전/지역]' : '[지역/' + name + (action ? '/' + action : '') + (potion ? '/포션' : '') + ']', 'user');
     const out = sim.command(name, action, potion);
     bubble(out.msg, 'bot');
     renderChoices(out.choices);
     if (out.ended) { renderChoices([]); bubble('— 탐사를 종료했습니다. [탐사 시작]으로 다시 체험할 수 있어요. —', 'bot'); }
     else if (out.status === 'SUCC') bubble('✅ 이 임무를 완료했습니다. 인접 지역(▶)으로 계속 가거나, 위에서 다른 지역으로 새로 시작할 수 있어요.', 'bot');
-    else if (out.status === 'FAIL') bubble('❌ 탐사에 실패했습니다. ▶포기 하면 경험치를 조금 얻고 돌아갑니다.', 'bot');
+    else if (out.status === 'FAIL') bubble('❌ 탐사에 실패했습니다. ' + (out.choices.includes(RETRY_BUTTON) ? '▶재도전으로 다시 굴리거나, ' : '') + '▶포기 하면 경험치를 조금 얻고 돌아갑니다.', 'bot');
     renderInv();   // 매 스텝 소지품/골드/경험치 갱신
     cmdIn.value = '';
   }
