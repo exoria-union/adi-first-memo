@@ -3467,9 +3467,12 @@ function autoLayoutNodes(topId, rootId, idSet, moveRowId){
 
 /* 그래프 화면 상태(다시 그려도 유지돼야 하는 것들).
    - canvasSelectedId: 선택한 노드. 선택 노드와 그 앞/뒤 노드를 강조하는 데 쓴다.
-   - canvasDragLocked: 드래그 잠금. 켜 두면 클릭(선택/편집)만 되고 위치는 움직이지 않는다. */
+   - canvasDragLocked: 드래그 잠금. 켜 두면 클릭(선택/편집)만 되고 위치는 움직이지 않는다.
+   - canvasScrollPos: 세부지역별 캔버스 스크롤. 노드 클릭(편집창 열기/닫기)·편집·원격 반영 때마다
+     render()가 캔버스를 새로 만들어 스크롤이 0으로 튕기던 것을 막는다. 키: topId+'#'+clusterIdx */
 var canvasSelectedId = null;
 var canvasHoverId = null;
+var canvasScrollPos = {};
 // 그래프 표시용 이름: 선택지 명령(:sq: 등)은 배지/간선칩으로 보여주므로 이름에선 뗀다(데이터 원본은 그대로).
 function displayNodeName(name){ return String(name==null?'':name).replace(/:[A-Za-z0-9_]+:/g,'').replace(/\s{2,}/g,' ').trim(); }
 // 간선이 향하는 대상 노드의 명령/키게이트 정보 → 간선 칩(아이콘)·점선에 사용.
@@ -3596,6 +3599,10 @@ function renderClusterCanvasScreen(main, crumb){
   }
 
   var canvasWrap = document.createElement('div'); canvasWrap.id='clusterCanvasWrap';
+  var scrollKey = topId+'#'+clusterIdx;
+  canvasWrap.addEventListener('scroll', function(){
+    canvasScrollPos[scrollKey] = { left: canvasWrap.scrollLeft, top: canvasWrap.scrollTop };
+  }, {passive:true});
   var inner = document.createElement('div'); inner.id='clusterCanvasInner';
   var svg = document.createElementNS('http://www.w3.org/2000/svg','svg'); svg.id='clusterCanvasSvg';
   inner.appendChild(svg);
@@ -4045,6 +4052,9 @@ function renderClusterCanvasScreen(main, crumb){
 
   drawEdges();
   applySelectionHighlight();
+  // 캔버스 크기가 확정된(drawEdges) 뒤에 보던 위치로 되돌린다.
+  var savedScroll = canvasScrollPos[scrollKey];
+  if(savedScroll){ canvasWrap.scrollLeft = savedScroll.left; canvasWrap.scrollTop = savedScroll.top; }
 }
 
 function renderClusterScreen(main, crumb){
