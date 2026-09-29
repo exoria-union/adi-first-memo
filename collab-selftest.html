@@ -12,7 +12,7 @@
 </script>
 <script type="module">
 import { Y } from './collab/deps.js';
-import { buildProject, readProject, reconcile } from './collab/ydoc.js';
+import { buildProject, readProject, reconcile, applyTextDiff, normalizeLineBreaks, repairTextLineBreaks } from './collab/ydoc.js';
 
 const out = document.getElementById('out');
 let pass = 0, fail = 0;
@@ -143,6 +143,80 @@ try {
     ok('보호 키 weather는 삭제되지 않음', !!(after.weather && after.weather.rows && after.weather.rows.length===1 && after.weather.rows[0][0]==='맑음'));
     ok('비보호 키 tempSection은 삭제됨(기존 동작 유지)', !('tempSection' in after));
     ok('옛 클라의 다른 편집(제목)은 정상 반영', after.toolTitle === '옛클라 편집');
+  }
+
+  // ---- 7. 줄바꿈(CR) 정규화: CR이 공유 문서에 들어가거나 편집 반복으로 쌓이지 않아야 한다 ----
+  //  (회귀 방지: 엑셀 등에서 온 "\r\n"이 textarea(항상 LF)와 어긋나고 왕복마다 "\r\r\r\r\r\n"으로 쌓였다)
+  {
+    const hasCR = (x) => JSON.stringify(x).indexOf('\\r') !== -1;
+    const lfCount = (s) => (String(s).match(/\n/g) || []).length;
+    ok('normalizeLineBreaks: CRLF→LF', normalizeLineBreaks('a\r\nb') === 'a\nb');
+    ok('normalizeLineBreaks: LF 앞 CR 묶음→줄바꿈 하나', normalizeLineBreaks('완료.\r\r\r\r\r\n다른\r\r\r\r\n▶') === '완료.\n다른\n▶');
+    ok('normalizeLineBreaks: 홀로 남은 CR→LF', normalizeLineBreaks('a\rb') === 'a\nb');
+    ok('normalizeLineBreaks: LF 빈 줄은 보존', normalizeLineBreaks('a\n\nb') === 'a\n\nb');
+    ok('normalizeLineBreaks: 문자열 아닌 값은 그대로', normalizeLineBreaks(null) === null && normalizeLineBreaks(3) === 3);
+
+    // (a) CRLF 시드로 빌드 → 공유 문서 어디에도 CR 없음(텍스트 칸·평범한 칸·아이템 설명)
+    const crSeed = sampleData();
+    crSeed.sheet1.rows[0][SCRIPT_COL] = '완료.\r\n다른 구역으로 이동한다.\r\n\r\n▶[지역/종탑]';
+    crSeed.sheet1.rows[0][2] = '본당\r\n';
+    crSeed.items.SWORD.desc = '낡은\r\n검';
+    const docC = new Y.Doc();
+    buildProject(docC, clone(crSeed), 'init');
+    const rc = readProject(docC);
+    ok('CRLF 시드 빌드: 공유 문서에 CR 없음', !hasCR(rc));
+    ok('CRLF 시드 빌드: 줄 구조는 LF로 보존', rc.sheet1.rows[0][SCRIPT_COL] === '완료.\n다른 구역으로 이동한다.\n\n▶[지역/종탑]');
+
+    // (b) 재조정으로 CR 값이 들어와도 Y는 LF, data도 제자리 정규화 → shadow(=clone(data))가 Y와 일치
+    const cur = readProject(docC); const sh = clone(cur);
+    cur.sheet1.rows[1][SCRIPT_COL] = '나선\r\n계단\r\r\n입구.';
+    reconcile(docC, cur, sh, 'app');
+    ok('reconcile: CR 입력이 Y에 LF로 저장', readProject(docC).sheet1.rows[1][SCRIPT_COL] === '나선\n계단\n입구.');
+    ok('reconcile: data도 정규화되어 Y와 일치', JSON.stringify(cur) === JSON.stringify(readProject(docC)));
+
+    // (c) 이미 CR이 박힌 문서(과거 데이터·옛 클라이언트) 복구: 두 클라이언트 동시 복구도 같은 결과
+    const docR = new Y.Doc();
+    buildProject(docR, clone(sampleData()), 'init');
+    const tR = docR.getMap('project').get('sheet1').get('rows').get(0).get(SCRIPT_COL);
+    docR.transact(() => { tR.delete(0, tR.length); tR.insert(0, '완료.\r\r\r\r\r\n다른.\r\r\r\r\r\n\r\r\r\r\n▶[지역/X]'); }, 'legacy');
+    const docR2 = new Y.Doc(); Y.applyUpdate(docR2, Y.encodeStateAsUpdate(docR));
+    const svR1 = Y.encodeStateVector(docR), svR2 = Y.encodeStateVector(docR2);
+    const nFixed = repairTextLineBreaks(docR, 'app');
+    repairTextLineBreaks(docR2, 'app');
+    Y.applyUpdate(docR, Y.encodeStateAsUpdate(docR2, svR1), 'remote');
+    Y.applyUpdate(docR2, Y.encodeStateAsUpdate(docR, svR2), 'remote');
+    const fixed = readProject(docR).sheet1.rows[0][SCRIPT_COL];
+    log('  복구 결과: ' + JSON.stringify(fixed));
+    ok('repair: 쌓인 CR 제거, 줄 구조 보존', fixed === '완료.\n다른.\n\n▶[지역/X]');
+    ok('repair: 동시 복구 후 A===B', JSON.stringify(readProject(docR)) === JSON.stringify(readProject(docR2)));
+    ok('repair: 복구 개수 반환, 재실행은 no-op', nFixed === 1 && repairTextLineBreaks(docR, 'app') === 0);
+    const docL = new Y.Doc();
+    buildProject(docL, clone(sampleData()), 'init');
+    const tL = docL.getMap('project').get('sheet1').get('rows').get(1).get(SCRIPT_COL);
+    docL.transact(() => { tL.insert(tL.length, '\r끝'); }, 'legacy');
+    repairTextLineBreaks(docL, 'app');
+    ok('repair: 홀로 남은 CR은 LF로', readProject(docL).sheet1.rows[1][SCRIPT_COL] === '나선계단 입구.\n끝');
+
+    // (d) CR 칸을 textarea처럼 반복 편집(원문 prev → 브라우저가 LF로 정규화한 값) + 재조정 → CR·줄 수가 늘지 않음
+    const docE = new Y.Doc();
+    buildProject(docE, clone(sampleData()), 'init');
+    const tE = docE.getMap('project').get('sheet1').get('rows').get(0).get(SCRIPT_COL);
+    docE.transact(() => { tE.delete(0, tE.length); tE.insert(0, '완료.\r\n다른 구역으로 이동한다.\r\n\r\n▶[지역/종탑]'); }, 'legacy');
+    const lf0 = lfCount(normalizeLineBreaks(tE.toString()));
+    let good = true;
+    for (let i = 0; i < 5; i++) {
+      const prev = tE.toString();                              // Y 원문(CR이 남아 있을 수 있음)
+      const taVal = normalizeLineBreaks(prev).replace(/^완료\d*\./, '완료' + i + '.'); // textarea 값(LF) + 편집
+      applyTextDiff(tE, prev, taVal);
+      if (tE.toString() !== taVal) good = false;
+      const dE = readProject(docE); const sE = clone(dE);
+      dE.sheet1.rows[0][2] = '본당' + i;                       // 같은 행 다른 칸 편집 → 행 재조정
+      reconcile(docE, dE, sE, 'app');
+    }
+    const finalE = tE.toString();
+    ok('반복 편집: 매번 Y===textarea 값', good);
+    ok('반복 편집: CR 0개', finalE.indexOf('\r') === -1);
+    ok('반복 편집: 줄바꿈 수 유지(빈 줄 증식 없음)', lfCount(finalE) === lf0);
   }
 
   log('\n=== ' + pass + ' passed, ' + fail + ' failed ===', fail ? 'fail' : 'pass');

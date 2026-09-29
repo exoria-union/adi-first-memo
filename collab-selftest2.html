@@ -13,7 +13,7 @@
 </script>
 <script type="module">
 import { Y } from './collab/deps.js';
-import { readProject } from './collab/ydoc.js';
+import { readProject, buildProject } from './collab/ydoc.js';
 import { u8ToB64, b64ToU8, splitForBroadcast } from './collab/provider.js';
 import { openProject } from './collab/index.js';
 
@@ -280,6 +280,70 @@ try {
     ok('로드 실패+캐시없음: 연결 중단(throw)', threw);
     ok('로드 실패 시 서버에 시드 안 써짐(덮어쓰기 방지)', be.doc_updates.length===0 && be.doc_snapshots.length===0);
     be.fail=null;
+  }
+
+  // ---- ⑦ 줄바꿈(CR): 옛 CR 문서 로드 시 복구 · textarea 반복 편집에 CR/빈 줄 증식 없음 · 합성 편집 정합 ----
+  //  (회귀 방지: "완료.\r\r\r\r\r\n…"처럼 CR이 쌓이고, 합성 편집 후 선택지 이모티콘이 엉뚱한 줄에 박혔다)
+  {
+    const cellY = (S, r) => S.ydoc.getMap('project').get('sheet1').get('rows').get(r).get(SCRIPT_COL);
+    const lfCount = (s) => (String(s).match(/\n/g) || []).length;
+    // 과거 데이터처럼 CR이 박힌 문서를 서버에 심는다(정규화 우회).
+    const be = makeBackend();
+    const raw = new Y.Doc();
+    buildProject(raw, clone(SAMPLE), 'init');
+    const rt = cellY({ ydoc: raw }, 1);
+    raw.transact(() => { rt.delete(0, rt.length); rt.insert(0, '나선계단 입구.\r\r\n쇠 냄새.\r\r\r\n\r\r\n▶[지역/본당]\r\n▶[지역/종탑]'); });
+    be.doc_updates.push({ id: ++be.seq, project_id: 'pcr', update: u8ToB64(Y.encodeStateAsUpdate(raw)) });
+    try{ localStorage.removeItem('ydoc_local_pcr'); }catch(e){}
+    const CLEAN = '나선계단 입구.\n쇠 냄새.\n\n▶[지역/본당]\n▶[지역/종탑]';
+    const mk = (nm) => openProject({ supabase: makeClient(be, nm), projectId:'pcr', user:{id:'u'+nm,email:nm+'@x'},
+      seedData: clone(SAMPLE), onRemote(){}, onPresence(){}, onStatus(){} });
+    const P = await mk('P');
+    const Q = await mk('Q');                     // 거의 동시에 연 두 번째 클라이언트(둘 다 복구 → 수렴)
+    ok('CR 문서 로드 시 LF로 복구', P.getCellTextValue('LUM_BELL', SCRIPT_COL) === CLEAN);
+    await wait(600);
+    ok('동시 복구 후 P===Q, CR 없음', JSON.stringify(readProject(P.ydoc)) === JSON.stringify(readProject(Q.ydoc)) && JSON.stringify(readProject(Q.ydoc)).indexOf('\\r') === -1);
+    try{ localStorage.removeItem('ydoc_local_pcr'); }catch(e){}
+    const R = await mk('R');                     // 로컬 캐시 없이 서버만 읽어도 LF
+    ok('복구가 서버에 영속됨', R.getCellTextValue('LUM_BELL', SCRIPT_COL) === CLEAN);
+    await R.destroy();
+
+    // 옛 클라이언트(정규화 없음)가 CR을 다시 넣는 상황 → P는 textarea로 반복 편집 + persist
+    const qt = cellY(Q, 1);
+    Q.ydoc.transact(() => { qt.insert(qt.toString().indexOf('\n'), '\r'); }, 'old-client');
+    await wait(150);
+    const ta = document.getElementById('ta');
+    const unbind = P.bindText(ta, 'LUM_BELL', SCRIPT_COL);
+    const lf0 = lfCount(ta.value);
+    let exact = true;
+    for (let i = 0; i < 5; i++) {
+      ta.value = ta.value.replace(/^나선계단 입구\d*\./, '나선계단 입구' + i + '.');
+      ta.dispatchEvent(new Event('input'));
+      if (P.getCellTextValue('LUM_BELL', SCRIPT_COL) !== ta.value) exact = false;
+      P.push(P.readCurrent());                   // persist(재조정) 모사
+      await wait(120);
+    }
+    unbind();
+    const fin = P.getCellTextValue('LUM_BELL', SCRIPT_COL);
+    log('  반복 편집 결과: ' + JSON.stringify(fin));
+    ok('textarea 반복 편집: 매번 Y===textarea 값', exact);
+    ok('textarea 반복 편집: CR 0개 · 줄 수 유지', fin.indexOf('\r') === -1 && lfCount(fin) === lf0);
+    ok('textarea 반복 편집: Q 수렴', readProject(Q.ydoc).sheet1.rows[1][SCRIPT_COL] === fin);
+
+    // 합성 편집기: 선택지 부분이 표준형(본문+"\n\n"+선택지)과 다를 때 본문 편집 → 선택지 이모티콘 변경
+    const d0 = P.readCurrent(); d0.sheet1.rows[0][SCRIPT_COL] = '거대한 아치 천장.\n▶[지역/종탑]\n▶[지역/신학교]'; P.push(d0);
+    await wait(120);
+    const narr1 = '거대한 아치 천장, 먼지.';
+    P.applyCellTextEdit('LUM_MAIN', SCRIPT_COL, '거대한 아치 천장.', narr1, narr1 + '\n\n▶[지역/종탑]\n▶[지역/신학교]');
+    const d1 = P.readCurrent();                  // 앱은 DATA 칸을 Y 실제값으로 맞춘다
+    const want = narr1 + '\n\n▶[지역/종탑] :sq:\n▶[지역/신학교]';
+    d1.sheet1.rows[0][SCRIPT_COL] = want;       // joinScript 결과(구조 편집)
+    P.push(d1);
+    await wait(150);
+    log('  합성+구조 편집 결과: ' + JSON.stringify(P.getCellTextValue('LUM_MAIN', SCRIPT_COL)));
+    ok('합성 편집 후 구조 편집: Y가 의도한 스크립트와 정확히 일치', P.getCellTextValue('LUM_MAIN', SCRIPT_COL) === want);
+    ok('합성 편집 후 구조 편집: Q도 동일', readProject(Q.ydoc).sheet1.rows[0][SCRIPT_COL] === want);
+    await P.destroy(); await Q.destroy();
   }
 
   await A.destroy(); await B.destroy();

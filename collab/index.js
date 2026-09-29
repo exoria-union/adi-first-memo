@@ -9,7 +9,7 @@
 
 import { Y, Awareness } from './deps.js';
 import {
-  buildProject, readProject, reconcile, applyTextDiff, getRowTextCellById,
+  buildProject, readProject, reconcile, applyTextDiff, getRowTextCellById, repairTextLineBreaks,
 } from './ydoc.js';
 import { SupabaseYjsProvider } from './provider.js';
 import { colorFor } from './presence.js';
@@ -35,6 +35,9 @@ export async function openProject(cfg) {
   // 소규모 팀에선 사실상 발생하지 않는다(필요하면 DB 유니크 클레임으로 방지).
   const root = ydoc.getMap('project');
   if (root.size === 0 && seedData) buildProject(ydoc, clone(seedData), APP);
+  // 과거에 CR(\r)이 섞여 저장된 문서면 여기서 LF로 복구(방송+영속). 이후 DATA·shadow·textarea가
+  // 모두 같은 LF 문자열을 보게 되어 글자 위치가 어긋나지 않는다.
+  repairTextLineBreaks(ydoc, APP);
 
   let data = readProject(ydoc);
   let shadow = clone(data);
@@ -131,12 +134,16 @@ export async function openProject(cfg) {
       return t ? t.toString() : null;
     },
     // oldStr->newStr 최소 diff를 셀 Y.Text에 적용(글자 단위 병합). shadow도 동기화.
-    // composedForShadow: 앱 DATA[cell]에 실제 저장되는 합성값(재조정 중복 방지용).
+    // ⚠ shadow에는 앱의 합성값이 아니라 "Y.Text에 실제로 남은 값"을 넣는다(앱도 DATA 칸을 getCellTextValue로
+    //   맞출 것). 본문 뒤 선택지 부분이 joinScript 표준형과 다르면(빈 줄 수·CR·원격이 추가한 선택지 등)
+    //   합성값≠Y인데, 예전처럼 shadow=합성값이면 Y≠DATA가 조용히 고착되고 다음 재조정 diff가 어긋난
+    //   위치에 적용됐다(예: 선택지 이모티콘 " :sq:"가 다른 줄에 박힘).
+    //   composedForShadow는 옛 호출 호환용으로만 받는다(미사용).
     applyCellTextEdit(rowId, col, oldStr, newStr, composedForShadow) {
       const t = getRowTextCellById(ydoc, rowId, col);
       if (!t) return false;
       ydoc.transact(() => applyTextDiff(t, oldStr, newStr), LIVE);
-      setShadowCell(rowId, col, composedForShadow == null ? newStr : composedForShadow);
+      setShadowCell(rowId, col, t.toString());
       return true;
     },
     // 원격 변경 구독(내 LIVE 편집은 제외). cb(합성문자열). 해제 함수 반환.

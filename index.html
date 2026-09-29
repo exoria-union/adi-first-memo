@@ -3279,7 +3279,7 @@ function getRegionOrphanRowIds(topId){
 function splitScriptLinksDetailed(text){
   var src = String(text||'');
   var idx = src.search(/▶\[(?:지역|진입)\//);
-  var narrative = idx===-1 ? src : src.slice(0, idx).replace(/\n+$/,'');
+  var narrative = idx===-1 ? src : src.slice(0, idx).replace(/[\r\n]+$/,'');   // CR 포함(splitScript 참고)
   var links = [], re = /▶\[(지역|진입)\/([^\]]+)\][ \t]*(:[A-Za-z0-9_]+:)?/g, m;
   while((m=re.exec(src))) links.push({keyword:m[1], name:m[2], cmd:m[3]||''});
   return {narrative:narrative, links:links};
@@ -4299,7 +4299,9 @@ function parseChoiceLinks(text){
 function splitScript(text){
   if(!text) return {narrative:'', choices:[], links:[]};
   var idx = text.search(/▶\[(?:지역|진입)\//);
-  var narrative = idx===-1 ? text : text.slice(0, idx).replace(/\n+$/,'');
+  // 끝 줄바꿈은 CR 포함해 모두 벗긴다. /\n+$/만 쓰면 "…\r\n\r\n▶" 앞의 "\r"이 본문에 남아(textarea엔 빈 줄로 보임)
+  // joinScript가 다시 "\n\n"을 붙일 때마다 빈 줄이 하나씩 늘었다.
+  var narrative = idx===-1 ? text : text.slice(0, idx).replace(/[\r\n]+$/,'');
   var links = parseChoiceLinks(text);
   return {narrative: narrative, choices: links.map(function(x){ return x.name; }), links: links};
 }
@@ -5062,7 +5064,13 @@ function scriptFieldEditor(label, topId, row, colName){
     var __live = function(){
       if(narrativeTa.__composing) return; // 한글 IME 조합 중엔 대기
       var composed = joinScript(narrativeTa.value, collectLinks(), writeKeyword);
-      if(COLLAB.applyCellTextEdit(__rowId, __col, __prevNarr, narrativeTa.value, composed)) __prevNarr = narrativeTa.value;
+      if(COLLAB.applyCellTextEdit(__rowId, __col, __prevNarr, narrativeTa.value, composed)){
+        __prevNarr = narrativeTa.value;
+        // DATA 칸도 Y에 실제로 남은 값으로 맞춘다. 선택지 부분이 합성값과 다르면(빈 줄 수·원격이 추가한 선택지 등)
+        // DATA=합성값으로 두는 순간 Y와 어긋나, 다음 재조정이 원격 편집을 되돌리거나 엉뚱한 위치에 적용된다.
+        var __actual = COLLAB.getCellTextValue(__rowId, __col);
+        if(__actual != null) row[C[colName]] = __actual;
+      }
     };
     narrativeTa.addEventListener('compositionstart', function(){ narrativeTa.__composing = true; });
     narrativeTa.addEventListener('compositionend', function(){ narrativeTa.__composing = false; __live(); });
@@ -6634,19 +6642,27 @@ document.getElementById('btnExportXlsx').addEventListener('click', function(){
 });
 
 /* ---------------- full excel import (round-trip) ---------------- */
+// 엑셀에서 온 문자열의 줄바꿈을 LF(\n)로 정규화한다. SheetJS는 셀 안의 CR(\r, XML의 _x000D_)을 그대로 돌려주는데
+// 편집기(textarea)와 협업 문서는 LF만 쓴다. CR이 섞이면 줄바꿈이 두 번씩 보이고, 외부 도구를 거쳐 다시 불러올
+// 때마다 CR이 쌓였다("완료.\r\r\r\r\r\n…"). LF 앞 CR 묶음은 줄바꿈 하나, 홀로 남은 \r은 \n(collab/ydoc.js와 같은 규칙).
+function normalizeLineBreaks(v){
+  return typeof v==='string' && v.indexOf('\r')!==-1 ? v.replace(/\r+\n/g,'\n').replace(/\r/g,'\n') : v;
+}
+function sheetAOA(ws){
+  return XLSX.utils.sheet_to_json(ws, {header:1, defval:'', blankrows:false})
+    .map(function(r){ return r.map(normalizeLineBreaks); });
+}
 function sheetToAOA(wb, candidateNames){
   var name = candidateNames.find(function(n){ return wb.SheetNames.indexOf(n)!==-1; });
   if(!name) return null;
-  var ws = wb.Sheets[name];
-  var aoa = XLSX.utils.sheet_to_json(ws, {header:1, defval:'', blankrows:false});
+  var aoa = sheetAOA(wb.Sheets[name]);
   if(!aoa.length) return null;
   return { headers: aoa[0], rows: aoa.slice(1) };
 }
 function sheetByPosition(wb, idx){
   var name = wb.SheetNames[idx];
   if(!name) return null;
-  var ws = wb.Sheets[name];
-  var aoa = XLSX.utils.sheet_to_json(ws, {header:1, defval:'', blankrows:false});
+  var aoa = sheetAOA(wb.Sheets[name]);
   if(!aoa.length) return null;
   return { headers: aoa[0], rows: aoa.slice(1) };
 }

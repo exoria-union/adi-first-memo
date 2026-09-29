@@ -28,6 +28,8 @@
 4. **협업 연결 실패 시 DATA를 localStorage 최신본으로 복구**(stale `projects.data` 시드로 두면 "초기화"처럼 보임).
 5. **provider의 localStorage Yjs 캐시**(`_saveLocal`, 키 `ydoc_local_<projectId>`)가 부팅 복구 안전망이다. localStorage는 동기라 이탈 시에도 남는다 → 부팅 시 Supabase 로드 후 CRDT로 덧입혀 복구(원격 되돌림 없음). 유지할 것.
 6. **Yjs 단일 인스턴스:** import map이 `yjs`를 한 URL로 고정. 다른 URL로 yjs를 또 import하지 말 것("Yjs was already imported").
+7. **줄바꿈은 LF(`\n`)만.** textarea.value는 항상 LF라, 데이터에 CR(`\r`)이 섞이면 Y.Text·shadow·입력칸의 글자 위치가 어긋난다. 정규화 지점: 엑셀 가져오기(`sheetAOA`→`normalizeLineBreaks`), `reconcile`/`buildProject`(data 제자리 정규화), `applyTextDiff`(newStr만 — oldStr는 Y 실제값이라 원문 유지), 세션 오픈 시 `repairTextLineBreaks`. 규칙: LF 앞 CR 묶음→`\n` 하나, 홀로 남은 `\r`→`\n`. `splitScript`의 끝 줄바꿈 제거도 `/[\r\n]+$/`.
+8. **shadow/DATA는 "Y에 실제로 있는 값"을 따라야 한다.** `applyCellTextEdit`는 shadow를 합성값이 아닌 `t.toString()`으로, scriptFieldEditor는 DATA 칸을 `getCellTextValue`로 맞춘다. 합성값(joinScript 표준형)과 Y가 다를 때(빈 줄 수·CR·원격이 추가한 선택지) shadow=합성값이면 Y≠DATA가 고착돼 다음 재조정이 엉뚱한 위치에 적용됐다(선택지 이모티콘 `:sq:`가 다른 줄에 박힘).
 
 ## 협업 수정 후 테스트 (항상)
 ES 모듈이라 **http로 서빙 필수**: `py -m http.server 8000`(또는 `python3 -m http.server`). 브라우저로:
@@ -37,7 +39,7 @@ ES 모듈이라 **http로 서빙 필수**: `py -m http.server 8000`(또는 `pyth
 - 그리고 `index.html` 로드 후 콘솔 오류 0 확인. (Supabase 없이도 앱은 localStorage 모드로 뜬다.)
 
 ## 데이터 유실 수정 이력
-① 편집 중 원격 덮어씀 → 보류/blur 병합. ② 협업 실패 시 stale 시드 → localStorage 복구. ③ 부팅 flush 전 유실 → localStorage Yjs 캐시 복구. ④ 새 컬럼 편집 시 reconcile 크래시 → append. ⑤ 대용량 실시간 전파 실패 → 청크 개별 메시지+재조립. ⑥ **Supabase 오류 삼킴**: 클라이언트는 RLS/DB 오류를 throw가 아니라 `{error}`로 반환 → `provider.js`의 `_flush`가 미검사로 pending을 조용히 유실, `_snapshot`이 스냅샷 실패에도 doc_updates 삭제(치명), `_loadFromDb`가 읽기 실패를 빈 문서로 오인. → `.error` 검사 추가(실패 시 되돌림·재시도·경고, 스냅샷 성공 시에만 삭제, 읽기 실패+캐시없음 시 연결 중단으로 시드 덮어쓰기 방지). ⑦ **localStorage 용량 초과가 클라우드 저장 차단**: `persist()`에서 setItem이 QuotaExceededError로 죽으면 다음 줄 `scheduleCloudSave()`까지 건너뛰어, 제목(별도 직접 push) 외 편집이 서버에 안 올라감("제목 클릭해야 저장"). → `saveLocalData()`로 로컬 저장을 분리(예외 삼킴)하고 클라우드 저장은 항상 실행, 용량 초과 시 스냅샷/비활성 프로젝트 data 정리 후 재시도.
+① 편집 중 원격 덮어씀 → 보류/blur 병합. ② 협업 실패 시 stale 시드 → localStorage 복구. ③ 부팅 flush 전 유실 → localStorage Yjs 캐시 복구. ④ 새 컬럼 편집 시 reconcile 크래시 → append. ⑤ 대용량 실시간 전파 실패 → 청크 개별 메시지+재조립. ⑥ **Supabase 오류 삼킴**: 클라이언트는 RLS/DB 오류를 throw가 아니라 `{error}`로 반환 → `provider.js`의 `_flush`가 미검사로 pending을 조용히 유실, `_snapshot`이 스냅샷 실패에도 doc_updates 삭제(치명), `_loadFromDb`가 읽기 실패를 빈 문서로 오인. → `.error` 검사 추가(실패 시 되돌림·재시도·경고, 스냅샷 성공 시에만 삭제, 읽기 실패+캐시없음 시 연결 중단으로 시드 덮어쓰기 방지). ⑦ **localStorage 용량 초과가 클라우드 저장 차단**: `persist()`에서 setItem이 QuotaExceededError로 죽으면 다음 줄 `scheduleCloudSave()`까지 건너뛰어, 제목(별도 직접 push) 외 편집이 서버에 안 올라감("제목 클릭해야 저장"). → `saveLocalData()`로 로컬 저장을 분리(예외 삼킴)하고 클라우드 저장은 항상 실행, 용량 초과 시 스냅샷/비활성 프로젝트 data 정리 후 재시도. ⑧ **CR 누적**(2026-09-29, "1주차 지역 베이스1" 319칸 `완료.\r\r\r\r\r\n…`): 앱 코드는 `\r`을 만들지 않는다(SheetJS 왕복도 안정). 엑셀 가져오기가 셀의 CR을 그대로 받아들여, 외부 도구 왕복(`\n`→`\r\n`)마다 CR이 한 개씩 쌓였고, `splitScript`의 `/\n+$/`가 `\r`을 못 벗겨 저장마다 빈 줄도 늘었다. 게다가 합성 편집 후 shadow=합성값이라 Y≠DATA가 고착됐다. → 함정 7·8대로 수정, 셀프테스트(BRIDGE 7절·PROVIDER ⑦)에 CRLF 회귀 추가.
 
 ## index.html 편집 팁
 주요 함수: `persist`·`markDirty`·`applyRemoteData`·`startCollab`·`onCloudSignedIn`·`rebuildProjectView`·`renderNodePanel`·`ensureBotAreaColumns`·`buildBotAreaSql`·`fieldInput/fieldSelect/fieldTextarea`(라벨로 `FIELD_HINTS` 자동 각주). **사용자가 병렬로 자주 푸시하니, 편집 전 `git pull` 하고 충돌 시 rebase.**

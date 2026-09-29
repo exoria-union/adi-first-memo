@@ -51,11 +51,71 @@ export const PROTECTED_KEYS = new Set([
 const ID_COL = 1; // sheet1 헤더의 "지역ID" 열 인덱스(행 식별자)
 
 // ---------------------------------------------------------------------------
+// 줄바꿈 정규화: 공유 문서의 줄바꿈은 LF(\n)만 쓴다.
+// textarea.value는 브라우저가 항상 LF로 정규화해 돌려준다. 그런데 문서에 CR(\r)이 섞여 있으면
+// (엑셀 가져오기 등) 입력칸 값과 Y.Text/shadow의 글자 위치가 어긋나 diff가 엉뚱한 곳에 적용되고,
+// 외부 도구 왕복마다 CR이 쌓였다("완료.\r\r\r\r\r\n…", 2026-09-29 정리).
+// 규칙: LF 앞에 쌓인 CR 묶음(\r\n, \r\r\r\n…)은 줄바꿈 하나(\n), 홀로 남은 \r은 각각 \n.
+// ---------------------------------------------------------------------------
+export function normalizeLineBreaks(s) {
+  return typeof s === 'string' && s.indexOf('\r') !== -1
+    ? s.replace(/\r+\n/g, '\n').replace(/\r/g, '\n')
+    : s;
+}
+
+function normalizeDeep(v) {
+  if (typeof v === 'string') return normalizeLineBreaks(v);
+  if (Array.isArray(v)) { for (let i = 0; i < v.length; i++) v[i] = normalizeDeep(v[i]); return v; }
+  if (v && typeof v === 'object') { for (const k of Object.keys(v)) v[k] = normalizeDeep(v[k]); return v; }
+  return v;
+}
+
+// DATA 안의 모든 문자열 줄바꿈을 제자리(in place)에서 정규화한다(개인 설정 키 제외). data를 반환.
+export function normalizeDataLineBreaks(data) {
+  if (!data || typeof data !== 'object') return data;
+  for (const k of Object.keys(data)) {
+    if (PERSONAL_KEYS.has(k)) continue;
+    data[k] = normalizeDeep(data[k]);
+  }
+  return data;
+}
+
+// 이미 CR이 들어간 공유 문서(과거 데이터·옛 클라이언트)를 Y.Text 단위로 복구한다.
+// 실제 피해 패턴인 "LF 앞 CR 묶음"은 삭제만 하므로 여러 클라이언트가 동시에 복구해도 결과가 같다(멱등).
+// LF 없이 홀로 남은 \r(드묾)만 \n 삽입이 필요해, 두 클라이언트가 정확히 동시에 복구하면 빈 줄이 하나 더 생길 수 있다.
+// 복구한 Y.Text 개수를 반환.
+export function repairTextLineBreaks(ydoc, origin) {
+  const texts = [];
+  const walk = (node) => {
+    if (node instanceof Y.Text) { if (node.toString().indexOf('\r') !== -1) texts.push(node); }
+    else if (node instanceof Y.Array || node instanceof Y.Map) node.forEach(walk);
+  };
+  ydoc.getMap('project').forEach((v, k) => { if (!PERSONAL_KEYS.has(k)) walk(v); });
+  if (!texts.length) return 0;
+  ydoc.transact(() => {
+    for (const t of texts) {
+      const s = t.toString();
+      const runs = [];
+      const re = /\r+/g;
+      let m;
+      while ((m = re.exec(s))) runs.push({ at: m.index, len: m[0].length, beforeLf: s[m.index + m[0].length] === '\n' });
+      // 뒤에서부터 고쳐야 앞쪽 위치가 밀리지 않는다.
+      for (let i = runs.length - 1; i >= 0; i--) {
+        const r = runs[i];
+        t.delete(r.at, r.len);
+        if (!r.beforeLf) t.insert(r.at, '\n'.repeat(r.len));
+      }
+    }
+  }, origin);
+  return texts.length;
+}
+
+// ---------------------------------------------------------------------------
 // JS -> Y 변환
 // ---------------------------------------------------------------------------
 function newText(str) {
   const t = new Y.Text();
-  if (str != null && str !== '') t.insert(0, String(str));
+  if (str != null && str !== '') t.insert(0, normalizeLineBreaks(String(str)));
   return t;
 }
 
@@ -137,6 +197,7 @@ export function readProject(ydoc) {
 export function buildProject(ydoc, data, origin) {
   const root = ydoc.getMap('project');
   if (root.size > 0) return false; // 원격에서 이미 로드됨
+  normalizeDataLineBreaks(data);
   ydoc.transact(() => {
     for (const k of Object.keys(data)) {
       if (PERSONAL_KEYS.has(k)) continue;
@@ -160,9 +221,10 @@ export function buildProject(ydoc, data, origin) {
 // ---------------------------------------------------------------------------
 // 텍스트 최소 diff -> Y.Text 연산(동시 편집과 병합됨)
 // ---------------------------------------------------------------------------
+// oldStr는 "지금 Y.Text에 실제로 있는 값"(위치 기준)이라 원문 그대로 두고, 새로 쓰는 newStr만 정규화한다.
 export function applyTextDiff(ytext, oldStr, newStr) {
   oldStr = oldStr == null ? '' : String(oldStr);
-  newStr = newStr == null ? '' : String(newStr);
+  newStr = newStr == null ? '' : normalizeLineBreaks(String(newStr));
   if (oldStr === newStr) return;
 
   // 공통 접두/접미를 잘라 바뀐 가운데 구간만 교체.
@@ -201,6 +263,9 @@ function deepEq(a, b) {
 
 export function reconcile(ydoc, data, shadow, origin) {
   const root = ydoc.getMap('project');
+  // data의 줄바꿈을 제자리 정규화한다. 그래야 Y에 CR이 안 들어가고, 호출자가 뜨는 shadow(=clone(data))도
+  // Y와 글자 단위로 일치한다. shadow에 남은 CR은 원문 그대로 두어야 diff 위치가 Y와 맞는다.
+  normalizeDataLineBreaks(data);
   ydoc.transact(() => {
     // 삭제된 최상위 키(단, 보호 키는 incoming data에 없어도 지우지 않음 — 옛 클라이언트발 유실 방지)
     root.forEach((_v, k) => {
