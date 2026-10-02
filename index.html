@@ -1723,8 +1723,11 @@ function changeItemId(oldId, newId, isKey){
   var row = list.find(function(r){ return r[0]===oldId; });
   if(!row) return false;
   row[0] = newId;
+  // 옛 ID가 비어 있으면(빈 행에 ID를 처음 입력) 바꿀 참조가 없다. 그대로 돌리면 키아이템 ID가 ''인
+  // 모든 행이 새 ID로 바뀐다(2026-10-02 키아이템 877이 무관한 노드 23곳에 박힌 원인).
+  var hadOldId = oldId!=null && String(oldId).trim()!=='';
   var farmCol = C['파밍 아이템 ID'], keyCol = C['키아이템 ID'], tradeCol = C['지역거래 시, 교단원이 낼 아이템ID'];
-  DATA.sheet1.rows.forEach(function(r){
+  if(hadOldId) DATA.sheet1.rows.forEach(function(r){
     [farmCol, tradeCol].forEach(function(col){
       if(r[col]!=null && r[col]!==''){
         var parts = String(r[col]).split(',').map(function(p){ return p.trim()===String(oldId) ? String(newId) : p.trim(); });
