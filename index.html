@@ -894,8 +894,8 @@ var cloudProjectId = null;
 var cloudIgnoreRealtimeUntil = 0;
 var cloudBaseData = null;       // 원본에서 선언 누락됐던 변수("use strict" ReferenceError 방지)
 var COLLAB = null;              // 활성 Yjs 협업 세션(null이면 기존 방식으로 폴백)
-var __collabPendingRender = false;
-var __pendingRemote = null;     // 편집 중 도착한 원격본(보류) — 로컬 편집 보호용
+var __pendingRemote = false;    // 편집 중 도착한 원격 변경(반영 보류) — 편집이 끝나면 병합해 반영
+var __remoteFlushTimer = null;
 var __collabPanelUnbinds = [];  // 열린 노드 패널의 협업 바인딩 해제 함수들
 var __collabPanel = null;       // {topId,rowId} 현재 열린 노드 패널
 function collabClearPanelBindings(){ __collabPanelUnbinds.forEach(function(fn){ try{fn();}catch(e){} }); __collabPanelUnbinds=[]; }
@@ -905,10 +905,17 @@ function collabSetTextareaCaret(el, next){
   el.value=next;
   if(s!=null){ var d=next.length-cur.length; try{ el.setSelectionRange(Math.max(0,s>p?s+d:s), Math.max(0,e>p?e+d:e)); }catch(err){} }
 }
-function collabRefreshViews(){
-  rebuildProjectView(); saveState(false);
+// 열린 노드 패널을 현재 DATA로 다시 그린다(스크롤 유지). 패널의 입력칸 핸들러는 렌더 시점의 행 객체를
+// 붙잡고 있어서, DATA를 원격 병합본으로 교체한 뒤 패널을 그대로 두면 이후 패널 편집이 버려진 옛 행에
+// 써져 저장되지 않았다("방금 입력한 게 사라짐"). 그 노드가 원격에서 지워졌으면 패널을 닫는다.
+function refreshOpenNodePanel(){
   var ov=document.getElementById('nodePanelOverlay');
-  if(__collabPanel && ov && ov.classList.contains('open')){ try{ renderNodePanel(__collabPanel.topId, __collabPanel.rowId); }catch(e){} }
+  if(!__collabPanel || !ov || !ov.classList.contains('open')) return;
+  if(rowById[__collabPanel.rowId]===undefined){ closeNodePanel(); toast('편집 중이던 노드를 다른 사용자가 삭제했어요.'); return; }
+  var body=document.querySelector('#nodePanel .npBody'), top=body ? body.scrollTop : 0;
+  try{ renderNodePanel(__collabPanel.topId, __collabPanel.rowId); }
+  catch(e){ console.error('노드 패널 갱신 실패', e); closeNodePanel(); return; }
+  var nb=document.querySelector('#nodePanel .npBody'); if(nb) nb.scrollTop=top;
 }
 var RAW = JSON.parse(document.getElementById('app-data').textContent);
 var LS_KEY = 'lumkingdom_map_editor_v1';
@@ -2271,9 +2278,19 @@ function markDirty(){
   saveState(true);
   clearTimeout(saveTimer);
   saveTimer = setTimeout(function(){
+    saveTimer = null;
     persist();
   }, 700);
 }
+// 탭을 닫거나 숨길 때 디바운스(0.7초) 대기 중인 편집을 즉시 저장한다. 예전엔 입력 직후 탭을 닫거나
+// 새로고침하면 그 편집이 서버에도 로컬에도 안 남았다. (협업 엔진의 이탈 처리보다 먼저 등록돼 먼저 실행된다)
+function flushPendingSave(){
+  if(!saveTimer) return;
+  clearTimeout(saveTimer); saveTimer = null;
+  try{ persist(); }catch(e){ console.error(e); }
+}
+window.addEventListener('pagehide', flushPendingSave);
+document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='hidden') flushPendingSave(); });
 var __localSaveWarned = 0;
 // 로컬(localStorage) 저장을 시도하고, 용량 초과 시 공간을 확보해 재시도한다. 예외를 던지지 않음.
 function saveLocalData(){
@@ -4344,6 +4361,7 @@ function closeNodePanel(){
   currentlyEditingRowId = null;
   collabClearPanelBindings(); __collabPanel = null;
   if(nav.main==='map' && (nav.view==='cluster' || nav.view==='canvas')) render();
+  setTimeout(flushPendingRemote, 0);   // 패널 편집 중 보류했던 원격 변경 반영
 }
 
 // bot_area 스키마 기반 필드 도움말(각주). 라벨로 자동 매칭되어 입력칸 아래에 회색으로 표시된다.
@@ -5878,7 +5896,7 @@ function rebuildProjectView(opts){
   migratePlacementNotesToMemo();
   rebuildAllCrossRefs();
   // 지도 탭뿐 아니라 아이템·서브퀘스트·날씨·에너미 탭도 보존한다. 예전에는 previousNav.main==='map'
-  // 일 때만 보존해서, 다른 탭을 보던 중 원격 동기화(applyRemoteData)나 collabRefreshViews가 재빌드를
+  // 일 때만 보존해서, 다른 탭을 보던 중 원격 동기화(applyRemoteData)가 재빌드를
   // 돌리면 화면이 갑자기 지도로 튕겨 나갔다("아이템/서브퀘스트 탭이 조금 있으면 메인으로 돌아감").
   var preserveView = opts.preserveView !== false && !!previousNav;
   if(preserveView && previousNav.main==='map'){
@@ -5931,6 +5949,7 @@ async function createNewProject(){
       var newId=makeProjectId();
       var ins=await supabase.from('projects').insert({id:newId,name:d.toolTitle,data:d,version:1,owner_id:cloudUser.id,updated_by:cloudUser.id}).select('id,name,data,version,updated_at').single();
       if(ins.error) throw ins.error;
+      await detachCollab();                        // DATA를 새 프로젝트로 바꾸기 전에 현재 문서 세션 확정·종료
       PROJECT_ID=newId; DATA=d; cloudBaseData=JSON.parse(JSON.stringify(d)); cloudProjectId=newId; cloudVersion=ins.data.version;
       PROJECTS[newId]={id:newId,name:d.toolTitle,data:JSON.parse(JSON.stringify(d)),updatedAt:Date.now()};
       localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS)); localStorage.setItem(ACTIVE_PROJECT_KEY,newId);
@@ -5941,6 +5960,7 @@ async function createNewProject(){
       return;
     }
   }catch(e){ console.error(e); toast('클라우드 프로젝트 생성 실패: '+(e.message||e)); return; }
+  await detachCollab();
   PROJECT_ID=makeProjectId(); DATA=makeBlankProject(); PROJECTS[PROJECT_ID]={id:PROJECT_ID,name:DATA.toolTitle,data:JSON.parse(JSON.stringify(DATA)),updatedAt:Date.now()}; ACTIVE_PROJECT_ID=PROJECT_ID; localStorage.setItem(PROJECTS_KEY,JSON.stringify(PROJECTS)); localStorage.setItem(ACTIVE_PROJECT_KEY,PROJECT_ID); rebuildProjectView(); markDirty();
   toast('새 프로젝트를 만들었습니다. 기존 프로젝트는 보존되었습니다.');
 }
@@ -5996,11 +6016,35 @@ async function deleteProject(id){
   }
   renderProjectRows();
 }
+// 프로젝트별 실제 마지막 편집 시각 = max(최신 doc_updates.created_at, doc_snapshots.updated_at).
+// 실시간 협업(Yjs) 전환 뒤 편집은 projects 행이 아니라 doc_updates/doc_snapshots에 쌓이므로
+// projects.updated_at은 제목을 바꿀 때만 갱신된다 → 목록의 "마지막 수정"이 멈춰 보였다.
+async function fetchProjectActivity(ids){
+  var out={};
+  if(!supabase || !ids.length) return out;
+  function bump(id, ts){ var t=Date.parse(ts); if(t && t>(out[id]||0)) out[id]=t; }
+  var jobs=[supabase.from('doc_snapshots').select('project_id,updated_at').in('project_id',ids).then(function(r){
+    if(!r.error) (r.data||[]).forEach(function(s){ bump(s.project_id, s.updated_at); });
+  })];
+  ids.forEach(function(id){
+    jobs.push(supabase.from('doc_updates').select('created_at').eq('project_id',id).order('id',{ascending:false}).limit(1).then(function(r){
+      if(!r.error && r.data && r.data[0]) bump(id, r.data[0].created_at);
+    }));
+  });
+  try{ await Promise.all(jobs); }catch(e){ console.warn('[collab] 프로젝트 최근 편집 시각 조회 실패', e); }
+  return out;
+}
 async function refreshCloudProjectList(){
   try{
     var res=await supabase.from('projects').select('id,name,data,version,updated_at,owner_id').order('updated_at',{ascending:false});
     if(res.error) throw res.error;
     var map={}; (res.data||[]).forEach(function(p){ map[p.id]={id:p.id,name:p.name,data:p.data,updatedAt:new Date(p.updated_at).getTime(),version:p.version,owner_id:p.owner_id}; });
+    var activity=await fetchProjectActivity(Object.keys(map));
+    Object.keys(activity).forEach(function(id){ if(activity[id]>(map[id].updatedAt||0)) map[id].updatedAt=activity[id]; });
+    // 지금 열린 프로젝트는 아직 서버에 안 올라간(0.4초 대기 중) 내 편집 시각도 반영
+    if(PROJECT_ID && map[PROJECT_ID] && PROJECTS[PROJECT_ID] && PROJECTS[PROJECT_ID].updatedAt>(map[PROJECT_ID].updatedAt||0)){
+      map[PROJECT_ID].updatedAt=PROJECTS[PROJECT_ID].updatedAt;
+    }
     PROJECTS=map;
     // DB의 name 컬럼은 이름 동기화가 실패/지연되면 옛 값 그대로다. 현재 편집 중인 프로젝트만은
     // 살아 있는 제목으로 덮어써야, 목록을 열었다 닫는 것만으로 제목이 옛 이름으로 되돌아가지 않는다.
@@ -6019,6 +6063,7 @@ async function switchProject(targetId, opts){
     if(cloudReady){
       var res=await supabase.from('projects').select('id,name,data,version,updated_at').eq('id',targetId).single();
       if(res.error) throw res.error;
+      await detachCollab({push:!opts.skipPersistCurrent});   // DATA 교체 전에 현재 문서 세션 확정·종료
       DATA=JSON.parse(JSON.stringify(res.data.data));
       if(res.data.name) DATA.toolTitle=res.data.name;
       cloudBaseData=JSON.parse(JSON.stringify(DATA)); PROJECT_ID=res.data.id; cloudProjectId=res.data.id; cloudVersion=res.data.version;
@@ -6028,6 +6073,7 @@ async function switchProject(targetId, opts){
       syncBranding(switchedName);
     }else{
       if(!opts.skipPersistCurrent) persistProjectNow();
+      await detachCollab({push:!opts.skipPersistCurrent});
       DATA=JSON.parse(JSON.stringify(PROJECTS[targetId].data));
       PROJECT_ID=targetId;
     }
@@ -6053,27 +6099,44 @@ document.getElementById('btnProjectModalNew').addEventListener('click',function(
 /* ---------------- Yjs 실시간 협업 브리지 ---------------- */
 // collab/ 모듈(window.CollabEngine)이 로드돼 있으면, 기존 whole-doc 클라우드
 // 동기화 대신 CRDT 협업 세션을 연다. 같은 필드 동시 편집도 무손실로 병합된다.
+// 현재 협업 세션을 닫는다. ⚠ DATA를 다른 프로젝트/서버 시드로 바꾸기 "전에" 반드시 호출할 것 —
+// 세션이 살아 있는 채로 DATA가 바뀌면 다음 저장·원격 병합(sync)이 그 내용을 이 문서에 써 버린다.
+// opts.push===false: 마지막 로컬 편집을 올리지 않는다(DATA가 이미 이 문서 것이 아닐 때).
+async function detachCollab(opts){
+  var s = COLLAB;
+  if(!s) return;
+  COLLAB = null; __pendingRemote = false;          // 이후의 원격 알림·저장이 이 세션을 쓰지 않도록 먼저 끊는다
+  if(!opts || opts.push!==false){
+    clearTimeout(saveTimer); saveTimer = null;
+    try{ s.push(DATA); }catch(e){ console.error(e); }   // 아직 안 올린 마지막 편집 확정
+  }
+  try{ await s.destroy(); }catch(e){}
+}
 async function startCollab(projectId){
   if(!window.CollabEngine) return;
-  if(COLLAB){ try{ await COLLAB.destroy(); }catch(e){} COLLAB=null; }
   cloudReady=false; setCloudStatus('실시간 연결 중…');
+  await detachCollab({push:false});               // 호출 측이 DATA 교체 전에 이미 닫았어야 한다(여긴 안전망)
+  var session = null;
   try{
-    var session = await window.CollabEngine.openProject({
+    session = await window.CollabEngine.openProject({
       supabase: supabase,
       projectId: projectId,
       user: cloudUser,
       seedData: JSON.parse(JSON.stringify(DATA)),   // DB가 비어 있을 때만 시드로 사용
-      onRemote: function(data){ applyRemoteData(data); },
+      onRemote: function(){ if(session && COLLAB===session) applyRemoteData(); },
       onPresence: function(states, selfId){ renderCollabPresence(states, selfId); },
       onStatus: function(s){ setCloudStatus(collabStatusText(s)); }
     });
     COLLAB = session;
     PROJECT_ID = projectId; cloudProjectId = projectId; ACTIVE_PROJECT_ID = projectId;
     try{ localStorage.setItem(ACTIVE_PROJECT_KEY, projectId); }catch(e){}
-    applyRemoteData(session.data);                  // 로드/시드 결과를 화면에 반영
+    // 로드/시드 결과를 화면에 반영. 화면의 DATA는 stale한 projects.data 시드라 절대 push하면 안 되므로
+    // sync가 아니라 그대로 채택하고, 편집 중이어도 보류하지 않는다.
+    adoptCollabData(session.data);
     cloudReady = true; setCloudStatus('저장됨 · 실시간 연결');
   }catch(e){
     console.error(e); COLLAB=null; setCloudStatus('실시간 연결 실패');
+    if(session){ try{ session.destroy(); }catch(_){} }
     // ★ 협업 연결 실패 시, onCloudSignedIn이 세팅한 stale한 projects.data(협업 전환 후
     //    갱신 안 되는 시드본) 대신 localStorage의 최신 로컬본으로 복구해 데이터 초기화를 막는다.
     try{
@@ -6104,13 +6167,48 @@ function collabStatusText(s){
 function isTextTarget(t){
   return t && (t.tagName==='TEXTAREA' || (t.tagName==='INPUT' && (t.type==='text'||t.type==='')) || t.isContentEditable);
 }
-// 원격 변경 -> 앱 DATA 반영. 입력 중이면 커서 보호를 위해 전체 재렌더를 보류.
-function applyRemoteData(incoming){
+// 지금 무언가를 편집 중인가(원격 반영으로 화면을 다시 그리면 안 되는 상태).
+// 텍스트칸뿐 아니라 숫자/날짜칸·드롭다운, 그리고 열린 노드 패널 안의 모든 컨트롤(체크박스·버튼 포함 —
+// 패널을 다시 그리면 펼친 하위 UI·선택 상태가 날아간다)을 편집 중으로 본다.
+function isCollabEditing(){
+  var a=document.activeElement;
+  if(!a || a===document.body) return false;
+  if(isTextTarget(a) || a.tagName==='SELECT') return true;
+  if(a.tagName==='INPUT' && !/^(button|submit|reset|checkbox|radio|range|color|file|image|hidden)$/i.test(a.type||'')) return true;
+  var ov=document.getElementById('nodePanelOverlay');
+  return !!(ov && ov.classList.contains('open') && a.closest && a.closest('#nodePanel'));
+}
+// 원격 변경 알림 -> 앱 DATA 반영.
+// ★ 반드시 COLLAB.sync(DATA)로: 아직 Yjs에 안 올린 내 편집을 먼저 올리고(기준 대비 내 변경만) 병합본을 받는다.
+//   예전엔 원격본으로 DATA를 그냥 갈아끼워, 디바운스(0.7초) 안의 내 편집이 사라졌고, 편집 중 보류해도
+//   엔진이 기준(shadow)을 원격본으로 옮겨 버려 다음 저장이 다른 사람의 편집을 옛 값으로 되돌렸다.
+// 편집 중이면(커서·입력 보호) 반영을 보류했다가 편집이 끝나면 병합한다. 보류 중에도 내 편집 저장은 정상 진행.
+function applyRemoteData(){
+  if(!COLLAB) return;
+  if(isCollabEditing()){ __pendingRemote = true; armRemoteFlush(); return; }
+  __pendingRemote = false;
+  var merged;
+  try{ merged = COLLAB.sync(DATA); }
+  catch(e){
+    console.error('[collab] 원격 병합 실패 — 서버 상태로 맞춥니다', e);
+    try{ merged = COLLAB.readCurrent(); }catch(_){ return; }
+  }
+  adoptCollabData(merged);
+}
+function flushPendingRemote(){
+  if(!COLLAB || !__pendingRemote) return;
+  if(isCollabEditing()){ armRemoteFlush(); return; }
+  applyRemoteData();
+}
+// 보류 중이면 주기적으로 편집이 끝났는지 확인(포커스 이동 없이 패널이 닫히거나 요소가 사라지는 경우 대비).
+function armRemoteFlush(){
+  if(__remoteFlushTimer) return;
+  __remoteFlushTimer = setTimeout(function(){ __remoteFlushTimer=null; flushPendingRemote(); }, 1500);
+}
+// Yjs 병합본을 앱 DATA로 채택하고 화면을 다시 그린다(push 없음 — 호출 측이 sync로 이미 올렸거나 초기 로드).
+function adoptCollabData(incoming){
   if(!incoming || !incoming.sheet1 || !incoming.sheet1.headers) return;
-  // ★ 편집 중이면 DATA/localStorage를 절대 건드리지 않는다. 아직 Yjs로 올라가지 않은
-  //    로컬 편집이 원격본에 덮여 사라지는 것을 막는다. 최신 원격본만 보류했다가 blur 후 병합.
-  if(isTextTarget(document.activeElement)){ __pendingRemote = incoming; __collabPendingRender = true; return; }
-  __pendingRemote = null;
+  __pendingRemote = false;
   DATA = JSON.parse(JSON.stringify(incoming));
   ensureGraphDataShape();
   applyUserPrefs(DATA);
@@ -6125,6 +6223,7 @@ function applyRemoteData(incoming){
     localStorage.setItem(LS_KEY, JSON.stringify(DATA));
   }catch(e){ console.error('원격 데이터 인덱스 재구성 실패', e); }
   rebuildProjectView({preserveView:true});
+  refreshOpenNodePanel();                          // 패널이 새 DATA 행을 잡도록(옛 행에 쓰는 유실 방지)
 }
 function renderCollabPresence(states, selfId){
   var box = document.getElementById('collabPresence');
@@ -6148,18 +6247,8 @@ document.addEventListener('focusin', function(e){
 document.addEventListener('focusout', function(){
   if(!COLLAB) return;
   try{ COLLAB.setEditing(null); }catch(err){}
-  setTimeout(function(){
-    if(isTextTarget(document.activeElement)) return; // 아직 다른 칸 편집 중이면 대기
-    if(__pendingRemote && COLLAB){
-      __pendingRemote=null; __collabPendingRender=false;
-      try{ COLLAB.push(DATA); }catch(e){ console.error(e); }          // 방금까지의 로컬 편집을 Yjs로 확정(유실 방지)
-      var merged = COLLAB.readCurrent ? COLLAB.readCurrent() : null;  // 로컬+원격 병합 결과를 다시 읽어 반영
-      if(merged){ applyRemoteData(merged); } else { collabRefreshViews(); }
-      return;
-    }
-    if(!__collabPendingRender || !COLLAB) return;
-    __collabPendingRender=false; collabRefreshViews();
-  }, 30);
+  // 편집이 끝났으면(다른 칸으로 옮긴 게 아니면) 보류했던 원격 변경을 병합해 반영
+  setTimeout(flushPendingRemote, 30);
 });
 
 /* ---------------- supabase auth + realtime ---------------- */
@@ -6175,6 +6264,7 @@ async function initCloud(){
   supabase=window.supabase.createClient(SUPABASE_CONFIG.url,SUPABASE_CONFIG.anonKey,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
   supabase.auth.onAuthStateChange(function(event,session){
     if(event==='SIGNED_OUT'){
+      detachCollab();   // 마지막 편집은 Yjs 로컬 캐시에 남아 다음 접속 때 복구된다
       cloudUser=null; cloudReady=false; unsubscribeCloud();
       document.getElementById('authOverlay').style.display='flex';
       document.getElementById('authMsg').textContent='로그아웃되었습니다.';
@@ -6277,6 +6367,7 @@ async function onCloudSignedIn(user){
     var target=preferred && PROJECTS[preferred] ? preferred : ids[0];
     var cloud=await supabase.from('projects').select('id,name,data,version,updated_at').eq('id',target).single();
     if(cloud.error) throw cloud.error;
+    await detachCollab();   // 같은 탭에서 다시 로그인한 경우: stale 시드로 DATA를 바꾸기 전에 이전 세션 종료
     DATA=JSON.parse(JSON.stringify(cloud.data.data));
     ensureGraphDataShape();
     if(cloud.data.name) DATA.toolTitle=cloud.data.name;

@@ -2,14 +2,21 @@
 // 협업 엔진 공개 API — index.html이 호출하는 유일한 진입점.
 //   const session = await openProject({...});
 //   session.push(DATA)            // 로컬 편집 -> Y로 반영(방송+영속)
+//   DATA = session.sync(DATA)     // 원격 변경 반영: 내 미반영 편집을 먼저 올리고 병합본을 받는다
 //   session.setEditing(label)     // 프레즌스: 내가 무엇을 편집 중
 //   session.bindText(el,rowId,col)// (선택) 텍스트칸 글자단위 실시간 바인딩
 //   session.destroy()
+//
+// ⚠ 불변식: shadow = "앱의 DATA가 기반한 상태". push는 diff(DATA vs shadow) = 내 편집만 Y에 얹는다.
+//   원격 업데이트가 와도 shadow를 앞당기면 안 된다(앱 DATA는 그대로라 다음 push가 원격 편집을 옛 값으로
+//   되돌렸다 — "동시 편집이 적용 안 됨/방금 입력이 사라짐"). shadow는 앱이 병합본을 받아 DATA를 교체할 때
+//   (sync/readCurrent)만 함께 옮긴다.
 // ============================================================================
 
 import { Y, Awareness } from './deps.js';
 import {
   buildProject, readProject, reconcile, applyTextDiff, getRowTextCellById, repairTextLineBreaks,
+  healConcurrentCellDuplicates,
 } from './ydoc.js';
 import { SupabaseYjsProvider } from './provider.js';
 import { colorFor } from './presence.js';
@@ -38,6 +45,8 @@ export async function openProject(cfg) {
   // 과거에 CR(\r)이 섞여 저장된 문서면 여기서 LF로 복구(방송+영속). 이후 DATA·shadow·textarea가
   // 모두 같은 LF 문자열을 보게 되어 글자 위치가 어긋나지 않는다.
   repairTextLineBreaks(ydoc, APP);
+  // 같은 칸 동시 편집으로 한 칸 길어진(뒤 칸이 밀린) 행이 있으면 복구.
+  healConcurrentCellDuplicates(ydoc, APP);
 
   let data = readProject(ydoc);
   let shadow = clone(data);
@@ -54,17 +63,28 @@ export async function openProject(cfg) {
   awareness.on('change', pushPresence);
   pushPresence();
 
-  // 원격 변경 -> 앱(디바운스). 우리 로컬 origin(APP/LIVE)은 무시.
+  // 원격 변경 -> 앱에 알림(디바운스). 우리 로컬 origin(APP/LIVE)은 무시.
+  // 여기서 data/shadow를 바꾸지 않는다(위 불변식). 앱이 알림을 받아 sync(DATA)로 병합본을 가져간다.
   let readTimer = null;
   ydoc.on('update', (_u, origin) => {
     if (origin !== provider) return; // 원격/영속에서 온 것만
     clearTimeout(readTimer);
-    readTimer = setTimeout(() => {
-      data = readProject(ydoc);
-      shadow = clone(data);
-      if (onRemote) onRemote(data);
-    }, 80);
+    readTimer = setTimeout(() => { if (onRemote) onRemote(); }, 80);
   });
+
+  // 현재 Y 병합본을 읽고 그것을 새 기준(shadow)으로 삼는다. 반환값으로 앱 DATA를 교체해야 한다.
+  function adopt() {
+    healConcurrentCellDuplicates(ydoc, APP);
+    data = readProject(ydoc);
+    shadow = clone(data);
+    return data;
+  }
+  function push(latest) {
+    healConcurrentCellDuplicates(ydoc, APP);   // 밀린 행에 내 편집이 엉뚱한 칸으로 가지 않도록 먼저 복구
+    reconcile(ydoc, latest, shadow, APP);
+    shadow = clone(latest);
+    data = latest;
+  }
 
   // ---- shadow의 특정 셀 값을 갱신(라이브 바인딩이 재조정 중복을 막기 위해) ----
   function setShadowCell(rowId, col, val) {
@@ -99,7 +119,8 @@ export async function openProject(cfg) {
       if (next === el.value) { prev = next; return; }
       setInputPreservingCaret(el, next);  // 원격 변경 반영, 커서 보존
       prev = next;
-      setShadowCell(rowId, col, next);
+      // shadow는 건드리지 않는다: 앱 DATA 칸은 아직 옛 값이라, shadow만 원격값으로 옮기면
+      // 다음 push가 diff(옛 값 vs 원격값)로 원격 편집을 되돌린다. 다음 입력/병합(sync) 때 함께 맞춰진다.
     };
     el.addEventListener('input', onInput);
     el.addEventListener('compositionstart', onCompStart);
@@ -116,12 +137,14 @@ export async function openProject(cfg) {
   return {
     ydoc, awareness, provider,
     get data() { return data; },
-    // 현재 Yjs 문서의 병합 결과(로컬+원격)를 즉시 읽는다. blur 시 안전 병합에 사용.
-    readCurrent() { return readProject(ydoc); },
-    push(latest) {
-      reconcile(ydoc, latest, shadow, APP);
-      shadow = clone(latest);
-      data = latest;
+    // 현재 Yjs 병합본(로컬+원격)을 읽고 새 기준으로 삼는다 → 반환값으로 DATA를 교체할 것.
+    // (DATA를 교체하지 않을 거면 쓰지 말 것: shadow만 앞당겨져 다음 push가 원격 편집을 되돌린다.)
+    readCurrent() { return adopt(); },
+    push,
+    // 원격 변경 반영용: 앱의 아직 안 올린 편집(latest)을 먼저 Y에 얹고, 병합본을 새 기준으로 돌려준다.
+    sync(latest) {
+      if (latest) push(latest);
+      return adopt();
     },
     setEditing(label) {
       awareness.setLocalStateField('editing', label ? { label: String(label) } : null);

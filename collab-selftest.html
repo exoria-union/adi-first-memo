@@ -141,8 +141,13 @@ try {
     reconcile(docW, oldData, shadow, 'app');
     const after = readProject(docW);
     ok('보호 키 weather는 삭제되지 않음', !!(after.weather && after.weather.rows && after.weather.rows.length===1 && after.weather.rows[0][0]==='맑음'));
-    ok('비보호 키 tempSection은 삭제됨(기존 동작 유지)', !('tempSection' in after));
+    // 삭제는 "기준(shadow)엔 있었는데 내가 없앤 키"만 — 모르는 키(옛 클라·아직 반영 안 된 원격 추가)는 보호 키가 아니어도 보존
+    ok('모르는 비보호 키 tempSection도 삭제되지 않음', !!after.tempSection);
     ok('옛 클라의 다른 편집(제목)은 정상 반영', after.toolTitle === '옛클라 편집');
+    const mine = readProject(docW); const mineShadow = clone(mine);
+    delete mine.tempSection;                                               // 내가 직접 지운 키
+    reconcile(docW, mine, mineShadow, 'app');
+    ok('내가 지운 최상위 키는 삭제됨', !('tempSection' in readProject(docW)));
   }
 
   // ---- 7. 줄바꿈(CR) 정규화: CR이 공유 문서에 들어가거나 편집 반복으로 쌓이지 않아야 한다 ----
@@ -217,6 +222,33 @@ try {
     ok('반복 편집: 매번 Y===textarea 값', good);
     ok('반복 편집: CR 0개', finalE.indexOf('\r') === -1);
     ok('반복 편집: 줄바꿈 수 유지(빈 줄 증식 없음)', lfCount(finalE) === lf0);
+  }
+
+  // ---- 8. 3-way 텍스트 병합: 기준(shadow)보다 Y가 앞서 있어도(아직 앱에 반영 안 된 원격 편집)
+  //         원격 편집을 되돌리거나 내 편집을 두 번 넣지 않는다 ----
+  {
+    const mkT = (s) => { const d = new Y.Doc(); const t = d.getText('t'); t.insert(0, s); return t; };
+    let t = mkT('abc REMOTE def');                       // 기준 'abc def' 이후 원격이 ' REMOTE' 삽입
+    applyTextDiff(t, 'abc def', 'abc def LOCAL');
+    ok('3-way: 뒤쪽 내 편집 + 앞쪽 원격 편집 둘 다', t.toString() === 'abc REMOTE def LOCAL');
+    t = mkT('abc def REMOTE');
+    applyTextDiff(t, 'abc def', 'LOCAL abc def');
+    ok('3-way: 앞쪽 내 편집 + 뒤쪽 원격 편집 둘 다', t.toString() === 'LOCAL abc def REMOTE');
+    t = mkT('abc def LOCAL');
+    applyTextDiff(t, 'abc def', 'abc def LOCAL');
+    ok('3-way: 이미 반영된 내 편집은 다시 넣지 않음', t.toString() === 'abc def LOCAL');
+    t = mkT('abc XYZ def ghi');                          // 같은 구간을 원격도 고침
+    applyTextDiff(t, 'abc 123 def ghi', 'abc 456 def ghi');
+    ok('3-way: 같은 구간 충돌 → 그 구간만 내 값(나머지 그대로)', t.toString() === 'abc 456 def ghi');
+
+    // 기준을 모르는 칸(기준 행이 짧은 sparse 행 등)은 덮어쓰기 — 예전엔 빈 기준으로 Y 글 앞에 한 번 더 붙었다
+    const docU = new Y.Doc();
+    buildProject(docU, clone(sampleData()), 'init');
+    const dU = readProject(docU); const sU = clone(dU);
+    sU.sheet1.rows[0] = sU.sheet1.rows[0].slice(0, SCRIPT_COL);   // 기준 행에 그 칸 정보 없음
+    dU.sheet1.rows[0][SCRIPT_COL] = '거대한 아치 천장. 먼지.';
+    reconcile(docU, dU, sU, 'app');
+    ok('기준 모르는 텍스트 칸: 중복 없이 새 값', readProject(docU).sheet1.rows[0][SCRIPT_COL] === '거대한 아치 천장. 먼지.');
   }
 
   log('\n=== ' + pass + ' passed, ' + fail + ' failed ===', fail ? 'fail' : 'pass');

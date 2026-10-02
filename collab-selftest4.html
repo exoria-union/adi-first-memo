@@ -1,0 +1,202 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>앱 E2E 테스트</title>
+<style>body{font:13px/1.6 ui-monospace,Consolas,monospace;background:#0f1116;color:#e9eaf0;padding:12px}
+.p{color:#5cc185}.f{color:#f0846a;font-weight:700}iframe{width:640px;height:420px;border:1px solid #333;margin:4px}</style>
+<pre id="out"></pre>
+<div id="frames"></div>
+<script>
+// 앱 E2E: index.html 두 벌(A/B)을 인메모리 Supabase 목에 붙여 실제 앱 흐름(노드 패널·저장·원격 반영·목록)을 검증.
+// index.html을 읽어 srcdoc 프레임에 넣으며 ① 프레임마다 메모리 localStorage(이 오리진의 실제 저장소는 건드리지 않음)
+// ② Supabase 목 ③ 테스트용 내부 접근(window.__e2e)을 주입한다. 실제 서버·계정은 쓰지 않는다.
+// (2026-10-02 동시 편집 유실 회귀 테스트: 옛 코드는 1)~4)가 실패했다.)
+const out = document.getElementById('out'); let pass = 0, fail = 0;
+const log = (m, c) => { out.innerHTML += (c ? '<span class="' + c + '">' + m + '</span>' : m) + '\n'; };
+const ok = (n, c, extra) => { if (c) { pass++; log('PASS  ' + n, 'p'); } else { fail++; log('FAIL  ' + n + (extra ? '  — ' + extra : ''), 'f'); } };
+const wait = (ms) => new Promise(r => setTimeout(r, ms));
+const J = (x) => JSON.parse(JSON.stringify(x));
+
+
+const be = { projects: [], doc_updates: [], doc_snapshots: [], seq: 0, bus: {} };
+window.__backend = be;
+window.__mockClient = function (name) {
+  const user = { id: name === 'A' ? '00000000-0000-4000-8000-00000000000a' : '00000000-0000-4000-8000-00000000000b', email: name.toLowerCase() + '@e2e.test' };
+  function builder(t) {
+    const st = { t, op: 'select', filters: [], row: null, single: false, maybe: false, order: null, limit: null };
+    const api = {
+      select() { return api; }, insert(r) { st.op = 'insert'; st.row = r; return api; }, update(r) { st.op = 'update'; st.row = r; return api; },
+      upsert(r) { st.op = 'upsert'; st.row = r; return api; }, delete() { st.op = 'delete'; return api; },
+      eq(c, v) { st.filters.push(r => r[c] === v); return api; }, gt(c, v) { st.filters.push(r => r[c] > v); return api; },
+      lte(c, v) { st.filters.push(r => r[c] <= v); return api; }, in(c, vs) { st.filters.push(r => vs.indexOf(r[c]) !== -1); return api; },
+      order(c, o) { st.order = { c, asc: !o || o.ascending !== false }; return api; }, limit(n) { st.limit = n; return api; },
+      single() { st.single = true; return exec(); }, maybeSingle() { st.maybe = true; return exec(); },
+      then(res, rej) { return exec().then(res, rej); },
+    };
+    const match = r => st.filters.every(f => f(r));
+    function exec() {
+      const arr = be[st.t], now = new Date().toISOString(); let data = null, error = null;
+      if (st.op === 'select') {
+        let rows = arr.filter(match);
+        if (st.order) { const { c, asc } = st.order; rows = rows.slice().sort((a, b) => (a[c] > b[c] ? 1 : a[c] < b[c] ? -1 : 0) * (asc ? 1 : -1)); }
+        if (st.limit != null) rows = rows.slice(0, st.limit);
+        rows = J(rows);
+        if (st.maybe) data = rows[0] || null;
+        else if (st.single) { data = rows[0] || null; if (!data) error = { code: 'PGRST116', message: 'no rows' }; }
+        else data = rows;
+      } else if (st.op === 'insert') {
+        const row = Object.assign({}, J(st.row));
+        if (st.t === 'doc_updates') { row.id = ++be.seq; row.created_at = now; }
+        if (st.t === 'projects') { if (arr.some(r => r.id === row.id)) return Promise.resolve({ data: null, error: { code: '23505', message: 'dup' } }); row.created_at = now; row.updated_at = now; }
+        arr.push(row); data = J(row);
+      } else if (st.op === 'update') {
+        const rows = arr.filter(match); rows.forEach(r => { Object.assign(r, J(st.row)); if (st.t === 'projects') r.updated_at = now; });
+        data = (st.single || st.maybe) ? (rows[0] ? J(rows[0]) : null) : J(rows);
+        if (st.single && !rows[0]) error = { code: 'PGRST116' };
+      } else if (st.op === 'upsert') {
+        const i = arr.findIndex(r => r.project_id === st.row.project_id); const row = Object.assign({}, J(st.row), { updated_at: now });
+        if (i >= 0) Object.assign(arr[i], row); else arr.push(row); data = J(row);
+      } else if (st.op === 'delete') { for (let i = arr.length - 1; i >= 0; i--) if (match(arr[i])) arr.splice(i, 1); }
+      return new Promise(r => setTimeout(() => r({ data, error }), 5));
+    }
+    return api;
+  }
+  const authCbs = [];
+  return {
+    auth: {
+      onAuthStateChange(cb) { authCbs.push(cb); return { data: { subscription: { unsubscribe() {} } } }; },
+      getSession() { return Promise.resolve({ data: { session: { user } }, error: null }); },
+      signOut() { authCbs.forEach(cb => cb('SIGNED_OUT', null)); return Promise.resolve({ error: null }); },
+      signInWithPassword() { return Promise.resolve({ error: { message: 'mock' } }); }, signUp() { return Promise.resolve({ error: { message: 'mock' } }); },
+    },
+    from: builder,
+    channel(chName) {
+      const handlers = [];
+      const ch = {
+        on(type, filter, cb) { handlers.push({ type, event: filter && filter.event, cb }); return ch; },
+        subscribe(cb) { (be.bus[chName] = be.bus[chName] || []).push({ ch, handlers }); setTimeout(() => cb && cb('SUBSCRIBED'), 0); return ch; },
+        send(msg) {
+          (be.bus[chName] || []).forEach(sub => { if (sub.ch === ch) return;
+            sub.handlers.forEach(h => { if (h.type === 'broadcast' && h.event === msg.event) { const p = J(msg.payload); setTimeout(() => h.cb({ payload: p }), 3); } }); });
+          return Promise.resolve('ok');
+        },
+        _chName: chName,
+      };
+      return ch;
+    },
+    removeChannel(ch) { const a = be.bus[ch._chName]; if (a) { const i = a.findIndex(s => s.ch === ch); if (i >= 0) a.splice(i, 1); } return Promise.resolve('ok'); },
+  };
+};
+
+const SHIM = '<script>(function(){var m={};var s={getItem:function(k){return Object.prototype.hasOwnProperty.call(m,k)?m[k]:null;},'
+  + 'setItem:function(k,v){m[k]=String(v);},removeItem:function(k){delete m[k];},clear:function(){m={};},'
+  + 'key:function(i){return Object.keys(m)[i]||null;},get length(){return Object.keys(m).length;}};'
+  + 'Object.defineProperty(window,"localStorage",{value:s,configurable:true});})();<\/script>';
+const MOCK = '<script>window.supabase={createClient:function(){return parent.__mockClient(window.name);}};<\/script>';
+const EXPOSE = 'window.__e2e = { open: function(t,r){ openNodePanel(t,r); }, close: function(){ closeNodePanel(); }, '
+  + 'data: function(){ return DATA; }, C: function(){ return C; }, collab: function(){ return COLLAB; }, '
+  + 'markDirty: function(){ markDirty(); }, projects: function(){ return PROJECTS; }, refreshList: function(){ return refreshCloudProjectList(); } };\n';
+let APP_HTML = null;
+async function appHtml() {
+  if (APP_HTML) return APP_HTML;
+  let s = await (await fetch('index.html', { cache: 'no-store' })).text();
+  const a1 = 'supabase.min.js"><\/script>', a2 = 'function renderNodePanel(topId, rowId){';
+  if (s.indexOf(a1) === -1 || s.indexOf(a2) === -1) throw new Error('index.html 주입 지점을 못 찾음(스크립트 태그/renderNodePanel 이름이 바뀌었으면 이 테스트를 고칠 것)');
+  s = s.replace(a1, a1 + SHIM + MOCK).replace(a2, EXPOSE + a2);
+  return (APP_HTML = s);
+}
+const frames = {};
+const errors = { A: [], B: [] };
+async function loadFrame(name) {
+  const html = await appHtml();
+  return new Promise((resolve) => {
+    const f = document.createElement('iframe'); f.name = name; f.srcdoc = html;
+    f.onload = () => { f.contentWindow.addEventListener('error', e => errors[name].push(String(e.message))); resolve(f); };
+    document.getElementById('frames').appendChild(f); frames[name] = f;
+  });
+}
+const W = (n) => frames[n].contentWindow;
+const E = (n) => W(n).__e2e;
+const Cc = (n) => E(n).C();
+const rowOf = (n, id) => E(n).data().sheet1.rows.find(r => r[Cc(n)['지역ID']] === id);
+const yRows = (n) => E(n).collab().ydoc.getMap('project').get('sheet1').toJSON().rows;
+const yRowOf = (n, id) => yRows(n).find(r => r[Cc(n)['지역ID']] === id);
+async function until(fn, ms) { const t0 = Date.now(); while (Date.now() - t0 < ms) { try { if (fn()) return true; } catch (e) {} await wait(100); } return false; }
+function field(n, labelStart) {
+  const panel = W(n).document.getElementById('nodePanel');
+  const w = [...panel.querySelectorAll('.field')].find(x => { const l = x.querySelector('label'); return l && l.textContent.indexOf(labelStart) === 0; });
+  return w ? (w.querySelector('textarea') || w.querySelector('input')) : null;
+}
+function typeInto(n, el, value) { el.focus(); el.value = value; el.dispatchEvent(new (W(n).Event)('input', { bubbles: true })); }
+function blurAll(n) { const a = W(n).document.activeElement; if (a && a.blur) a.blur(); }
+
+(async function run() {
+  try {
+    await loadFrame('A');
+    ok('A 협업 연결', await until(() => E('A') && E('A').collab() && W('A').document.getElementById('cloudStatus').textContent.indexOf('실시간 연결') !== -1, 20000));
+    await wait(2500);                               // 시드 flush + 초기 정리 저장
+    await loadFrame('B');
+    ok('B 협업 연결', await until(() => E('B') && E('B').collab() && W('B').document.getElementById('cloudStatus').textContent.indexOf('실시간 연결') !== -1, 20000));
+    await wait(2500);
+
+    // 노드 고르기: 일반 노드 3개 이상인 지역
+    const C = Cc('A'), rows = E('A').data().sheet1.rows, byTop = {};
+    rows.forEach(r => { const top = r[C['상위지역ID(부모ID)']]; if (!top || r[C['종류 코드']] === 'INCUNTR_00' || r[C['지역명']] === '이동한다') return; (byTop[top] = byTop[top] || []).push(r[C['지역ID']]); });
+    const topId = Object.keys(byTop).find(t => byTop[t].length >= 3 && E('A').data().regionsTree[t]);
+    const [X, Yid, Z] = byTop[topId];
+    log('지역 ' + topId + ' · 노드 X=' + X + ' Y=' + Yid + ' Z=' + Z);
+    const rowCount0 = yRows('A').length;
+
+    // ── 1. 원격 반영 뒤 열린 노드 패널에서 편집 → 저장되어야 함(옛 행 객체에 쓰는 유실) ──
+    E('B').open(topId, X); blurAll('B');
+    rowOf('A', Yid)[C['지역명']] = 'E2E-A-이름'; E('A').markDirty();
+    ok('1) B가 원격 편집을 반영(패널 열린 채)', await until(() => rowOf('B', Yid)[C['지역명']] === 'E2E-A-이름', 5000));
+    const gold = field('B', '파밍 골드');
+    typeInto('B', gold, '777'); blurAll('B');
+    ok('1) 패널 편집이 A에 도착', await until(() => String(yRowOf('A', X)[C['파밍 골드']]) === '777', 5000), 'A의 X 골드=' + JSON.stringify(yRowOf('A', X)[C['파밍 골드']]));
+    ok('1) A의 편집 유지', yRowOf('A', Yid)[C['지역명']] === 'E2E-A-이름');
+
+    // ── 2. 편집 중(보류) 내 저장이 남의 편집을 되돌리면 안 됨 ──
+    await wait(800);
+    const ta = field('B', '최초 탐사가 아닐 시 실패 스크립트');
+    typeInto('B', ta, 'B입력1');
+    rowOf('A', Z)[C['지역명']] = 'E2E-A-Z'; rowOf('A', Yid)[C['파밍 경험치']] = '55'; E('A').markDirty();
+    await until(() => yRowOf('B', Z)[C['지역명']] === 'E2E-A-Z', 5000);   // B의 Y엔 도착(앱은 입력 중이라 보류)
+    typeInto('B', ta, 'B입력1 B입력2');
+    await wait(1500);                                                        // B의 저장(0.7초 디바운스) 실행
+    ok('2) 보류 중 B 저장이 A 편집(이름)을 되돌리지 않음', yRowOf('A', Z)[C['지역명']] === 'E2E-A-Z', 'A의 Z 이름=' + yRowOf('A', Z)[C['지역명']]);
+    ok('2) 보류 중 B 저장이 A 편집(경험치)을 되돌리지 않음', String(yRowOf('A', Yid)[C['파밍 경험치']]) === '55');
+    ok('2) B의 입력이 A에 도착', yRowOf('A', X)[C['최초 탐사가 아닐 시 실패 스크립트']] === 'B입력1 B입력2');
+    blurAll('B');
+    ok('2) 편집이 끝나면 B가 병합본 반영', await until(() => rowOf('B', Z)[C['지역명']] === 'E2E-A-Z', 4000));
+
+    // ── 3. 동시 새 노드: B가 보류 중(옛 기준)일 때 A·B가 각각 새 노드 추가 → 둘 다 보존 ──
+    await wait(800);
+    E('B').open(topId, X);
+    typeInto('B', field('B', '최초 탐사가 아닐 시 실패 스크립트'), 'B입력3');      // B 편집 중
+    const tmpl = (n, id, name) => { const r = J(rowOf(n, Z)); r[C['지역ID']] = id; r[C['지역명']] = name; r[C['스크립트(내용)']] = name + ' 본문'; return r; };
+    E('A').data().sheet1.rows.push(tmpl('A', 'E2E_NEW_A', 'A새노드')); E('A').markDirty();
+    await until(() => yRowOf('B', 'E2E_NEW_A'), 5000);
+    E('B').data().sheet1.rows.push(tmpl('B', 'E2E_NEW_B', 'B새노드')); E('B').markDirty();
+    await wait(1500);
+    const na = yRowOf('A', 'E2E_NEW_A'), nb = yRowOf('A', 'E2E_NEW_B');
+    ok('3) A의 새 노드 보존(덮어쓰기 없음)', !!na && na[C['스크립트(내용)']] === 'A새노드 본문', JSON.stringify(na && na[C['스크립트(내용)']]));
+    ok('3) B의 새 노드 도착', !!nb && nb[C['지역명']] === 'B새노드');
+    blurAll('B'); E('B').close();
+    await wait(2500);
+    ok('3) 행 수 = 처음 + 2', yRows('A').length === rowCount0 + 2, yRows('A').length + ' vs ' + (rowCount0 + 2));
+    ok('A/B 문서 수렴', JSON.stringify(yRows('A')) === JSON.stringify(yRows('B')));
+    ok('A/B 앱 DATA 수렴', JSON.stringify(E('A').data().sheet1.rows) === JSON.stringify(E('B').data().sheet1.rows));
+
+    // ── 4. 프로젝트 목록 "마지막 수정" = 실제 마지막 편집 시각 ──
+    be.projects.forEach(p => { p.updated_at = '2026-01-01T00:00:00.000Z'; });
+    const lastUpd = be.doc_updates.length ? Date.parse(be.doc_updates[be.doc_updates.length - 1].created_at) : 0;
+    await E('A').refreshList();
+    const pid = Object.keys(E('A').projects())[0], ua = E('A').projects()[pid].updatedAt;
+    ok('4) 목록 마지막 수정이 최근 편집 시각', ua >= lastUpd && ua > Date.parse('2026-06-01'), new Date(ua).toISOString());
+
+    ok('앱 오류 없음', !errors.A.length && !errors.B.length, JSON.stringify(errors));
+  } catch (e) { log('ERROR: ' + (e && e.stack || e), 'f'); fail++; }
+  log('\n=== ' + pass + ' passed, ' + fail + ' failed ===', fail ? 'f' : 'p');
+  document.title = fail ? 'APP E2E FAIL' : 'APP E2E OK';
+})();
+</script>

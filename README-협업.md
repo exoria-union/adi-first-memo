@@ -34,15 +34,19 @@ var SUPABASE_CONFIG = {
 
 ```
 편집 → (앱) persist() → COLLAB.push(DATA)
-     → [ydoc.js] DATA를 직전 스냅샷과 diff → 바뀐 부분만 Y.Doc에 적용
-       · 긴 텍스트 칸은 Y.Text(글자 단위)  → 같은 칸 동시 편집도 무손실 병합
+     → [ydoc.js] DATA를 "DATA가 기반한 상태(shadow)"와 diff → 내가 바꾼 부분만 Y.Doc에 적용
+       · 긴 텍스트 칸은 Y.Text(글자 단위)  → 같은 칸 동시 편집도 무손실 병합(기준이 뒤처져도 3-way)
+       · 시트·표의 행은 ID(지역ID·0열)로 맞춤 → 동시에 행을 추가/삭제해도 엉뚱한 행에 안 감
+       · 삭제는 "기준엔 있었는데 내가 없앤 것"만 → 아직 반영 안 된 원격 추가분을 지우지 않음
        · 그 외는 값/구조 단위
      → [provider.js]
        · 전송: Supabase Realtime broadcast 채널로 Yjs 업데이트 방송(순서·중복에 강함)
        · 영속: doc_updates(append 로그) + doc_snapshots(주기적 압축)
        · 프레즌스: y-protocols Awareness로 "누가 접속·편집 중"
-원격 변경 수신 → Y.Doc 병합 → readProject() → 앱 DATA 갱신 → 재렌더
-              (텍스트 입력 중이면 커서 보호를 위해 blur까지 렌더 보류)
+원격 변경 수신 → Y.Doc 병합 → 앱에 알림(onRemote)
+              → DATA = COLLAB.sync(DATA): 내 미반영 편집을 먼저 올리고 병합본을 받아 교체 → 재렌더(열린 노드 패널 포함)
+              (입력칸·드롭다운·노드 패널 안을 편집 중이면 반영을 보류했다가 편집이 끝나면 병합.
+               보류 중에도 내 편집 저장은 기준 대비 diff라 남의 편집을 되돌리지 않음)
 ```
 
 - **공유 범위:** 로그인한 협업자 **모두가 모든 프로젝트를 공유**(현재 모델). 소규모 신뢰 팀 기준.
@@ -58,7 +62,7 @@ var SUPABASE_CONFIG = {
 | `collab/presence.js` / `.css` | 접속자 아바타·편집 표시 UI |
 | `collab/index.js` | 공개 API(`openProject`) |
 | `supabase_yjs_협업_migration.sql` | 영속 테이블 + RLS |
-| `collab-selftest.html` / `collab-selftest2.html` | 오프라인 자체 테스트(선택) |
+| `collab-selftest.html`~`collab-selftest4.html` | 오프라인 자체 테스트(브리지·프로바이더·스트레스·앱 E2E) |
 
 ---
 
@@ -68,6 +72,7 @@ var SUPABASE_CONFIG = {
 - `collab-selftest.html` → **15/15**: DATA↔Y 라운드트립, 개인키 제외, "최초 1회만 빌드", **같은 셀 동시 편집 무손실 수렴**, 다른 행 동시 편집 병합.
 - `collab-selftest2.html` → **20/20** (인메모리 Supabase 목): 시드→영속→로드, 실시간 양방향 전파·수렴, 라이브 타이핑, 원격→입력요소 반영, 청크 분할, **본문 접두부 편집이 선택지 보존**, **합성 셀 동시편집(본문+선택지) 양쪽 보존**, `observeCellText` 원격 수신.
 - `index.html` 로드 시 콘솔 오류 0, 협업 엔진 로드, 노드 패널 열림·본문/비고 편집 동작 확인, 미설정 시 기존 동작 유지.
+- `collab-selftest3.html`(스트레스: 기준이 뒤처진 저장·동시 행 추가/삭제·같은 칸 동시 편집 복구), `collab-selftest4.html`(앱 E2E: index.html 두 벌을 목 서버에 붙여 노드 패널·보류·새 노드·목록 시각 검증 — 실제 서버·저장소 미사용).
   - 자체 테스트 실행: 위 http 서버로 `http://localhost:8000/collab-selftest.html` 접속.
 
 **아직 실제로 확인 못 한 것** — 여러분의 Supabase 프로젝트가 있어야 검증 가능:

@@ -10,7 +10,7 @@
   - `deps.js` — import map으로 `yjs` 단일 인스턴스 + y-protocols(`?external=yjs`).
   - `ydoc.js` — **DATA ↔ Y.Doc 브리지**(reconcile, 텍스트 diff). 리치텍스트 칸만 Y.Text.
   - `provider.js` — Supabase 전송(broadcast) + 영속(`doc_updates`/`doc_snapshots`) + **localStorage Yjs 캐시** + awareness.
-  - `index.js` — 공개 API(`openProject()` → session: push/readCurrent/bindText/setEditing…).
+  - `index.js` — 공개 API(`openProject()` → session: push/sync/readCurrent/bindText/setEditing…).
   - `presence.js` / `presence.css` — 접속자 아바타.
 - `supabase_협업_전체설정.sql` — DB 한 방 설정(Supabase SQL Editor에서 실행).
 - `collab-selftest*.html` — **오프라인 자체 테스트(협업 수정 후 필수 실행)**.
@@ -18,28 +18,36 @@
 
 ## 협업 데이터 흐름
 - 편집 → `markDirty` → `persist()`(localStorage 동기 저장) → `COLLAB.push(DATA)` → `reconcile(DATA vs shadow)` → Y.Doc → provider가 broadcast + 영속.
-- 원격 수신 → `onRemote` → `applyRemoteData(incoming)` → DATA 교체 + 재렌더.
+- 원격 수신 → `onRemote()`(알림만) → `applyRemoteData()` → `DATA = COLLAB.sync(DATA)`(내 미반영 편집을 먼저 올리고 병합본 채택) → `adoptCollabData` 재렌더 + `refreshOpenNodePanel`. 편집 중(`isCollabEditing`)이면 보류 → focusout/패널 닫힘/1.5초 폴링 때 `flushPendingRemote`.
+- **shadow 불변식:** shadow = "앱 DATA가 기반한 상태". push는 diff(DATA vs shadow)=내 편집만 Y에 얹는다. 원격이 와도 shadow는 앱이 병합본으로 DATA를 교체할 때(`sync`/`readCurrent`)만 옮긴다.
 - **문서 내용의 정본은 Yjs 문서(doc_updates + doc_snapshots)** 다. `projects.data`는 **협업 전환 후 갱신 안 되는 stale 시드**이니 신뢰하지 말 것(목록의 name/updated_at 용도로만).
 
 ## ⚠️ 반드시 지킬 함정 (이미 터진 버그들)
 1. **reconcile은 행을 고정폭으로 다루면 안 된다.** `ensureBotAreaColumns()`가 새 컬럼(`최초 유일 지급 여부`·`유일 아이템 소진 스크립트`·`갈림길 그룹`)을 추가하면 데이터 행이 Yjs 행보다 길어진다 → `reconcileRow`는 범위 초과 삭제 대신 **append(빈 칸 null 채움)** 해야 한다. (안 지키면 `"Length exceeded!"`로 push가 죽어 편집 유실.)
-2. **`applyRemoteData`는 텍스트 칸 편집 중엔 DATA/localStorage를 건드리면 안 된다.** `isTextTarget`를 **맨 먼저** 확인해 `__pendingRemote`에 보류하고, blur 시 `COLLAB.push(DATA)`로 로컬 확정 후 `readCurrent()` 병합본을 반영. (안 지키면 입력 중 편집이 원격본에 덮여 사라짐.)
+2. **원격 반영은 반드시 `COLLAB.sync(DATA)`로, 편집 중엔 보류.** `applyRemoteData`는 `isCollabEditing()`(텍스트·숫자·드롭다운, 열린 노드 패널 안 포커스)이면 `__pendingRemote`만 세우고 끝. 원격본으로 DATA를 그냥 갈아끼우면 디바운스(0.7초) 안의 내 편집이 사라진다. **엔진(index.js)은 원격 수신 때 shadow/data를 절대 바꾸지 않는다**(예전엔 앞당겨서, 보류 중 내 저장이 diff(옛 DATA vs 원격본)로 남의 편집을 되돌렸다). `bindText`의 원격 observer도 shadow를 건드리지 않는다. `readCurrent()`는 shadow를 옮기므로 반환값으로 DATA를 교체할 때만 쓴다. 초기 로드(`startCollab`)는 DATA가 stale 시드라 sync가 아니라 `adoptCollabData`로 그대로 채택.
 3. **broadcast 청크는 "각각 다른 메시지"로 보낸다**(256KB 한도). 수신측은 `_reasm`에 id별로 모아 재조립. 한 메시지에 청크 전부 담으면 대용량이 통째로 실패한다.
 4. **협업 연결 실패 시 DATA를 localStorage 최신본으로 복구**(stale `projects.data` 시드로 두면 "초기화"처럼 보임).
 5. **provider의 localStorage Yjs 캐시**(`_saveLocal`, 키 `ydoc_local_<projectId>`)가 부팅 복구 안전망이다. localStorage는 동기라 이탈 시에도 남는다 → 부팅 시 Supabase 로드 후 CRDT로 덧입혀 복구(원격 되돌림 없음). 유지할 것.
 6. **Yjs 단일 인스턴스:** import map이 `yjs`를 한 URL로 고정. 다른 URL로 yjs를 또 import하지 말 것("Yjs was already imported").
 7. **줄바꿈은 LF(`\n`)만.** textarea.value는 항상 LF라, 데이터에 CR(`\r`)이 섞이면 Y.Text·shadow·입력칸의 글자 위치가 어긋난다. 정규화 지점: 엑셀 가져오기(`sheetAOA`→`normalizeLineBreaks`), `reconcile`/`buildProject`(data 제자리 정규화), `applyTextDiff`(newStr만 — oldStr는 Y 실제값이라 원문 유지), 세션 오픈 시 `repairTextLineBreaks`. 규칙: LF 앞 CR 묶음→`\n` 하나, 홀로 남은 `\r`→`\n`. `splitScript`의 끝 줄바꿈 제거도 `/[\r\n]+$/`.
 8. **shadow/DATA는 "Y에 실제로 있는 값"을 따라야 한다.** `applyCellTextEdit`는 shadow를 합성값이 아닌 `t.toString()`으로, scriptFieldEditor는 DATA 칸을 `getCellTextValue`로 맞춘다. 합성값(joinScript 표준형)과 Y가 다를 때(빈 줄 수·CR·원격이 추가한 선택지) shadow=합성값이면 Y≠DATA가 고착돼 다음 재조정이 엉뚱한 위치에 적용됐다(선택지 이모티콘 `:sq:`가 다른 줄에 박힘).
+9. **노드 패널은 렌더 시점의 행 객체(`r`)를 붙잡는다.** DATA를 교체하면(`adoptCollabData`) 반드시 `refreshOpenNodePanel()`로 패널을 새 행에 다시 그릴 것(스크롤 유지, 원격 삭제면 닫음). 안 하면 이후 패널 편집이 버려진 옛 행에 써져 저장 안 됨.
+10. **DATA를 다른 문서 내용(다른 프로젝트·서버 시드·새 프로젝트)으로 바꾸기 전엔 `detachCollab()`.** 세션이 살아 있으면 다음 저장/sync가 그 내용을 현재 문서에 써 버린다(switchProject·createNewProject·onCloudSignedIn·로그아웃에 적용). `startCollab`의 detach는 안전망(push 없음).
+11. **reconcile 규칙(ydoc.js):** 삭제는 "기준(shadow)엔 있었는데 내가 없앤 것"만(최상위 키·맵 키·배열 꼬리·헤더) — Y 기준으로 지우면 아직 반영 안 된 원격 추가분(새 노드 위치 등)이 지워진다. 시트·표(`rows`) 행은 **ID(지역ID / 0열) + 같은 ID의 몇 번째**로 맞춘다(`reconcileRowsByKey`) — 인덱스로 맞추면 원격이 행을 넣고 지운 뒤 내 편집이 엉뚱한 행에 가고, 동시 새 노드가 서로 덮였다. 같은 자리에서 ID만 바뀐 행은 삭제+추가가 아니라 편집으로(동시 ID 재부여 시 행 증식 방지). 내가 행 순서를 바꾼 경우만 인덱스 방식. 텍스트는 `applyTextDiff` 3-way(기준≠Y면 안 겹치는 원격 편집 보존, 이미 반영된 값은 재적용 안 함). 기준을 모르는 칸은 Y 현재값 기준 덮어쓰기(`textBase`).
+12. **같은 칸 동시 편집 = 행 한 칸 밀림.** 평범한 칸은 Y.Array에서 delete+insert라 두 사람(또는 모든 클라이언트의 같은 자동 정리)이 동시에 바꾸면 두 값이 다 들어가 뒤 칸이 밀린다. `healConcurrentCellDuplicates`가 헤더보다 긴 행에서 같은 origin·rightOrigin 항목 중 client ID 최대만 남긴다(push·adopt·open 때 실행). Yjs 내부(Item) 구조에 의존하니 yjs 메이저 버전을 바꾸면 확인할 것.
+13. **이탈 직전 편집:** `provider.destroy`는 `_flush`를 끝낸 **뒤에** `_destroyed`를 세운다(반대면 전환·로그아웃 직전 편집이 서버에 안 감). 앱은 `pagehide`/숨김 때 `flushPendingSave`로 0.7초 디바운스 대기 편집을 즉시 저장.
 
 ## 협업 수정 후 테스트 (항상)
 ES 모듈이라 **http로 서빙 필수**: `py -m http.server 8000`(또는 `python3 -m http.server`). 브라우저로:
 - `collab-selftest.html` — DATA↔Y 브리지(라운드트립·동시 병합). 제목이 `BRIDGE OK`여야 함.
 - `collab-selftest2.html` — provider(인메모리 Supabase 목): 시드/로드·broadcast·라이브 텍스트·**대용량 다중청크**·localStorage 복구. `PROVIDER OK`.
-- `collab-selftest3.html` — 스트레스: 행 삭제/추가/재정렬/동시, **마이그레이션 sparse 행**, 청크 재조립. `STRESS OK`.
+- `collab-selftest3.html` — 스트레스: 행 삭제/추가/재정렬/동시, **마이그레이션 sparse 행**, 청크 재조립, **기준이 뒤처진 저장(동시 새 노드·원격 삭제 후 편집·맵 키·헤더·아이템 표)**, 같은 칸 동시 편집 복구. `STRESS OK`.
+- `collab-selftest4.html` — **앱 E2E**: index.html 두 벌을 인메모리 Supabase 목에 붙여(프레임마다 메모리 localStorage — 실제 저장소·서버 미사용) 노드 패널 편집·편집 중 보류·동시 새 노드·목록 마지막 수정 시각 검증. `APP E2E OK`. index.html의 `supabase.min.js` 스크립트 태그나 `function renderNodePanel(topId, rowId){`를 바꾸면 이 테스트의 주입 지점도 고칠 것.
+- ⚠ `http.server`는 캐시 헤더가 없어 브라우저가 옛 모듈을 쓸 수 있다 → 결과가 이상하면 강력 새로고침(또는 DevTools 캐시 끄기).
 - 그리고 `index.html` 로드 후 콘솔 오류 0 확인. (Supabase 없이도 앱은 localStorage 모드로 뜬다.)
 
 ## 데이터 유실 수정 이력
-① 편집 중 원격 덮어씀 → 보류/blur 병합. ② 협업 실패 시 stale 시드 → localStorage 복구. ③ 부팅 flush 전 유실 → localStorage Yjs 캐시 복구. ④ 새 컬럼 편집 시 reconcile 크래시 → append. ⑤ 대용량 실시간 전파 실패 → 청크 개별 메시지+재조립. ⑥ **Supabase 오류 삼킴**: 클라이언트는 RLS/DB 오류를 throw가 아니라 `{error}`로 반환 → `provider.js`의 `_flush`가 미검사로 pending을 조용히 유실, `_snapshot`이 스냅샷 실패에도 doc_updates 삭제(치명), `_loadFromDb`가 읽기 실패를 빈 문서로 오인. → `.error` 검사 추가(실패 시 되돌림·재시도·경고, 스냅샷 성공 시에만 삭제, 읽기 실패+캐시없음 시 연결 중단으로 시드 덮어쓰기 방지). ⑦ **localStorage 용량 초과가 클라우드 저장 차단**: `persist()`에서 setItem이 QuotaExceededError로 죽으면 다음 줄 `scheduleCloudSave()`까지 건너뛰어, 제목(별도 직접 push) 외 편집이 서버에 안 올라감("제목 클릭해야 저장"). → `saveLocalData()`로 로컬 저장을 분리(예외 삼킴)하고 클라우드 저장은 항상 실행, 용량 초과 시 스냅샷/비활성 프로젝트 data 정리 후 재시도. ⑧ **CR 누적**(2026-09-29, "1주차 지역 베이스1" 319칸 `완료.\r\r\r\r\r\n…`): 앱 코드는 `\r`을 만들지 않는다(SheetJS 왕복도 안정). 엑셀 가져오기가 셀의 CR을 그대로 받아들여, 외부 도구 왕복(`\n`→`\r\n`)마다 CR이 한 개씩 쌓였고, `splitScript`의 `/\n+$/`가 `\r`을 못 벗겨 저장마다 빈 줄도 늘었다. 게다가 합성 편집 후 shadow=합성값이라 Y≠DATA가 고착됐다. → 함정 7·8대로 수정, 셀프테스트(BRIDGE 7절·PROVIDER ⑦)에 CRLF 회귀 추가.
+① 편집 중 원격 덮어씀 → 보류/blur 병합. ② 협업 실패 시 stale 시드 → localStorage 복구. ③ 부팅 flush 전 유실 → localStorage Yjs 캐시 복구. ④ 새 컬럼 편집 시 reconcile 크래시 → append. ⑤ 대용량 실시간 전파 실패 → 청크 개별 메시지+재조립. ⑥ **Supabase 오류 삼킴**: 클라이언트는 RLS/DB 오류를 throw가 아니라 `{error}`로 반환 → `provider.js`의 `_flush`가 미검사로 pending을 조용히 유실, `_snapshot`이 스냅샷 실패에도 doc_updates 삭제(치명), `_loadFromDb`가 읽기 실패를 빈 문서로 오인. → `.error` 검사 추가(실패 시 되돌림·재시도·경고, 스냅샷 성공 시에만 삭제, 읽기 실패+캐시없음 시 연결 중단으로 시드 덮어쓰기 방지). ⑦ **localStorage 용량 초과가 클라우드 저장 차단**: `persist()`에서 setItem이 QuotaExceededError로 죽으면 다음 줄 `scheduleCloudSave()`까지 건너뛰어, 제목(별도 직접 push) 외 편집이 서버에 안 올라감("제목 클릭해야 저장"). → `saveLocalData()`로 로컬 저장을 분리(예외 삼킴)하고 클라우드 저장은 항상 실행, 용량 초과 시 스냅샷/비활성 프로젝트 data 정리 후 재시도. ⑧ **CR 누적**(2026-09-29, "1주차 지역 베이스1" 319칸 `완료.\r\r\r\r\r\n…`): 앱 코드는 `\r`을 만들지 않는다(SheetJS 왕복도 안정). 엑셀 가져오기가 셀의 CR을 그대로 받아들여, 외부 도구 왕복(`\n`→`\r\n`)마다 CR이 한 개씩 쌓였고, `splitScript`의 `/\n+$/`가 `\r`을 못 벗겨 저장마다 빈 줄도 늘었다. 게다가 합성 편집 후 shadow=합성값이라 Y≠DATA가 고착됐다. → 함정 7·8대로 수정, 셀프테스트(BRIDGE 7절·PROVIDER ⑦)에 CRLF 회귀 추가. ⑨ **동시 편집이 적용 안 됨/방금 입력이 사라짐(2026-10-02)**: (a) 엔진이 원격 수신 때 shadow를 원격본으로 앞당겨, 편집 중 보류된 앱의 다음 저장이 남의 편집을 옛 값으로 되돌림 (b) 원격 반영이 DATA를 갈아끼워 0.7초 디바운스 안의 내 편집 소실, 열린 노드 패널은 옛 행 객체에 계속 써서 저장 안 됨 (c) 행을 인덱스로 맞춰 동시 새 노드가 서로 덮이고 원격 행 삭제 뒤 편집이 엉뚱한 행으로 (d) Y 기준 삭제로 원격 추가 키·헤더 소실 (e) provider.destroy가 _destroyed를 먼저 세워 전환/로그아웃 직전 편집 미저장 (f) 탭 닫기 직전 디바운스 대기 편집 미저장. → shadow 불변식+`sync`, 패널 재렌더, ID 기반 행 재조정·shadow 기준 삭제·3-way 텍스트, 같은 칸 동시 편집 복구, destroy flush 순서, pagehide 즉시 저장, `detachCollab`. 목록 "마지막 수정"은 협업 편집이 projects 행을 안 건드려 멈춰 있었음 → `fetchProjectActivity`(doc_updates·doc_snapshots 최신 시각).
 
 ## index.html 편집 팁
 주요 함수: `persist`·`markDirty`·`applyRemoteData`·`startCollab`·`onCloudSignedIn`·`rebuildProjectView`·`renderNodePanel`·`ensureBotAreaColumns`·`buildBotAreaSql`·`fieldInput/fieldSelect/fieldTextarea`(라벨로 `FIELD_HINTS` 자동 각주). **사용자가 병렬로 자주 푸시하니, 편집 전 `git pull` 하고 충돌 시 rebase.**

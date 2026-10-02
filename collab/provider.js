@@ -284,9 +284,13 @@ export class SupabaseYjsProvider {
   }
 
   async destroy() {
-    this._destroyed = true;
     clearTimeout(this._saveLocalTimer); this._saveLocal();
-    await this._flush();
+    // 마지막 편집을 서버에 확정한 "뒤에" 종료 표시. 예전엔 _destroyed를 먼저 세워 _flush가 바로 return —
+    // 프로젝트 전환·로그아웃 직전(0.4초 안)의 편집이 서버에 안 올라가고 이 브라우저 캐시에만 남았다.
+    clearTimeout(this._flushTimer); this._flushTimer = null;
+    try { await this._flush(); } catch (e) {}
+    this._destroyed = true;
+    clearTimeout(this._flushTimer); this._flushTimer = null;   // 실패 시 걸린 재시도 취소(캐시엔 이미 저장됨)
     if (this.awareness) {
       try { removeAwarenessStates(this.awareness, [this.awareness.clientID], 'local'); } catch (e) {}
       this.awareness.off('update', this._onAwareness);

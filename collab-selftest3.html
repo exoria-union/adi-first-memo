@@ -6,7 +6,7 @@
 <script type="importmap">{ "imports": { "yjs": "https://esm.sh/yjs@13" } }</script>
 <script type="module">
 import { Y } from './collab/deps.js';
-import { buildProject, readProject, reconcile } from './collab/ydoc.js';
+import { buildProject, readProject, reconcile, healConcurrentCellDuplicates } from './collab/ydoc.js';
 import { splitForBroadcast, u8ToB64, b64ToU8 } from './collab/provider.js';
 
 const out=document.getElementById('out'); let pass=0,fail=0;
@@ -55,6 +55,101 @@ try{
    ok('마이그레이션 헤더 전파',rbHeaders.length===9&&rbHeaders[8]==='갈림길 그룹');
    ok('sparse 새 열 값 전파',rbRows[1][8]==='GRP1');
    ok('다른 행은 새 열 비어있음(NULL/undefined)',rbRows[0][8]==null&&rbRows[2][8]==null);}
+
+  // ═══ 기준(shadow)이 뒤처진 저장: 원격 변경이 Y엔 도착했지만 앱 DATA엔 아직 반영 전(편집 중 보류·디바운스)에
+  //     내 편집을 저장하는 상황. 예전엔 행을 순번으로 맞추고 Y 기준으로 지워서 원격 편집이 덮이거나 지워졌다. ═══
+  const catchUp=(to,from)=>Y.applyUpdate(to,Y.encodeStateAsUpdate(from,Y.encodeStateVector(to)),'remote');
+
+  // ── 7. 동시 새 노드: 원격이 추가한 노드를 내 새 노드로 덮어쓰지 않음 ──
+  {const[A,B]=pair();const baseA=readProject(A);
+   const db=readProject(B);db.sheet1.rows.push(row('D','디','B가 만든'));reconcile(B,db,readProject(B),'app');
+   catchUp(A,B);                                                   // A의 Y엔 도착, A 앱 DATA는 아직 옛 기준
+   const da=clone(baseA);da.sheet1.rows.push(row('E','이','A가 만든'));reconcile(A,da,baseA,'app');
+   catchUp(B,A);
+   const ra=readProject(A).sheet1.rows;
+   ok('뒤처진 기준+새 노드: 양쪽 새 노드 모두 보존',ra.length===5&&ra.some(r=>r[1]==='D'&&r[5]==='B가 만든')&&ra.some(r=>r[1]==='E'&&r[5]==='A가 만든'));
+   ok('뒤처진 기준+새 노드: A===B 수렴',JSON.stringify(ra)===JSON.stringify(readProject(B).sheet1.rows));}
+
+  // ── 8. 원격이 앞쪽 행을 지운 뒤 내 편집이 "같은 노드"에 감(엉뚱한 행·중복 행 아님) ──
+  {const[A,B]=pair();const baseA=readProject(A);
+   const db=readProject(B);db.sheet1.rows.splice(0,1);reconcile(B,db,readProject(B),'app');
+   catchUp(A,B);
+   const da=clone(baseA);da.sheet1.rows[2][2]='씨(수정)';reconcile(A,da,baseA,'app');   // 옛 기준의 인덱스 2 = C
+   catchUp(B,A);
+   const rb=readProject(B).sheet1.rows;
+   ok('원격 행 삭제 뒤 내 편집: C에 적용, 행 2개',rb.length===2&&rb[0][1]==='B'&&rb[0][2]==='비'&&rb[1][1]==='C'&&rb[1][2]==='씨(수정)');}
+
+  // ── 9. 내가 중간 행 삭제 + 원격이 뒤 행 텍스트 편집(동시) → 원격 편집이 제 노드에 남음 ──
+  {const[A,B]=pair();const svA=Y.encodeStateVector(A),svB=Y.encodeStateVector(B);
+   const da=readProject(A);const sa=clone(da);da.sheet1.rows.splice(0,1);reconcile(A,da,sa,'app');
+   const db=readProject(B);const sb=clone(db);db.sheet1.rows[2][5]='c본문 (B추가)';reconcile(B,db,sb,'app');
+   exchange(A,B,svA,svB);
+   const ra=readProject(A).sheet1.rows;
+   ok('중간 삭제+원격 텍스트 편집: 편집이 C에 보존',ra.length===2&&ra[0][1]==='B'&&ra[0][5]==='b본문'&&ra[1][1]==='C'&&ra[1][5]==='c본문 (B추가)');
+   ok('중간 삭제+원격 텍스트 편집: 수렴',JSON.stringify(ra)===JSON.stringify(readProject(B).sheet1.rows));}
+
+  // ── 10. 중복 ID 정리(새 ID 부여)를 두 클라이언트가 동시에 해도 행이 불어나지 않음 ──
+  //        (같은 칸 동시 교체는 두 값이 모두 들어가 행이 한 칸 길어짐 → 세션이 병합 때 heal로 복구)
+  {const A=new Y.Doc();const s=sample();s.sheet1.rows.push(row('B','비2','다른 내용'));buildProject(A,s,'init');
+   const B=new Y.Doc();Y.applyUpdate(B,Y.encodeStateAsUpdate(A));
+   const svA=Y.encodeStateVector(A),svB=Y.encodeStateVector(B);
+   const fix=(doc)=>{const d=readProject(doc);const sh=clone(d);d.sheet1.rows[3][1]='B_2';reconcile(doc,d,sh,'app');}; // 앱의 결정적 ID 재부여 모사
+   fix(A);fix(B);exchange(A,B,svA,svB);
+   ok('동시 같은 칸 교체 직후엔 행이 한 칸 길어짐(복구 전 상태 확인)',readProject(A).sheet1.rows[3].length===HDR.length+1);
+   const s2A=Y.encodeStateVector(A),s2B=Y.encodeStateVector(B);
+   healConcurrentCellDuplicates(A,'app');healConcurrentCellDuplicates(B,'app');exchange(A,B,s2A,s2B); // 둘이 동시에 복구
+   const ra=readProject(A).sheet1.rows;
+   ok('동시 ID 재부여: 행 수 그대로(4)',ra.length===4);
+   ok('동시 ID 재부여: 새 ID 1개·내용 보존·수렴',ra.filter(r=>r[1]==='B_2').length===1&&ra[3][5]==='다른 내용'&&JSON.stringify(ra)===JSON.stringify(readProject(B).sheet1.rows));}
+
+  // ── 10-b. 두 사람이 같은 칸을 다른 값으로 동시에 바꿈 → 복구 후 한 값만, 뒤 칸 안 밀림, 수렴 ──
+  {const[A,B]=pair();const svA=Y.encodeStateVector(A),svB=Y.encodeStateVector(B);
+   const da=readProject(A);const sa=clone(da);da.sheet1.rows[1][4]='INCUNTR_03_STR';reconcile(A,da,sa,'app');
+   const db=readProject(B);const sb=clone(db);db.sheet1.rows[1][4]='INCUNTR_04_IG';reconcile(B,db,sb,'app');
+   exchange(A,B,svA,svB);
+   const s2A=Y.encodeStateVector(A),s2B=Y.encodeStateVector(B);
+   const healed=healConcurrentCellDuplicates(A,'app');healConcurrentCellDuplicates(B,'app');exchange(A,B,s2A,s2B);
+   const ra=readProject(A).sheet1.rows[1];
+   ok('같은 칸 다른 값 동시 편집: 복구됨',healed===1);
+   ok('같은 칸 다른 값 동시 편집: 행 길이·뒤 칸 정상',ra.length===HDR.length&&ra[5]==='b본문'&&(ra[4]==='INCUNTR_03_STR'||ra[4]==='INCUNTR_04_IG'));
+   ok('같은 칸 다른 값 동시 편집: 수렴',JSON.stringify(readProject(A))===JSON.stringify(readProject(B)));
+   ok('정상 문서엔 복구 없음',healConcurrentCellDuplicates(A,'app')===0);}
+
+  // ── 11. 원격이 추가한 맵 키(새 노드의 그래프 위치)를 지우지 않음 ──
+  {const A=new Y.Doc();const s=sample();s.gridPositions={A:{x:1,y:1}};buildProject(A,s,'init');
+   const B=new Y.Doc();Y.applyUpdate(B,Y.encodeStateAsUpdate(A));
+   const baseA=readProject(A);
+   const db=readProject(B);db.gridPositions.D={x:9,y:9};reconcile(B,db,readProject(B),'app');
+   catchUp(A,B);
+   const da=clone(baseA);da.gridPositions.A={x:2,y:2};reconcile(A,da,baseA,'app');
+   const g=readProject(A).gridPositions;
+   ok('뒤처진 기준: 원격이 추가한 맵 키 보존',!!g.D&&g.D.x===9);
+   ok('뒤처진 기준: 내 맵 편집 반영',g.A.x===2);}
+
+  // ── 12. 원격이 추가한 시트 헤더(마이그레이션)를 되돌리지 않음 ──
+  {const[A,B]=pair();const baseA=readProject(A);
+   const db=readProject(B);db.sheet1.headers.push('갈림길 그룹');reconcile(B,db,readProject(B),'app');
+   catchUp(A,B);
+   const da=clone(baseA);da.sheet1.rows[0][2]='에이!';reconcile(A,da,baseA,'app');
+   const pa=readProject(A);
+   ok('뒤처진 기준: 원격 헤더 추가 보존',pa.sheet1.headers.length===7&&pa.sheet1.headers[6]==='갈림길 그룹');
+   ok('뒤처진 기준: 내 편집 반영',pa.sheet1.rows[0][2]==='에이!');}
+
+  // ── 13. 아이템 표(0열 ID): 동시 추가가 서로 덮어쓰지 않음 ──
+  {const A=new Y.Doc();const s=sample();s.items={headers:['ID','이름'],rows:[['I1','검']]};buildProject(A,s,'init');
+   const B=new Y.Doc();Y.applyUpdate(B,Y.encodeStateAsUpdate(A));
+   const baseA=readProject(A);
+   const db=readProject(B);db.items.rows.push(['I2','방패']);reconcile(B,db,readProject(B),'app');
+   catchUp(A,B);
+   const da=clone(baseA);da.items.rows.push(['I3','활']);da.items.rows[0][1]='낡은 검';reconcile(A,da,baseA,'app');
+   catchUp(B,A);
+   const ri=readProject(A).items.rows;
+   ok('아이템 동시 추가: 둘 다 보존+편집 반영',ri.length===3&&ri.some(r=>r[0]==='I2')&&ri.some(r=>r[0]==='I3')&&ri[0][1]==='낡은 검');
+   ok('아이템 동시 추가: 수렴',JSON.stringify(ri)===JSON.stringify(readProject(B).items.rows));}
+
+  // ── 14. 내가 행 순서를 바꾸면(드묾) 인덱스 방식으로 그대로 반영 ──
+  {const[A]=pair();const d=readProject(A);const sh=clone(d);const t=d.sheet1.rows[0];d.sheet1.rows[0]=d.sheet1.rows[2];d.sheet1.rows[2]=t;reconcile(A,d,sh,'app');
+   ok('행 재정렬 반영',readProject(A).sheet1.rows.map(r=>r[1]).join('')==='CBA'&&readProject(A).sheet1.rows[0][5]==='c본문');}
 
   // ── 6. 대용량 업데이트 청킹: split → 다중 메시지 재조립 ──
   {const A=new Y.Doc();const big='가'.repeat(200000);A.getText('t').insert(0,big); // ~200K chars

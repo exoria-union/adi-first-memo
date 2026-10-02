@@ -120,11 +120,11 @@ try {
   const backend = makeBackend();
   const cliA = makeClient(backend,'A');
   const cliB = makeClient(backend,'B');
-  let remoteA=null, remoteB=null;
+  let remoteA=0, remoteB=0;   // onRemote 알림 횟수(엔진은 알림만 하고 앱이 sync로 병합본을 가져간다)
 
   // A가 신규 프로젝트를 열고 시드
   const A = await openProject({ supabase:cliA, projectId:'p1', user:{id:'ua',email:'a@x.com'},
-    seedData: clone(SAMPLE), onRemote:d=>{remoteA=d;}, onPresence:()=>{}, onStatus:()=>{} });
+    seedData: clone(SAMPLE), onRemote:()=>{remoteA++;}, onPresence:()=>{}, onStatus:()=>{} });
   ok('A 시드 후 데이터 존재', A.data.sheet1.rows.length===2);
   await wait(50); // flush(400ms 전) — 강제 확인용으로 조금 대기 후 수동 검증
   // 시드가 영속되도록 flush 대기
@@ -133,15 +133,16 @@ try {
 
   // B가 같은 프로젝트를 "로드"로 연다(시드 아님)
   const B = await openProject({ supabase:cliB, projectId:'p1', user:{id:'ub',email:'b@x.com'},
-    seedData: clone(SAMPLE), onRemote:d=>{remoteB=d;}, onPresence:()=>{}, onStatus:()=>{} });
+    seedData: clone(SAMPLE), onRemote:()=>{remoteB++;}, onPresence:()=>{}, onStatus:()=>{} });
   ok('B 로드 후 A와 동일', JSON.stringify(A.data.sheet1)===JSON.stringify(B.data.sheet1));
 
   // A가 편집 -> push -> B가 broadcast로 수신
   {
+    remoteB = 0;
     const d = clone(A.data); d.sheet1.rows[0][2]='본당(A수정)';
     A.push(d);
     await wait(120);
-    ok('A 편집이 B로 실시간 전파', remoteB && remoteB.sheet1.rows[0][2]==='본당(A수정)');
+    ok('A 편집이 B로 실시간 전파(+onRemote 알림)', remoteB > 0 && readProject(B.ydoc).sheet1.rows[0][2]==='본당(A수정)');
   }
 
   // 서로 다른 행 동시 편집 -> 둘 다
@@ -166,9 +167,8 @@ try {
     ok('라이브 입력이 Y.Text에 반영', readProject(A.ydoc).sheet1.rows[1][SCRIPT_COL].includes('실시간타이핑'));
     ok('라이브 입력이 B로 전파', readProject(B.ydoc).sheet1.rows[1][SCRIPT_COL].includes('실시간타이핑'));
     // 원격(B)이 같은 셀을 편집 -> A의 textarea에 반영(커서 보존 경로)
-    const db = clone(B.data);
-    // B.data may be stale; read fresh
-    const bd = readProject(B.ydoc); bd.sheet1.rows[1][SCRIPT_COL]='원격교체본'; B.push(bd);
+    const bd = B.readCurrent();   // 앱처럼 병합본을 기준으로 채택한 뒤 편집
+    bd.sheet1.rows[1][SCRIPT_COL]='원격교체본'; B.push(bd);
     await wait(150);
     ok('원격 편집이 A의 입력요소에 반영', ta.value.includes('원격교체본') || readProject(A.ydoc).sheet1.rows[1][SCRIPT_COL]==='원격교체본');
     unbind();
@@ -177,7 +177,7 @@ try {
   // ---- 합성 스크립트 필드(본문 접두부 + 선택지 접미부) 프리미티브 ----
   {
     const composed0 = '나선계단 입구.\n\n▶[지역/종탑]';
-    const d = readProject(A.ydoc); d.sheet1.rows[1][SCRIPT_COL] = composed0; A.push(d);
+    const d = A.readCurrent(); d.sheet1.rows[1][SCRIPT_COL] = composed0; A.push(d);
     await wait(120);
     ok('getCellTextValue 반환', A.getCellTextValue('LUM_BELL', SCRIPT_COL) === composed0);
 
@@ -191,8 +191,9 @@ try {
     ok('본문 편집이 B로 전파', readProject(B.ydoc).sheet1.rows[1][SCRIPT_COL] === newComposed);
 
     // 동시: A가 본문, B가 선택지 편집 -> 둘 다 병합
+    const bd = B.readCurrent();                  // B 앱이 마지막으로 받아 둔 상태(A의 다음 편집 전)
     A.applyCellTextEdit('LUM_BELL', SCRIPT_COL, newNarr, '[A]'+newNarr, '[A]'+newNarr+'\n\n▶[지역/종탑]');
-    const bd = readProject(B.ydoc); bd.sheet1.rows[1][SCRIPT_COL] = newNarr + '\n\n▶[지역/종탑]\n▶[지역/신학교]'; B.push(bd);
+    bd.sheet1.rows[1][SCRIPT_COL] = newNarr + '\n\n▶[지역/종탑]\n▶[지역/신학교]'; B.push(bd);
     await wait(160);
     const fa = readProject(A.ydoc).sheet1.rows[1][SCRIPT_COL];
     const fb = readProject(B.ydoc).sheet1.rows[1][SCRIPT_COL];
@@ -203,7 +204,7 @@ try {
     // observeCellText 원격 발화
     let fired = null;
     const un = A.observeCellText('LUM_BELL', SCRIPT_COL, function(s){ fired = s; });
-    const bd2 = readProject(B.ydoc); bd2.sheet1.rows[1][SCRIPT_COL] = fb + ' (원격추가)'; B.push(bd2);
+    const bd2 = B.readCurrent(); bd2.sheet1.rows[1][SCRIPT_COL] = fb + ' (원격추가)'; B.push(bd2);
     await wait(160);
     ok('observeCellText 원격 변경 수신', fired && fired.indexOf('원격추가') !== -1);
     un();
@@ -212,14 +213,14 @@ try {
   // ---- 대용량 업데이트: 여러 청크(개별 메시지)로 방송 → B에서 재조립 ----
   {
     const big = '나'.repeat(150000);
-    const d = readProject(A.ydoc); d.sheet1.rows[0][SCRIPT_COL] = big; A.push(d);
+    const d = A.readCurrent(); d.sheet1.rows[0][SCRIPT_COL] = big; A.push(d);
     await wait(250);
     ok('대용량 편집이 다중청크로 B에 전파', (readProject(B.ydoc).sheet1.rows[0][SCRIPT_COL]||'').length === big.length);
   }
 
   // ---- ③ 부팅 복구: Supabase가 비어도 localStorage 캐시로 미-flush 편집 복구 ----
   {
-    const d = readProject(A.ydoc); d.toolTitle='복구테스트제목'; A.push(d);
+    const d = A.readCurrent(); d.toolTitle='복구테스트제목'; A.push(d);
     A.provider._saveLocal();                 // localStorage['ydoc_local_p1']에 동기 확정
     const backend2 = makeBackend();          // 완전히 빈 새 서버(마지막 편집이 flush 안 된 상황 모사)
     const cliC = makeClient(backend2,'C');
@@ -238,7 +239,7 @@ try {
     await wait(500);
     const before = be.doc_updates.length;
     be.fail = (op,t)=> op==='insert' && t==='doc_updates';   // 이후 doc_updates insert 전부 실패(RLS 모사)
-    const d = readProject(S.ydoc); d.toolTitle='저장실패편집'; S.push(d);
+    const d = S.readCurrent(); d.toolTitle='저장실패편집'; S.push(d);
     await wait(700);                                          // flush 시도 → 실패
     ok('저장 실패 시 save-error 상태 발생', status.includes('save-error'));
     ok('저장 실패해도 doc_updates 안 늘어남(조용한 유실 아님)', be.doc_updates.length===before);
@@ -256,7 +257,7 @@ try {
     const S = await openProject({ supabase:cli, projectId:'psnap', user:{id:'uf',email:'f@x.com'},
       seedData: clone(SAMPLE), onRemote:()=>{}, onPresence:()=>{}, onStatus:()=>{} });
     await wait(500);
-    for (let i=0;i<3;i++){ const d=readProject(S.ydoc); d.toolTitle='v'+i; S.push(d); await wait(40); }
+    for (let i=0;i<3;i++){ const d=S.readCurrent(); d.toolTitle='v'+i; S.push(d); await wait(40); }
     await S.provider._flush();
     const updatesBefore = be.doc_updates.length;
     ok('스냅샷 전 업데이트 로그 존재', updatesBefore>0);
@@ -344,6 +345,71 @@ try {
     ok('합성 편집 후 구조 편집: Y가 의도한 스크립트와 정확히 일치', P.getCellTextValue('LUM_MAIN', SCRIPT_COL) === want);
     ok('합성 편집 후 구조 편집: Q도 동일', readProject(Q.ydoc).sheet1.rows[0][SCRIPT_COL] === want);
     await P.destroy(); await Q.destroy();
+  }
+
+  // ---- ⑧ 동시 편집 유실(2026-10-02): 원격 편집이 도착했지만 앱이 아직 반영 전(편집 중 보류·저장 디바운스)인데
+  //      내 옛 DATA로 저장 → 예전엔 엔진이 원격 수신 때 shadow를 앞당겨, 이 저장이 남의 편집을 되돌렸다. ----
+  {
+    const be = makeBackend();
+    try{ localStorage.removeItem('ydoc_local_pstale'); }catch(e){}
+    let qNotified = 0;
+    const mk = (nm, onR) => openProject({ supabase: makeClient(be, nm), projectId:'pstale', user:{id:'u'+nm,email:nm+'@x'},
+      seedData: clone(SAMPLE), onRemote: onR || (()=>{}), onPresence(){}, onStatus(){} });
+    const P = await mk('P');
+    await wait(500);
+    const Q = await mk('Q', ()=>{ qNotified++; });
+    const dQ = clone(Q.readCurrent());           // Q 앱의 DATA(앱은 항상 복제본을 쓴다)
+
+    const dP = clone(P.readCurrent());
+    dP.sheet1.rows[0][2] = '본당(P)';
+    dP.sheet1.rows[1][SCRIPT_COL] = dP.sheet1.rows[1][SCRIPT_COL] + ' (P추가)';
+    dP.sheet1.rows.push([null,'LUM_NEWP','새노드P','','C','P가 만든 노드']);
+    P.push(dP);
+    await wait(150);                             // Q의 Y엔 도착, Q 앱은 편집 중이라 반영 보류
+    ok('원격 변경 시 onRemote 알림', qNotified > 0);
+
+    dQ.sheet1.rows[1][2] = '종탑(Q)';
+    dQ.sheet1.rows[1][SCRIPT_COL] = 'Q앞 ' + dQ.sheet1.rows[1][SCRIPT_COL];
+    dQ.sheet1.rows.push([null,'LUM_NEWQ','새노드Q','','C','Q가 만든 노드']);
+    Q.push(dQ);                                  // 보류 중 persist(옛 기준의 DATA로 저장)
+    await wait(150);
+    const fp = readProject(P.ydoc).sheet1.rows, fq = readProject(Q.ydoc).sheet1.rows;
+    ok('보류 중 내 저장이 남의 편집(행0 이름)을 되돌리지 않음', fq[0][2] === '본당(P)');
+    ok('같은 텍스트 칸 동시 편집 둘 다 보존', fq[1][SCRIPT_COL] === 'Q앞 나선계단 입구. (P추가)');
+    ok('내 다른 칸 편집 반영', fq[1][2] === '종탑(Q)');
+    ok('동시에 만든 새 노드 둘 다 보존', fq.some(r=>r[1]==='LUM_NEWP') && fq.some(r=>r[1]==='LUM_NEWQ'));
+    ok('P/Q 수렴', JSON.stringify(fp) === JSON.stringify(fq));
+    const merged = Q.sync(dQ);                   // 편집이 끝나 보류 해제: 병합본 채택
+    ok('sync 병합본에 양쪽 편집 포함', merged.sheet1.rows[0][2]==='본당(P)' && merged.sheet1.rows[1][2]==='종탑(Q)');
+
+    // 라이브 바인딩: 원격이 바꾼 칸을 내가 안 건드린 채 옛 DATA로 다른 칸을 저장해도 되돌리지 않음
+    const ta = document.getElementById('ta');
+    const dP2 = clone(P.readCurrent());
+    const unb = P.bindText(ta, 'LUM_MAIN', SCRIPT_COL);
+    const dQ2 = clone(Q.readCurrent()); dQ2.sheet1.rows[0][SCRIPT_COL] = dQ2.sheet1.rows[0][SCRIPT_COL] + ' (Q라이브)'; Q.push(dQ2);
+    await wait(150);
+    ok('원격 편집이 바인딩된 입력칸에 반영', ta.value.indexOf('(Q라이브)') !== -1);
+    dP2.sheet1.rows[1][2] = '종탑(P2)'; P.push(dP2);
+    await wait(150);
+    ok('바인딩 칸의 원격 편집이 내 저장으로 되돌려지지 않음', readProject(Q.ydoc).sheet1.rows[0][SCRIPT_COL].indexOf('(Q라이브)') !== -1 && readProject(Q.ydoc).sheet1.rows[1][2] === '종탑(P2)');
+    unb();
+    await P.destroy(); await Q.destroy();
+  }
+
+  // ---- ⑨ 종료(destroy) 직전 편집도 서버에 확정 — 예전엔 _destroyed를 먼저 세워 마지막 flush가 건너뛰어졌다 ----
+  {
+    const be = makeBackend();
+    try{ localStorage.removeItem('ydoc_local_pclose'); }catch(e){}
+    const mk = (nm) => openProject({ supabase: makeClient(be, nm), projectId:'pclose', user:{id:'u'+nm,email:nm+'@x'},
+      seedData: clone(SAMPLE), onRemote(){}, onPresence(){}, onStatus(){} });
+    const S = await mk('H');
+    await wait(500);
+    const d = clone(S.readCurrent()); d.toolTitle = '종료직전편집'; S.push(d);
+    await S.destroy();                           // flush 대기(0.4초) 전에 종료(프로젝트 전환·로그아웃)
+    try{ localStorage.removeItem('ydoc_local_pclose'); }catch(e){}   // 로컬 캐시 없이 서버만으로 확인
+    const R = await mk('H2');
+    ok('종료 직전 편집이 서버에 저장됨', readProject(R.ydoc).toolTitle === '종료직전편집');
+    await R.destroy();
   }
 
   await A.destroy(); await B.destroy();
