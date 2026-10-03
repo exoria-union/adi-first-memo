@@ -4382,7 +4382,7 @@ var FIELD_HINTS = {
   '종족이 아닐 때 스크립트': '해당 종족이 아닐 때 보여줄 글 · 길이 제한 없음 (race_fail_cn)',
   '비고': '운영진용 메모 · 게임에는 안 보임 (area_comment)',
   '개방 조건': '숫자(정수)만 · 개방에 필요한 조건값 · 예: 3 (open_target · INT)',
-  '개방일': '이 날짜(오늘 ≥ 개방일)부터 지역이 열립니다 · 이후 계속 개방 · 비우면 미지정(NULL) · YYYY-MM-DD (open_date · DATE)',
+  '개방일': '이 날짜(오늘 ≥ 개방일)부터 지역이 열립니다 · 이후 계속 개방 · 비우면 2000-01-01(처음부터 개방)로 내보냅니다 · YYYY-MM-DD (open_date · DATE)',
   '최초 유일 지급 여부': '최초 탐사 1인에게만 유일 아이템을 줄지 (first_drop_yn)',
   '유일 아이템 소진 스크립트': '이미 최초 1인이 유일 아이템을 가져간 뒤, 후발 주자가 볼 글 (drop_fail_cn)',
   '갈림길 그룹': '배타적 갈림길 그룹 키 · 같은 값끼리 회차당 택1 · 최대 64자 · 비우면 미적용 (branch_group)',
@@ -7292,6 +7292,8 @@ function openEnemySqlModal(){ document.getElementById('enemySqlReport').innerHTM
   var copy=document.getElementById('btnEnemySqlCopy'); if(copy) copy.addEventListener('click', function(){ var ta=document.getElementById('enemySqlOutput'); if(!ta.value) return; ta.select(); try{ document.execCommand('copy'); toast('복사했습니다.'); }catch(e){} });
   var dl=document.getElementById('btnEnemySqlDownload'); if(dl) dl.addEventListener('click', function(){ var v=document.getElementById('enemySqlOutput').value||''; if(!v) return; var blob=new Blob([v],{type:'text/sql'}); var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='bot_enemy.sql'; a.click(); setTimeout(function(){URL.revokeObjectURL(a.href);},1000); });
 })();
+// 개방일(open_date)을 비운 지역은 이 날짜로 내보낸다 = 처음부터 개방. 봇은 NULL 을 '미개방'으로 보아 그 지역에 영영 못 들어간다.
+var OPEN_DATE_DEFAULT = '2000-01-01';
 var BOT_AREA_COLS =['up_area_id','start_point','parent_area_id','area_id','area_name','adjacent_id','incounter_cd','area_cn','target_roll','succ_cn','fail_cn','open_race','race_fail_cn','key_yn','key_id','item_id','item_drop','gold_drop','area_exp','deal_item_id','deal_gold','first_check_yn','check_fail_cn','open_target','area_comment','first_drop_yn','drop_fail_cn','branch_group','no_consume_yn','key_all_yn','open_date'];
 
 function sqlDeriveUpAreaId(){
@@ -7315,7 +7317,7 @@ function buildBotAreaSql(opts){
   var idx={}; H.forEach(function(h,i){ idx[h]=i; });
   function col(row,name){ var i=idx[name]; return (i==null)?null:row[i]; }
   var LIMIT={parent_area_id:100,area_id:100,area_name:100,adjacent_id:100,key_id:100,item_id:100,deal_item_id:100,incounter_cd:35,open_race:5,item_drop:10,branch_group:64};
-  var errors=[],warnings=[],valueRows=[],seen={},skipped=0,moveSkipped=0,autoRetry=0;
+  var errors=[],warnings=[],valueRows=[],seen={},skipped=0,moveSkipped=0,autoRetry=0,openDateDefaulted=0;
   var upAreaId=(opts.upAreaId||'').trim(), startId=(opts.startPoint||'').trim();
 
   if(!upAreaId) warnings.push("up_area_id(최상위 지역 ID)가 비어 있어 모든 행 up_area_id=NULL로 들어갑니다.");
@@ -7345,8 +7347,9 @@ function buildBotAreaSql(opts){
     function pYN(cn,h){ var s=(col(row,h)==null?'':String(col(row,h))).trim().toUpperCase(); if(s==='Y'){vals[cn]="'Y'";} else if(s===''||s==='N'){vals[cn]="'N'";} else {warnings.push(label+': '+cn+' "'+s.slice(0,8)+'" → N 처리'); vals[cn]="'N'";} }
     // 빈 값을 컬럼 기본값(def)으로 매핑하는 Y/N (예: key_all_yn 기본 'Y')
     function pYND(cn,h,def){ var d=(String(def).toUpperCase()==='Y')?'Y':'N'; var s=(col(row,h)==null?'':String(col(row,h))).trim().toUpperCase(); if(s==='Y'){vals[cn]="'Y'";} else if(s==='N'){vals[cn]="'N'";} else if(s===''){vals[cn]="'"+d+"'";} else {warnings.push(label+': '+cn+' "'+s.slice(0,8)+'" → '+d+' 처리'); vals[cn]="'"+d+"'";} }
-    // DATE 칸: 비우면 NULL, YYYY-MM-DD면 그대로, 형식 오류면 행 제외(wSqlDate 재사용)
-    function pDate(cn,h){ var d=wSqlDate(col(row,h)); if(d.err){ e.push(cn+' 날짜 형식 오류(YYYY-MM-DD)'); vals[cn]='NULL'; return; } vals[cn]=d.sql; }
+    // DATE 칸: 비우면 def(없으면 NULL), YYYY-MM-DD면 그대로, 형식 오류면 행 제외(wSqlDate 재사용)
+    var dateDefaulted=false;
+    function pDate(cn,h,def){ var raw=col(row,h); if(def && String(raw==null?'':raw).trim()===''){ raw=def; dateDefaulted=true; } var d=wSqlDate(raw); if(d.err){ e.push(cn+' 날짜 형식 오류(YYYY-MM-DD)'); vals[cn]='NULL'; return; } vals[cn]=d.sql; }
 
     // area_id (필수·varchar100)
     if(areaId.length>100)e.push('area_id 길이>100'); if(sqlHasAstral(areaId))e.push('area_id에 4바이트 문자'); vals.area_id="'"+sqlEscape(areaId)+"'";
@@ -7378,11 +7381,12 @@ function buildBotAreaSql(opts){
     pStr('branch_group','갈림길 그룹');
     pYN('no_consume_yn','탐사 기회 미소모 여부');            // 기본 N
     pYND('key_all_yn','키아이템 전원 소모 여부','Y');        // 기본 Y
-    pDate('open_date','개방일');                            // DATE nullable, NULL=미개방
+    pDate('open_date','개방일',OPEN_DATE_DEFAULT);          // 비우면 2000-01-01(처음부터 개방). 봇은 NULL 을 미개방으로 본다
 
     if(e.length){ errors.push(label+': '+e.join(', ')); continue; }
     valueRows.push(vals);
     if(addRetry) autoRetry++;
+    if(dateDefaulted) openDateDefaulted++;
   }
 
   var mode=opts.mode||'ignore';
@@ -7396,7 +7400,7 @@ function buildBotAreaSql(opts){
     sql+=head+'\n'+colList+' VALUES\n'+chunk.join(',\n')+tail+';\n\n';
   }
   if(shape) shape.warnings.forEach(function(w){ warnings.push(w); });
-  return { sql:sql.trim(), report:{ total:rows.length, inserted:valueRows.length, errorRows:errors.length, skipped:skipped, moveSkipped:moveSkipped, autoRetry:autoRetry, botShape: shape ? shape.counts : null, errors:errors, warnings:warnings } };
+  return { sql:sql.trim(), report:{ total:rows.length, inserted:valueRows.length, errorRows:errors.length, skipped:skipped, moveSkipped:moveSkipped, autoRetry:autoRetry, openDateDefaulted:openDateDefaulted, botShape: shape ? shape.counts : null, errors:errors, warnings:warnings } };
 }
 
 (function wireSqlExport(){
@@ -7448,6 +7452,7 @@ function buildBotAreaSql(opts){
     if(rp.skipped) html+=' · '+rp.skipped+'행 지역ID없음';
     if(rp.moveSkipped) html+=' · '+rp.moveSkipped+"행 '이동한다' 제외";
     if(rp.autoRetry) html+=' · 다이스 '+rp.autoRetry+'행 실패 스크립트에 '+esc(AUTO_RETRY_CHOICE)+' 자동 추가';
+    if(rp.openDateDefaulted) html+=' · 개방일 빈 '+rp.openDateDefaulted+'행은 '+OPEN_DATE_DEFAULT+'(처음부터 개방)';
     var bsc=rp.botShape;
     if(bsc && (bsc.choices||bsc.names||bsc.retry)){
       var bsParts=[];
