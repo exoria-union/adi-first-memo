@@ -169,6 +169,49 @@ try{
   br.command('포기'); br.command('종탑'); var bR2=br.command('오른쪽길');
   ok('갈림길: 포기 후 새 회차엔 오른쪽길 가능', bR2.msg.includes('오른쪽 길로'));
 
+  // 24) 봇 모양 변환(bot-shape.js — SQL 내보내기와 공용): 다이스 선택지 스탯 자동, 이름 끝 /스탯 떼기, ▶[지역/재도전]
+  const BS=window.BotShape;
+  ok('봇모양: 공용 규칙 로드', !!BS);
+  ok('봇모양: 코드→스탯 WIS', JSON.stringify(BS.diceStats('INCUNTR_03_WIS'))==='["지혜"]');
+  ok('봇모양: 코드→스탯 ALL은 셋 다', JSON.stringify(BS.diceStats('INCUNTR_03_ALL'))==='["힘","솜씨","지혜"]');
+  ok('봇모양: 복합 코드는 봇 순서(힘·지혜·솜씨)', JSON.stringify(BS.diceStats('INCUNTR_03_DEX,INCUNTR_03_WIS'))==='["지혜","솜씨"]');
+  ok('봇모양: 다이스 아니면 없음', BS.diceStats('INCUNTR_02').length===0);
+  const rows2=[
+    mk({'지역ID':'MSN','지역명':'임무처','종류 코드':'INCUNTR_00','스크립트(내용)':'어디로 갈까?\n\n▶[지역/정산 작업/지혜]\n▶[지역/분류 작업] :sq:\n▶[지역/라벨 작업/힘]\n▶[지역/자유 판정]\n▶[지역/복합 판정]\n▶[지역/간 맞추기/솜씨]\n▶[지역/절벽 오르기]\n▶[지역/평범한 방]'}),
+    mk({'지역ID':'MSN_01','상위지역ID(부모ID)':'MSN','지역명':'정산 작업/지혜','종류 코드':'INCUNTR_03_WIS','주사위 목표치':1,'성공 스크립트':'정산 성공!','실패 스크립트':'틀렸다.\n\n▶[지역/재도전]'}),
+    mk({'지역ID':'MSN_02','상위지역ID(부모ID)':'MSN','지역명':'분류 작업','종류 코드':'INCUNTR_03_STR','주사위 목표치':1,'성공 스크립트':'분류 성공!'}),
+    mk({'지역ID':'MSN_03','상위지역ID(부모ID)':'MSN','지역명':'라벨 작업','종류 코드':'INCUNTR_03_DEX','주사위 목표치':1,'성공 스크립트':'라벨 성공!'}),
+    mk({'지역ID':'MSN_04','상위지역ID(부모ID)':'MSN','지역명':'자유 판정','종류 코드':'INCUNTR_03_ALL','주사위 목표치':1,'성공 스크립트':'자유 성공!'}),
+    mk({'지역ID':'MSN_05','상위지역ID(부모ID)':'MSN','지역명':'복합 판정','종류 코드':'INCUNTR_03_DEX,INCUNTR_03_WIS','주사위 목표치':1,'성공 스크립트':'복합 성공!'}),
+    mk({'지역ID':'MSN_06','상위지역ID(부모ID)':'MSN','지역명':'간 맞추기/솜씨','종류 코드':'INCUNTR_03_WIS','주사위 목표치':1,'성공 스크립트':'간 성공!'}),
+    mk({'지역ID':'MSN_07','상위지역ID(부모ID)':'MSN','지역명':'절벽 오르기/힘','종류 코드':'INCUNTR_03_STR','주사위 목표치':7,'성공 스크립트':'올랐다!','실패 스크립트':'떨어졌다.\n\n▶[지역/재도전]'}),
+    mk({'지역ID':'MSN_08','상위지역ID(부모ID)':'MSN','지역명':'평범한 방','종류 코드':'INCUNTR_02','스크립트(내용)':'평범하다.\n\n▶[지역/임무처]'}),
+  ];
+  const sh=BS.create(rows2,H), root=sh.script(rows2[0][ci['스크립트(내용)']], rows2[0]);
+  ok('봇모양: 이름 끝 /스탯 떼기', sh.areaName(rows2[1])==='정산 작업' && sh.areaName(rows2[7])==='절벽 오르기');
+  ok('봇모양: 꼬리표 없는 이름은 그대로', sh.areaName(rows2[2])==='분류 작업' && sh.areaName(rows2[8])==='평범한 방');
+  ok('봇모양: 이름에 /스탯 있던 선택지 → 뗀 이름+스탯', root.includes('▶[지역/정산 작업/지혜]\n'));
+  ok('봇모양: 스탯 없는 선택지에 종류 코드 스탯 + 이모티콘 보존', root.includes('▶[지역/분류 작업/힘] :sq:'));
+  ok('봇모양: 코드와 다른 스탯은 코드 기준', root.includes('▶[지역/라벨 작업/솜씨]') && !root.includes('라벨 작업/힘'));
+  ok('봇모양: ALL은 세 스탯 선택지', root.includes('▶[지역/자유 판정/힘]\n▶[지역/자유 판정/솜씨]\n▶[지역/자유 판정/지혜]'));
+  ok('봇모양: 복합 코드는 스탯별 선택지', root.includes('▶[지역/복합 판정/지혜]\n▶[지역/복합 판정/솜씨]'));
+  ok('봇모양: 이름 꼬리표가 코드와 다르면 코드 기준', root.includes('▶[지역/간 맞추기/지혜]') && !root.includes('간 맞추기/솜씨'));
+  ok('봇모양: 다이스 아닌 선택지는 그대로', root.endsWith('▶[지역/평범한 방]'));
+  ok('봇모양: 경고(선택지 스탯 불일치·이름 꼬리표 불일치)', sh.warnings.some(w=>w.includes('MSN')&&w.includes('라벨 작업/힘')) && sh.warnings.some(w=>w.includes('MSN_06')));
+  const bsFail=sh.script(rows2[1][ci['실패 스크립트']], rows2[1]);
+  ok('봇모양: ▶[지역/재도전] → ▶[재도전/지역]', bsFail==='틀렸다.\n\n▶[재도전/지역]');
+  ok('봇모양: 변환된 재도전에는 자동 재도전 중복 안 붙음', withAutoRetryChoice(bsFail,'INCUNTR_03_WIS')===bsFail);
+  ok('봇모양: 집계', sh.counts.names===3 && sh.counts.retry===1);
+  // 테스트 모드도 같은 모양으로 돈다: ▶[지역/정산 작업/지혜] 입력 → 지역 '정산 작업' + 지혜 판정
+  var bm=createSim({rows:rows2,headers:H},{character:{wis:6,str:6,ch_name:'테스터'}});
+  var b0=bm.command('임무처');
+  ok('테스트모드: 선택지에 스탯 붙은 이름', b0.choices.includes('정산 작업/지혜') && b0.choices.includes('분류 작업/힘'));
+  var pq=pi('▶[지역/정산 작업/지혜]'); var b1=bm.command(pq.name,pq.action,pq.potion);
+  ok('테스트모드: [지역/정산 작업/지혜] → 이름 찾고 지혜 판정 성공', b1.msg.includes('정산 성공!'));
+  var bf=createSim({rows:rows2,headers:H},{character:{str:6}}); bf.command('임무처');
+  var pf=pi('▶[지역/절벽 오르기/힘]'); var b2=bf.command(pf.name,pf.action,pf.potion);
+  ok('테스트모드: 실패 시 ▶[재도전/지역] 버튼(▶[지역/재도전] 변환)', b2.status==='FAIL' && b2.choices.some(c=>c&&c.cmd==='재도전/지역'));
+
   log('\n=== '+pass+' passed, '+fail+' failed ===',fail?'f':'p');
   document.title=fail===0?'SIM OK':'SIM FAIL';
 }catch(e){log('ERROR: '+(e&&e.stack||e),'f');document.title='SIM ERROR';}

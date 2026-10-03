@@ -12,6 +12,9 @@
 //  - 아이템 지급은 인벤토리에 반영 + 이름 표시(편집기 items로 해석). 소모도 반영.
 // ============================================================================
 
+// 편집기 → 봇 모양 변환 규칙(SQL 내보내기와 공용 단일 원본). 클래식 스크립트지만 import하면 window.BotShape를 만든다.
+import './bot-shape.js';
+
 // bot_area 필드 → 편집기 시트 헤더
 const COL = {
   parent_area_id: '상위지역ID(부모ID)', area_id: '지역ID', area_name: '지역명',
@@ -76,13 +79,16 @@ export function buildAreas(rows, headers) {
   const get = (row, field) => { const i = idx[COL[field]]; return i == null ? null : row[i]; };
   const areas = [];      // bot_area-shaped
   const byId = {};
+  // SQL 내보내기와 같은 봇 모양: 다이스 이름 끝 /스탯 떼기, 다이스로 가는 선택지에 종류 코드 스탯, ▶[지역/재도전] → ▶[재도전/지역]
+  const shape = globalThis.BotShape ? globalThis.BotShape.create(rows, headers) : null;
   rows.forEach(row => {
     const a = {};
     for (const f in COL) a[f] = get(row, f);
     if (a.area_id == null || String(a.area_id).trim() === '') return;
     a.area_id = String(a.area_id);
     a.parent_area_id = a.parent_area_id == null ? '' : String(a.parent_area_id);
-    a.area_name = safeStr(a.area_name);
+    a.area_name = shape ? shape.areaName(row) : safeStr(a.area_name);
+    if (shape) ['area_cn', 'succ_cn', 'fail_cn', 'race_fail_cn', 'check_fail_cn', 'drop_fail_cn'].forEach(f => { a[f] = shape.script(a[f], row); });
     a.fail_cn = withAutoRetryChoice(a.fail_cn, a.incounter_cd);   // SQL 내보내기와 같은 fail_cn
     areas.push(a); byId[a.area_id] = a;
   });
