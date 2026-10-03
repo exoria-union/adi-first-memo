@@ -1,0 +1,260 @@
+<meta charset="utf-8">
+<title>서버 따라잡기 자체 테스트</title>
+<style>
+  body{font:13px/1.6 ui-monospace,Consolas,monospace;background:#0f1116;color:#e9eaf0;padding:20px;}
+  .pass{color:#5cc185;} .fail{color:#f0846a;font-weight:700;} h1{font-size:15px;} b{color:#7d97ff;}
+</style>
+<h1>서버 따라잡기(놓친 실시간 방송 · 재연결 · 스냅샷 압축) 자체 테스트 (Supabase 목)</h1>
+<pre id="out"></pre>
+<script type="importmap">
+{ "imports": { "yjs": "https://esm.sh/yjs@13" } }
+</script>
+<script type="module">
+// 실시간 방송(broadcast)은 보장 전송이 아니다(소켓 끊김·백그라운드 탭·한도 초과 시 유실).
+// 예전엔 연결 직후 한 번만 DB를 읽고 이후엔 방송에만 의존해서,
+//   ① 방송 하나를 놓치면 그 사람의 이후 편집까지(같은 클라이언트의 순서 의존) 화면·SQL 내보내기에 영영 안 보였고
+//   ② 재연결해도 상대가 이미 나갔으면 따라잡을 방법이 없었고
+//   ③ 놓친 상태로 스냅샷 압축을 하면 놓친 편집이 서버 로그에서 지워져 사라졌고
+//   ④ 늦게 계산된 옛 스냅샷이 새 스냅샷을 덮을 수 있었다.
+import { readProject } from './collab/ydoc.js';
+import { openProject } from './collab/index.js';
+
+const out = document.getElementById('out');
+let pass = 0, fail = 0;
+const log = (m, cls) => { out.innerHTML += (cls ? `<span class="${cls}">${m}</span>` : m) + '\n'; };
+const ok = (n, c) => { if (c){pass++;log('PASS  '+n,'pass');} else {fail++;log('FAIL  '+n,'fail');} };
+const clone = (x) => JSON.parse(JSON.stringify(x));
+const wait = (ms) => new Promise(r => setTimeout(r, ms));
+
+// ---------- 인메모리 Supabase 목(방송 유실·재연결 주입 가능) ----------
+function makeBackend() { return { doc_updates: [], doc_snapshots: [], seq: 0, bus: {}, drop: null, fail: null }; }
+function makeClient(backend, name) {
+  function builder(t) {
+    const st = { t, op: 'select', filters: [], row: null, single: false, maybe: false };
+    const api = {
+      select(){ return api; },
+      insert(row){ st.op='insert'; st.row=row; return api; },
+      upsert(row){ st.op='upsert'; st.row=row; return api; },
+      update(row){ st.op='update'; st.row=row; return api; },
+      delete(){ st.op='delete'; return api; },
+      eq(c,v){ st.filters.push(r=>r[c]===v); return api; },
+      gt(c,v){ st.filters.push(r=>r[c]>v); return api; },
+      lt(c,v){ st.filters.push(r=>r[c]<v); return api; },
+      lte(c,v){ st.filters.push(r=>r[c]<=v); return api; },
+      in(c,vs){ st.filters.push(r=>vs.indexOf(r[c])!==-1); return api; },
+      order(){ st.ordered=true; return api; },
+      single(){ st.single=true; return exec(); },
+      maybeSingle(){ st.maybe=true; return exec(); },
+      then(res,rej){ return exec().then(res,rej); },
+    };
+    const match = (r) => st.filters.every(f=>f(r));
+    function exec(){
+      if (backend.fail && backend.fail(st.op, st.t)) return Promise.resolve({ data:null, error:{ message:'injected', code:'42501' } });
+      const arr = backend[st.t]; let data=null, error=null;
+      if (st.op==='select'){
+        let rows = arr.filter(match);
+        if (st.ordered) rows = rows.slice().sort((a,b)=>a.id-b.id);
+        rows = rows.map(r=>({...r}));
+        if (st.maybe) data = rows[0]||null;
+        else if (st.single){ data = rows[0]||null; error = rows[0]?null:{code:'PGRST116'}; }
+        else data = rows;
+      } else if (st.op==='insert'){
+        if (st.t==='doc_snapshots' && arr.some(r=>r.project_id===st.row.project_id)) return Promise.resolve({ data:null, error:{ code:'23505', message:'duplicate key' } });
+        const row = st.t==='doc_updates' ? {...st.row, id: ++backend.seq} : {...st.row};
+        arr.push(row); data = st.single ? {id:row.id} : [row];
+      } else if (st.op==='upsert'){
+        const i=arr.findIndex(r=>r.project_id===st.row.project_id);
+        if(i>=0) arr[i]={...arr[i],...st.row}; else arr.push({...st.row});
+        data = st.row;
+      } else if (st.op==='update'){
+        data = [];
+        arr.forEach((r,i)=>{ if(match(r)){ arr[i]={...r,...st.row}; data.push({...arr[i]}); } });
+      } else if (st.op==='delete'){
+        for(let i=arr.length-1;i>=0;i--) if(match(arr[i])) arr.splice(i,1);
+      }
+      return Promise.resolve({ data, error });
+    }
+    return api;
+  }
+  return {
+    _name: name,
+    from(t){ return builder(t); },
+    channel(chName){
+      const handlers = [];
+      const ch = {
+        on(_type, filter, cb){ handlers.push({ event: filter.event, cb }); return ch; },
+        subscribe(cb){ ch._cb = cb; (backend.bus[chName] = backend.bus[chName]||[]).push({ ch, handlers }); setTimeout(()=>cb('SUBSCRIBED'),0); return ch; },
+        send({ event, payload }){
+          if (backend.drop && backend.drop(event, name)) return Promise.resolve('dropped');   // 방송 유실 모사
+          (backend.bus[chName]||[]).forEach(sub=>{
+            if (sub.ch===ch) return;
+            sub.handlers.forEach(h=>{ if(h.event===event) h.cb({ payload }); });
+          });
+          return Promise.resolve('ok');
+        },
+        _resubscribe(){ if (ch._cb) ch._cb('SUBSCRIBED'); },  // 소켓 재연결 후 채널 재가입 모사
+        _handlers: handlers, _chName: chName,
+      };
+      return ch;
+    },
+    removeChannel(ch){
+      const arr = backend.bus[ch._chName]; if(!arr) return Promise.resolve();
+      const i = arr.findIndex(s=>s.ch===ch); if(i>=0) arr.splice(i,1); return Promise.resolve();
+    },
+  };
+}
+
+const SAMPLE = {
+  __buildStamp:'t', toolTitle:'빛의왕국',
+  sheet1:{ headers:["p","지역ID","지역명","adj","code","스크립트(내용)"], rows:[
+    [null,"LUM_MAIN","본당","","C","거대한 아치 천장."],
+    [null,"LUM_BELL","종탑","","C","나선계단 입구."],
+  ]},
+  items:{}, cellColors:{},
+};
+const NAME = 2;
+const clearCache = (pid) => { try{ localStorage.removeItem('ydoc_local_'+pid); }catch(e){} };
+const nameOf = (S, id) => { const r = readProject(S.ydoc).sheet1.rows.find(r=>r[1]===id); return r && r[NAME]; };
+// A가 편집하되 그 방송만 유실(서버 영속은 정상)
+function editDropped(be, S, id, val, who) {
+  be.drop = (ev, from) => from === who && ev === 'y-update';
+  const d = clone(S.readCurrent()); d.sheet1.rows.find(r=>r[1]===id)[NAME] = val; S.push(d);
+  be.drop = null;
+}
+function edit(S, id, val) { const d = clone(S.readCurrent()); d.sheet1.rows.find(r=>r[1]===id)[NAME] = val; S.push(d); }
+
+async function pair(pid, opt) {
+  clearCache(pid);
+  const be = makeBackend();
+  const mk = (nm) => openProject({ supabase: makeClient(be, nm), projectId: pid, user:{id:'u'+nm,email:nm+'@x'},
+    seedData: clone(SAMPLE), onRemote(){}, onPresence(){}, onStatus(){}, ...(opt||{}) });
+  const A = await mk('A');
+  await wait(500);                      // 시드 영속
+  clearCache(pid);                      // 같은 브라우저(테스트 페이지)의 캐시 공유로 B가 우연히 따라잡지 않게
+  const B = await mk('B');
+  return { be, A, B, mk };
+}
+
+try {
+  // ① 방송 하나를 놓쳐도 곧 서버에서 따라잡는다(이후 편집이 순서 의존으로 막히는 것까지)
+  {
+    const { be, A, B } = await pair('s1', { syncPollMs: 0 });
+    editDropped(be, A, 'LUM_MAIN', '본당(놓친편집)', 'A');
+    await wait(80);
+    edit(A, 'LUM_BELL', '종탑(다음편집)');       // 이 방송은 도착하지만 앞 편집에 의존
+    await wait(150);
+    log('  놓친 직후 B: ' + nameOf(B,'LUM_MAIN') + ' / ' + nameOf(B,'LUM_BELL'));
+    // 예전: 의존 조각이 없는 업데이트를 그대로 적용 → 삭제만 반영되고 삽입은 보류돼 행이 한 칸 밀린 반쪽 상태가
+    //       화면·SQL 내보내기에 드러났다(이 행을 편집하면 엉뚱한 칸에 저장됨).
+    const H = readProject(B.ydoc).sheet1.headers.length;
+    ok('① 놓친 동안에도 행이 밀린 반쪽 상태가 보이지 않음', readProject(B.ydoc).sheet1.rows.every(r=>r.length===H) && ['종탑','종탑(다음편집)'].includes(nameOf(B,'LUM_BELL')));
+    await wait(3000);                          // A flush(0.4초) 후 B가 빠진 조각을 서버에서 가져올 시간
+    ok('① 놓친 편집을 서버에서 따라잡음', nameOf(B,'LUM_MAIN') === '본당(놓친편집)');
+    ok('① 놓친 편집에 막혀 있던 다음 편집도 보임', nameOf(B,'LUM_BELL') === '종탑(다음편집)');
+    await A.destroy(); await B.destroy();
+  }
+
+  // ①b 빠진 조각 요청(y-sync1)에 대한 응답까지 유실돼도 서버 로그로 메운다 · 그동안 반쪽 상태 없음
+  {
+    const { be, A, B } = await pair('s1b', { syncPollMs: 0 });
+    editDropped(be, A, 'LUM_MAIN', '본당(응답도유실)', 'A');
+    await wait(80);
+    be.drop = (ev, from) => from === 'A' && ev === 'y-sync2';    // A의 응답도 계속 유실
+    edit(A, 'LUM_BELL', '종탑(응답도유실)');
+    await wait(150);
+    const H = readProject(B.ydoc).sheet1.headers.length;
+    ok('①b 응답 유실 중에도 반쪽 상태 없음(옛 값 유지)', readProject(B.ydoc).sheet1.rows.every(r=>r.length===H) && nameOf(B,'LUM_BELL') === '종탑' && nameOf(B,'LUM_MAIN') === '본당');
+    await wait(2500);
+    be.drop = null;
+    ok('①b 서버 로그로 놓친 편집 둘 다 반영', nameOf(B,'LUM_MAIN') === '본당(응답도유실)' && nameOf(B,'LUM_BELL') === '종탑(응답도유실)');
+    ok('①b 보류 업데이트 남지 않음', B.provider._held.length === 0);
+    await A.destroy(); await B.destroy();
+  }
+
+  // ② 주기적 따라잡기: 이후 방송이 하나도 없어도(상대가 조용해도) 서버 최신을 받는다
+  {
+    // 주기적 따라잡기는 탭이 보일 때만 돈다(숨은 탭은 다시 보일 때 따라잡음) → 테스트 탭이 숨어 있어도 보이는 것으로 둔다
+    Object.defineProperty(document, 'visibilityState', { get: () => 'visible', configurable: true });
+    const { be, A, B } = await pair('s2', { syncPollMs: 300 });
+    editDropped(be, A, 'LUM_MAIN', '본당(조용히놓침)', 'A');
+    await wait(1800);
+    ok('② 주기적 따라잡기로 놓친 편집 반영', nameOf(B,'LUM_MAIN') === '본당(조용히놓침)');
+    await A.destroy(); await B.destroy();
+    delete document.visibilityState;
+    // 숨은 탭이 다시 보이면 즉시 따라잡는다(백그라운드 탭은 소켓이 끊기기 쉬움)
+    const t = await pair('s2b', { syncPollMs: 0 });
+    editDropped(t.be, t.A, 'LUM_MAIN', '본당(숨은동안)', 'A');
+    await wait(500);
+    Object.defineProperty(document, 'visibilityState', { get: () => 'visible', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange', { bubbles: true }));
+    await wait(300);
+    delete document.visibilityState;
+    ok('② 탭이 다시 보일 때 놓친 편집 반영', nameOf(t.B,'LUM_MAIN') === '본당(숨은동안)');
+    await t.A.destroy(); await t.B.destroy();
+  }
+
+  // ③ 재연결: 편집한 사람이 이미 나갔어도 채널 재가입 때 서버에서 따라잡는다
+  {
+    const { be, A, B } = await pair('s3', { syncPollMs: 0 });
+    editDropped(be, A, 'LUM_MAIN', '본당(나간사람편집)', 'A');
+    await wait(100);
+    await A.destroy();                         // 편집자가 나감(y-sync에 응답할 사람 없음)
+    B.provider.channel._resubscribe();         // 소켓 재연결
+    await wait(400);
+    ok('③ 재연결 시 서버에서 따라잡음', nameOf(B,'LUM_MAIN') === '본당(나간사람편집)');
+    await B.destroy();
+  }
+
+  // ④ 명시적 새로고침(SQL 내보내기 직전에 앱이 호출): 끝나면 서버 최신이 보장된다
+  {
+    const { be, A, B } = await pair('s4', { syncPollMs: 0 });
+    editDropped(be, A, 'LUM_MAIN', '본당(내보내기직전)', 'A');
+    await wait(500);                           // A flush
+    let okRefresh = false;
+    if (typeof B.refresh === 'function') okRefresh = await B.refresh();
+    ok('④ refresh()가 성공을 알림', okRefresh === true);
+    ok('④ refresh() 후 서버 최신 반영', nameOf(B,'LUM_MAIN') === '본당(내보내기직전)');
+    await A.destroy(); await B.destroy();
+  }
+
+  // ⑤ 놓친 클라이언트가 스냅샷 압축을 해도 남의 편집이 서버에서 사라지지 않는다
+  {
+    const { be, A, B, mk } = await pair('s5', { syncPollMs: 0 });
+    editDropped(be, A, 'LUM_MAIN', '본당(압축에서살아남기)', 'A');
+    await wait(500);                           // A의 편집은 서버 로그에 있음
+    edit(B, 'LUM_BELL', '종탑(B)');
+    await wait(500);                           // B flush
+    await B.provider._snapshot();              // B가 압축(예전: B 상태로 스냅샷 + A 편집 로그 삭제)
+    await A.destroy(); await B.destroy();      // 둘 다 나감(접속자 간 y-sync로 우연히 받는 경로 차단)
+    clearCache('s5');
+    const C = await mk('C');                   // 서버만 읽는 새 클라이언트
+    ok('⑤ 압축 후에도 A의 편집이 서버에 남음', nameOf(C,'LUM_MAIN') === '본당(압축에서살아남기)');
+    ok('⑤ 압축 후에도 B의 편집이 서버에 남음', nameOf(C,'LUM_BELL') === '종탑(B)');
+    await C.destroy();
+  }
+
+  // ⑥ 더 새 스냅샷을 옛 상태로 덮지 않는다(두 사람이 거의 동시에 압축)
+  {
+    const { be, A, B } = await pair('s6', { syncPollMs: 0 });
+    edit(A, 'LUM_MAIN', '본당(새스냅샷)');
+    await wait(500);
+    await A.provider._snapshot();              // A: 최신 스냅샷 + 로그 정리
+    const snapA = be.doc_snapshots[0] && { ...be.doc_snapshots[0] };
+    be.doc_snapshots[0].last_update_id += 1000; // 그사이 누군가 더 새 스냅샷을 썼다고 가정
+    const marked = be.doc_snapshots[0].last_update_id;
+    edit(B, 'LUM_BELL', '종탑(B늦게)');
+    await wait(500);
+    const logBefore = be.doc_updates.length;
+    await B.provider._snapshot();              // B는 그보다 옛 기준(id)으로 압축 시도
+    ok('⑥ 옛 기준의 스냅샷이 더 새 스냅샷을 덮지 않음', snapA && be.doc_snapshots[0].last_update_id === marked && be.doc_snapshots[0].snapshot === snapA.snapshot);
+    ok('⑥ 덮지 못했으면 로그도 지우지 않음', be.doc_updates.length === logBefore);
+    await A.destroy(); await B.destroy();
+  }
+
+  log('\n=== ' + pass + ' passed, ' + fail + ' failed ===', fail?'fail':'pass');
+  document.title = fail===0 ? 'SYNC OK' : 'SYNC FAIL';
+} catch (e) {
+  log('ERROR: ' + (e && e.stack || e), 'fail');
+  document.title = 'SYNC ERROR';
+}
+</script>

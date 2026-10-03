@@ -6176,6 +6176,9 @@ function isTextTarget(t){
 function isCollabEditing(){
   var a=document.activeElement;
   if(!a || a===document.body) return false;
+  // 내보내기 창의 입력칸(up_area_id·결과 textarea 등)은 문서 데이터 편집이 아니다. 예전엔 여기에 커서가 있는
+  // 동안(전체 복사도 textarea에 포커스를 줌) 남의 편집 반영이 계속 보류돼 화면 전체가 옛 상태로 머물렀다.
+  if(a.closest && a.closest('#sqlExportModal,#weatherSqlModal,#enemySqlModal,#sqlManualModal')) return false;
   if(isTextTarget(a) || a.tagName==='SELECT') return true;
   if(a.tagName==='INPUT' && !/^(button|submit|reset|checkbox|radio|range|color|file|image|hidden)$/i.test(a.type||'')) return true;
   var ov=document.getElementById('nodePanelOverlay');
@@ -6227,6 +6230,26 @@ function adoptCollabData(incoming){
   }catch(e){ console.error('원격 데이터 인덱스 재구성 실패', e); }
   rebuildProjectView({preserveView:true});
   refreshOpenNodePanel();                          // 패널이 새 DATA 행을 잡도록(옛 행에 쓰는 유실 방지)
+}
+// 내보내기(SQL·엑셀) 직전: 화면 DATA를 서버 최신본과 맞춘다. 내보내기는 이 브라우저 메모리의 DATA로 만드는데,
+// 놓친 실시간 방송이나 편집 중 보류된 원격 반영이 있으면 서버보다 옛 내용이 그대로 나갔다(2026-10-03 "SQL이 최신이 아님").
+// → 내 대기 편집을 먼저 올리고, 서버 로그를 따라잡은 뒤 병합본을 채택한다. 반환 {fresh, at | why}.
+async function syncLatestForExport(){
+  flushPendingSave();                              // 0.7초 디바운스 대기 중인 내 편집부터 확정
+  if(!COLLAB) return { fresh:false, why: cloudUser ? '실시간 협업에 연결돼 있지 않아' : '로그인하지 않아' };
+  var session = COLLAB, fresh = false;
+  try{ fresh = await session.refresh(); }catch(e){ console.error('[collab] 내보내기 전 서버 따라잡기 실패', e); }
+  if(COLLAB !== session) return { fresh:false, why:'그사이 프로젝트 연결이 바뀌어' };
+  try{ adoptCollabData(session.sync(DATA)); }
+  catch(e){ console.error('[collab] 내보내기 전 병합 실패', e); return { fresh:false, why:'서버 최신본과 합치지 못해' }; }
+  return fresh ? { fresh:true, at:new Date() } : { fresh:false, why:'서버 최신본을 끝까지 받지 못해' };
+}
+function exportFreshnessHtml(res){
+  if(res.fresh){
+    var t=res.at, p=function(n){ return (n<10?'0':'')+n; };
+    return '<div style="margin-top:6px;color:var(--success);">✓ 서버 최신본 기준으로 만들었어요 ('+p(t.getHours())+':'+p(t.getMinutes())+':'+p(t.getSeconds())+' 동기화)</div>';
+  }
+  return '<div style="margin-top:6px;color:var(--coral);font-weight:700;">⚠ '+res.why+' 이 브라우저에 있는 데이터로 만들었어요 — 최신이 아닐 수 있어요. 새로고침(F5) 후 다시 생성하세요.</div>';
 }
 function renderCollabPresence(states, selfId){
   var box = document.getElementById('collabPresence');
@@ -6708,7 +6731,9 @@ function initExportSettingsMenu(){
   menu.addEventListener('click', function(e){ e.stopPropagation(); }); // 내부 입력 클릭으로는 안 닫힘
   document.addEventListener('click', function(e){ if(!wrap.contains(e.target)) close(); });
 })();
-document.getElementById('btnExportXlsx').addEventListener('click', function(){
+document.getElementById('btnExportXlsx').addEventListener('click', async function(){
+  var fresh = await syncLatestForExport();          // 엑셀도 서버 최신본으로
+  if(!fresh.fresh) toast('⚠ '+fresh.why+' 이 브라우저에 있는 데이터로 내보냅니다 — 최신이 아닐 수 있어요.');
   var wb = XLSX.utils.book_new();
   function addSheet(nameKey, headers, rows){
     var aoa = [headers].concat(rows);
@@ -7065,11 +7090,16 @@ function openWeatherSqlModal(){ document.getElementById('weatherSqlReport').inne
   function esc(x){ return String(x).replace(/[&<>]/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[m];}); }
   var close=document.getElementById('btnWeatherSqlClose'); if(close) close.addEventListener('click', hide);
   var modal=document.getElementById('weatherSqlModal'); if(modal) modal.addEventListener('click', function(e){ if(e.target===modal) hide(); });
-  var gen=document.getElementById('btnWeatherSqlGenerate'); if(gen) gen.addEventListener('click', function(){
+  var gen=document.getElementById('btnWeatherSqlGenerate'); if(gen) gen.addEventListener('click', async function(){
+    if(gen.disabled) return;
+    gen.disabled=true; document.getElementById('weatherSqlOutput').value='';
+    document.getElementById('weatherSqlReport').innerHTML='<div style="color:var(--text-dim);">서버 최신본을 받는 중…</div>';
+    var fresh; try{ fresh=await syncLatestForExport(); } finally { gen.disabled=false; }
     var out=buildBotWeatherSql();
     document.getElementById('weatherSqlOutput').value=out.sql;
     var rep=out.report, html='';
     html+='<div style="font-weight:700;">생성 완료 · 전체 '+rep.total+'행 → '+rep.inserted+'행 INSERT'+(rep.errorRows?(' · '+rep.errorRows+'행 오류로 제외'):'')+(rep.skipped?(' · 빈행 '+rep.skipped+' 건너뜀'):'')+'</div>';
+    html+=exportFreshnessHtml(fresh);
     if(rep.errors.length){ html+='<div style="color:#c0392b;margin-top:6px;">제외된 오류 행 '+rep.errors.length+'건 (고친 뒤 다시 생성)</div><ul style="margin:4px 0 0 16px;color:#c0392b;">'+rep.errors.map(function(x){return '<li>'+esc(x)+'</li>';}).join('')+'</ul>'; }
     if(rep.warnings.length){ html+='<div style="color:#b9770e;margin-top:6px;">경고 '+rep.warnings.length+'건</div><ul style="margin:4px 0 0 16px;color:#b9770e;">'+rep.warnings.map(function(x){return '<li>'+esc(x)+'</li>';}).join('')+'</ul>'; }
     document.getElementById('weatherSqlReport').innerHTML=html;
@@ -7229,11 +7259,16 @@ function openEnemySqlModal(){ document.getElementById('enemySqlReport').innerHTM
   function esc(x){ return String(x).replace(/[&<>]/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[m];}); }
   var close=document.getElementById('btnEnemySqlClose'); if(close) close.addEventListener('click', hide);
   var modal=document.getElementById('enemySqlModal'); if(modal) modal.addEventListener('click', function(e){ if(e.target===modal) hide(); });
-  var gen=document.getElementById('btnEnemySqlGenerate'); if(gen) gen.addEventListener('click', function(){
+  var gen=document.getElementById('btnEnemySqlGenerate'); if(gen) gen.addEventListener('click', async function(){
+    if(gen.disabled) return;
+    gen.disabled=true; document.getElementById('enemySqlOutput').value='';
+    document.getElementById('enemySqlReport').innerHTML='<div style="color:var(--text-dim);">서버 최신본을 받는 중…</div>';
+    var fresh; try{ fresh=await syncLatestForExport(); } finally { gen.disabled=false; }
     var out=buildBotEnemySql();
     document.getElementById('enemySqlOutput').value=out.sql;
     var rep=out.report, html='';
     html+='<div style="font-weight:700;">생성 완료 · 전체 '+rep.total+'행 → '+rep.inserted+'행 INSERT'+(rep.errorRows?(' · '+rep.errorRows+'행 오류로 제외'):'')+(rep.skipped?(' · 빈행 '+rep.skipped+' 건너뜀'):'')+'</div>';
+    html+=exportFreshnessHtml(fresh);
     if(rep.errors.length){ html+='<div style="color:#c0392b;margin-top:6px;">제외된 오류 행 '+rep.errors.length+'건 (고친 뒤 다시 생성)</div><ul style="margin:4px 0 0 16px;color:#c0392b;">'+rep.errors.map(function(x){return '<li>'+esc(x)+'</li>';}).join('')+'</ul>'; }
     if(rep.warnings.length){ html+='<div style="color:#b9770e;margin-top:6px;">경고 '+rep.warnings.length+'건</div><ul style="margin:4px 0 0 16px;color:#b9770e;">'+rep.warnings.map(function(x){return '<li>'+esc(x)+'</li>';}).join('')+'</ul>'; }
     document.getElementById('enemySqlReport').innerHTML=html;
@@ -7347,11 +7382,18 @@ function buildBotAreaSql(opts){
   function show(id){ document.getElementById(id).style.display='flex'; }
   function hide(id){ document.getElementById(id).style.display='none'; }
   var lastSql='';
+  // up_area_id는 프로젝트마다 DATA.sqlUpAreaId에 기억한다(협업으로 팀원과 공유). 지역ID 공통 접두어 추정은
+  // MISSION·SECOND처럼 접두어가 없는 프로젝트에선 빈값이라, 매번 다시 입력하지 않으면 NULL로 나갔다.
+  function rememberUpAreaId(){
+    var v=document.getElementById('sqlUpAreaId').value.trim();
+    if(DATA && v!==(DATA.sqlUpAreaId||'')){ DATA.sqlUpAreaId=v; markDirty(); }
+  }
+  document.getElementById('sqlUpAreaId').addEventListener('change', rememberUpAreaId);
   var btn=document.getElementById('btnExportSql');
   if(btn) btn.addEventListener('click', function(){
     if(!DATA||!DATA.sheet1){ toast('지역 데이터가 없습니다.'); return; }
     ensureBotAreaColumns();
-    var up=document.getElementById('sqlUpAreaId'); if(!up.value) up.value=sqlDeriveUpAreaId();
+    var up=document.getElementById('sqlUpAreaId'); up.value=DATA.sqlUpAreaId||sqlDeriveUpAreaId();
     var st=document.getElementById('sqlStartPoint'); if(!st.value) st.value=sqlSuggestStart();
     document.getElementById('sqlReport').innerHTML='';
     document.getElementById('sqlOutput').value='';
@@ -7363,7 +7405,13 @@ function buildBotAreaSql(opts){
   document.getElementById('btnSqlManualClose').addEventListener('click', function(){ hide('sqlManualModal'); });
   document.getElementById('sqlManualModal').addEventListener('click', function(e){ if(e.target===this) hide('sqlManualModal'); });
 
-  document.getElementById('btnSqlGenerate').addEventListener('click', function(){
+  document.getElementById('btnSqlGenerate').addEventListener('click', async function(){
+    var genBtn=this; if(genBtn.disabled) return;
+    rememberUpAreaId();
+    genBtn.disabled=true;
+    document.getElementById('sqlOutput').value='';
+    document.getElementById('sqlReport').innerHTML='<div style="color:var(--text-dim);">서버 최신본을 받는 중…</div>';
+    var fresh; try{ fresh=await syncLatestForExport(); } finally { genBtn.disabled=false; }
     var out=buildBotAreaSql({
       upAreaId: document.getElementById('sqlUpAreaId').value,
       startPoint: document.getElementById('sqlStartPoint').value,
@@ -7380,6 +7428,9 @@ function buildBotAreaSql(opts){
     if(rp.moveSkipped) html+=' · '+rp.moveSkipped+"행 '이동한다' 제외";
     if(rp.autoRetry) html+=' · 다이스 '+rp.autoRetry+'행 실패 스크립트에 '+esc(AUTO_RETRY_CHOICE)+' 자동 추가';
     html+='</div>';
+    html+=exportFreshnessHtml(fresh);
+    // INSERT IGNORE는 DB에 이미 있는 지역을 건너뛴다 → 최신 내용으로 다시 넣었는데 DB가 그대로인 것처럼 보였다
+    if(document.getElementById('sqlMode').value==='ignore') html+='<div style="margin-top:4px;font-size:12.5px;color:var(--text-dim);">ℹ INSERT IGNORE는 DB에 <b>이미 있는 지역ID는 건너뛰어요</b>(실행 결과의 Duplicate entry 경고). 이미 넣은 지역을 최신 내용으로 바꾸려면 재삽입 방식을 <b>덮어쓰기</b>로 생성하세요.</div>';
     if(rp.errors.length){ html+='<details open style="margin-top:6px;"><summary style="cursor:pointer;color:var(--coral);font-weight:600;">제외된 오류 행 '+rp.errors.length+'건 (고친 뒤 다시 생성)</summary><div style="max-height:120px;overflow:auto;font-size:12.5px;color:var(--text-dim);margin-top:4px;white-space:pre-wrap;">'+rp.errors.map(esc).join('\n')+'</div></details>'; }
     if(rp.warnings.length){ html+='<details style="margin-top:6px;"><summary style="cursor:pointer;color:var(--amber);font-weight:600;">경고 '+rp.warnings.length+'건</summary><div style="max-height:100px;overflow:auto;font-size:12.5px;color:var(--text-dim);margin-top:4px;white-space:pre-wrap;">'+rp.warnings.map(esc).join('\n')+'</div></details>'; }
     document.getElementById('sqlReport').innerHTML=html;

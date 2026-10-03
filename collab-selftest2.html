@@ -36,9 +36,11 @@ function makeClient(backend, name) {
       select(){ return api; },
       insert(row){ st.op='insert'; st.row=row; return api; },
       upsert(row){ st.op='upsert'; st.row=row; return api; },
+      update(row){ st.op='update'; st.row=row; return api; },
       delete(){ st.op='delete'; return api; },
       eq(c,v){ st.filters.push(r=>r[c]===v); return api; },
       gt(c,v){ st.filters.push(r=>r[c]>v); return api; },
+      lt(c,v){ st.filters.push(r=>r[c]<v); return api; },
       lte(c,v){ st.filters.push(r=>r[c]<=v); return api; },
       order(){ st.ordered=true; return api; },
       single(){ st.single=true; return exec(); },
@@ -58,8 +60,12 @@ function makeClient(backend, name) {
         else if (st.single){ data = rows[0]||null; error = rows[0]?null:{code:'PGRST116'}; }
         else data = rows;
       } else if (st.op==='insert'){
-        const row = {...st.row, id: ++backend.seq};
+        if (st.t==='doc_snapshots' && arr.some(r=>r.project_id===st.row.project_id)) return Promise.resolve({ data:null, error:{ code:'23505', message:'duplicate key' } });
+        const row = st.t==='doc_updates' ? {...st.row, id: ++backend.seq} : {...st.row};
         arr.push(row); data = st.single ? {id:row.id} : [row];
+      } else if (st.op==='update'){
+        data = [];
+        arr.forEach((r,i)=>{ if(match(r)){ arr[i]={...r,...st.row}; data.push({...arr[i]}); } });
       } else if (st.op==='upsert'){
         const pk='project_id'; const i=arr.findIndex(r=>r[pk]===st.row[pk]);
         if(i>=0) arr[i]={...arr[i],...st.row}; else arr.push({...st.row});
@@ -261,7 +267,7 @@ try {
     await S.provider._flush();
     const updatesBefore = be.doc_updates.length;
     ok('스냅샷 전 업데이트 로그 존재', updatesBefore>0);
-    be.fail = (op,t)=> op==='upsert' && t==='doc_snapshots';  // 스냅샷 저장 실패 모사
+    be.fail = (op,t)=> t==='doc_snapshots' && op!=='select';  // 스냅샷 저장(갱신·삽입) 실패 모사
     await S.provider._snapshot();
     ok('스냅샷 실패 시 doc_updates 보존(삭제 안 함)', be.doc_updates.length===updatesBefore);
     ok('스냅샷 실패 시 doc_snapshots 비어있음', be.doc_snapshots.length===0);

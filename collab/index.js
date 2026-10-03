@@ -26,13 +26,14 @@ const APP = 'app';        // 로컬 편집(재조정) origin
 const LIVE = 'app-live';  // 라이브 텍스트 바인딩 origin
 
 export async function openProject(cfg) {
-  const { supabase, projectId, user, seedData, onRemote, onPresence, onStatus } = cfg;
+  const { supabase, projectId, user, seedData, onRemote, onPresence, onStatus, syncPollMs } = cfg;
 
   const ydoc = new Y.Doc();
   const awareness = new Awareness(ydoc);
   const provider = new SupabaseYjsProvider(supabase, projectId, ydoc, {
     awareness,
     onStatus: onStatus || (() => {}),
+    pollMs: syncPollMs,   // 주기적 서버 따라잡기 간격(테스트용 조절, 기본 20초)
   });
 
   await provider.connect(); // DB에서 현재 상태 로드 + 채널 구독 + 핸드셰이크
@@ -145,6 +146,13 @@ export async function openProject(cfg) {
     sync(latest) {
       if (latest) push(latest);
       return adopt();
+    },
+    // 서버(doc_updates/스냅샷)를 지금 따라잡는다. 빠진 조각 없이 서버 최신을 담게 되면 true.
+    // 내보내기(SQL 등) 직전에 쓴다 — 놓친 실시간 방송 때문에 화면 데이터가 서버보다 뒤처져 있을 수 있다.
+    // 이미 진행 중인 따라잡기는 호출 전에 시작됐을 수 있어, 끝난 뒤 한 번 더 새로 확인한다.
+    async refresh() {
+      await provider.catchUp();
+      return provider.catchUp();
     },
     setEditing(label) {
       awareness.setLocalStateField('editing', label ? { label: String(label) } : null);

@@ -75,6 +75,7 @@ window.__mockClient = function (name) {
         on(type, filter, cb) { handlers.push({ type, event: filter && filter.event, cb }); return ch; },
         subscribe(cb) { (be.bus[chName] = be.bus[chName] || []).push({ ch, handlers }); setTimeout(() => cb && cb('SUBSCRIBED'), 0); return ch; },
         send(msg) {
+          if (be.drop && be.drop(msg.event, name)) return Promise.resolve('dropped');   // 방송 유실 모사
           (be.bus[chName] || []).forEach(sub => { if (sub.ch === ch) return;
             sub.handlers.forEach(h => { if (h.type === 'broadcast' && h.event === msg.event) { const p = J(msg.payload); setTimeout(() => h.cb({ payload: p }), 3); } }); });
           return Promise.resolve('ok');
@@ -193,6 +194,29 @@ function blurAll(n) { const a = W(n).document.activeElement; if (a && a.blur) a.
     await E('A').refreshList();
     const pid = Object.keys(E('A').projects())[0], ua = E('A').projects()[pid].updatedAt;
     ok('4) 목록 마지막 수정이 최근 편집 시각', ua >= lastUpd && ua > Date.parse('2026-06-01'), new Date(ua).toISOString());
+
+    // ── 5. 실시간 방송을 놓친 사람이 SQL을 생성해도 서버 최신본으로 나와야 함(2026-10-03 "SQL이 최신이 아님") ──
+    await wait(800);
+    be.drop = (ev, from) => from === 'A' && ev === 'y-update';           // A의 방송만 유실(서버 저장은 정상)
+    rowOf('A', Yid)[C['지역명']] = 'E2E-놓친편집'; E('A').markDirty();
+    await wait(2200);                                                    // A 저장(0.7초 디바운스)+서버 기록(0.4초)
+    be.drop = null;
+    ok('5) (재현) 방송을 놓친 B 화면은 아직 옛 값', rowOf('B', Yid)[C['지역명']] !== 'E2E-놓친편집');
+    const bd = W('B').document;
+    bd.getElementById('btnExportSql').click();
+    bd.getElementById('sqlUpAreaId').value = 'E2ETEST';
+    bd.getElementById('btnSqlGenerate').click();
+    ok('5) SQL 생성 완료', await until(() => bd.getElementById('sqlOutput').value.length > 0, 8000));
+    const sqlB = bd.getElementById('sqlOutput').value;
+    ok('5) 생성된 SQL에 놓쳤던 최신 편집 포함', sqlB.indexOf("'E2E-놓친편집'") !== -1);
+    ok('5) 리포트에 서버 최신본 기준 표시', bd.getElementById('sqlReport').textContent.indexOf('서버 최신본 기준') !== -1, bd.getElementById('sqlReport').textContent.slice(0, 120));
+    ok('5) B 화면 데이터도 최신으로', rowOf('B', Yid)[C['지역명']] === 'E2E-놓친편집');
+
+    // ── 6. 내보내기 창 입력칸에 커서가 있어도 남의 편집은 계속 반영(예전엔 보류돼 화면 전체가 옛 상태) ──
+    bd.getElementById('sqlOutput').focus();
+    rowOf('A', Z)[C['지역명']] = 'E2E-창열린채'; E('A').markDirty();
+    ok('6) SQL 창에 포커스가 있어도 원격 편집 반영', await until(() => rowOf('B', Z)[C['지역명']] === 'E2E-창열린채', 6000));
+    bd.getElementById('btnSqlClose').click(); blurAll('B');
 
     ok('앱 오류 없음', !errors.A.length && !errors.B.length, JSON.stringify(errors));
   } catch (e) { log('ERROR: ' + (e && e.stack || e), 'f'); fail++; }

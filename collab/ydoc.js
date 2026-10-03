@@ -46,6 +46,7 @@ export const PERSONAL_KEYS = new Set([
 export const PROTECTED_KEYS = new Set([
   'weather',
   'enemy',
+  'sqlUpAreaId',   // SQL 내보내기 up_area_id(프로젝트별 기억)
 ]);
 
 const ID_COL = 1; // sheet1 헤더의 "지역ID" 열 인덱스(행 식별자)
