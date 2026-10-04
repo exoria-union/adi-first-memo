@@ -321,6 +321,32 @@
   }
   .field textarea:focus, .field input:focus{outline:none;border-color:var(--accent);background:#fff;}
   .fieldRow{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  /* 아이템 검색 선택 칸(itemPickerField) */
+  .itemPicker{position:relative;}
+  .itemPicker .ipBox{display:flex;flex-wrap:wrap;align-items:center;gap:5px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);padding:5px 7px;background:var(--bg);min-height:40px;box-sizing:border-box;cursor:text;}
+  .itemPicker .ipBox:focus-within{border-color:var(--accent);background:#fff;}
+  .itemPicker .ipChips{display:contents;}
+  .itemPicker .ipChip{display:inline-flex;align-items:center;gap:4px;max-width:100%;padding:3px 4px 3px 8px;border-radius:999px;background:var(--accent-soft);border:1px solid var(--accent-soft-border);font-size:13px;line-height:1.3;}
+  .itemPicker .ipChip.missing{background:var(--coral-soft);border-color:#f0c4bd;}
+  .itemPicker .ipChip .ipChipText{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .itemPicker .ipChip button{border:0;background:transparent;padding:0 5px;font-size:15px;line-height:1;cursor:pointer;color:var(--text-dim);border-radius:999px;}
+  .itemPicker .ipChip button:hover{background:rgba(0,0,0,.08);color:#c0392b;}
+  .itemPicker .ipInput{flex:1 1 140px;min-width:120px;border:0 !important;outline:none;background:transparent !important;padding:5px 2px !important;font-size:14.5px;font-family:var(--sans);}
+  .itemPicker .ipMenu{position:absolute;left:0;right:0;top:100%;margin-top:3px;z-index:50;max-height:280px;overflow:auto;background:var(--surface,#fff);border:1px solid var(--border-strong);border-radius:var(--radius-sm);box-shadow:0 8px 24px rgba(0,0,0,.14);padding:4px 0;}
+  .itemPicker .ipSection{font-size:11.5px;font-weight:700;color:var(--text-faint);padding:6px 10px 3px;}
+  .itemPicker .ipOpt{display:flex;align-items:baseline;gap:7px;padding:6px 10px;font-size:14px;cursor:pointer;}
+  .itemPicker .ipOpt.active{background:var(--accent-soft);}
+  .itemPicker .ipOpt .ipId{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--text-dim);min-width:38px;}
+  .itemPicker .ipOpt .ipName{flex:1;}
+  .itemPicker .ipOpt .ipCat{font-size:11.5px;color:var(--text-faint);white-space:nowrap;}
+  .itemPicker .ipOpt mark{background:#ffe58a;color:inherit;padding:0;}
+  .itemPicker .ipEmpty{padding:8px 10px;font-size:13px;color:var(--text-dim);}
+  .itemPicker .ipCreate{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:7px 10px;border-top:1px solid var(--border);font-size:13px;}
+  .itemPicker .ipCreate select{padding:4px 6px;font-size:13px;}
+  .itemPicker .ipMode{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:12.5px;color:var(--text-dim);}
+  .itemPicker .ipMode button{font-size:12.5px;padding:3px 9px;border-radius:999px;}
+  .itemPicker .ipMode button.on{background:var(--accent);color:#fff;border-color:var(--accent);}
+  .itemPicker .ipWarn{font-size:12.5px;color:#b9770e;display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
   .fieldRow3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;}
   .choiceList{display:flex;flex-direction:column;gap:5px;}
   .choiceBtn{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 10px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);background:var(--bg);cursor:pointer;font-size:14px;}
@@ -1728,14 +1754,14 @@ function changeItemId(oldId, newId, isKey){
   // 모든 행이 새 ID로 바뀐다(2026-10-02 키아이템 877이 무관한 노드 23곳에 박힌 원인).
   var hadOldId = oldId!=null && String(oldId).trim()!=='';
   var farmCol = C['파밍 아이템 ID'], keyCol = C['키아이템 ID'], tradeCol = C['지역거래 시, 교단원이 낼 아이템ID'];
+  // 세 칸 모두 쉼표 목록일 수 있다(키아이템은 {…}=OR 표기도) — 목록 안의 옛 ID만 바꾸고 표기는 유지
   if(hadOldId) DATA.sheet1.rows.forEach(function(r){
-    [farmCol, tradeCol].forEach(function(col){
-      if(r[col]!=null && r[col]!==''){
-        var parts = String(r[col]).split(',').map(function(p){ return p.trim()===String(oldId) ? String(newId) : p.trim(); });
-        r[col] = parts.join(',');
-      }
+    [farmCol, tradeCol, keyCol].forEach(function(col){
+      if(r[col]==null || r[col]==='') return;
+      var p = parseItemIdList(r[col]);
+      if(p.ids.indexOf(String(oldId))===-1) return;
+      r[col] = formatItemIdList(p.ids.map(function(x){ return x===String(oldId) ? String(newId) : x; }), p.or);
     });
-    if(r[keyCol]!=null && String(r[keyCol])===String(oldId)) r[keyCol] = newId;
   });
   rebuildItemIndex();
   markDirty();
@@ -4471,10 +4497,11 @@ function is04IGGI(raw){ var a=typeCodesArray(raw); return a.indexOf('INCUNTR_04_
 function is04II(raw){ return typeCodesArray(raw).indexOf('INCUNTR_04_II')!==-1; }
 function isFirstExploration(row){ return String(row[C['최초 탐사 여부']]||'').trim().toUpperCase()==='Y'; }
 function raceCode(row){ return String(row[C['종족 전용']]||'').trim(); }
+// 쉼표 목록("870,871")·키 OR 표기("{1,2}")도 받는다 — 전부 목록에 있어야 true
 function itemExistsById(id){
-  var v=String(id||'').trim(); if(!v) return false;
+  var ids=parseItemIdList(id).ids; if(!ids.length) return false;
   var rows=(DATA.items.rows||[]).concat(DATA.keyItems.rows||[]);
-  return rows.some(function(r){ return String(r[0]||'').trim()===v; });
+  return ids.every(function(v){ return rows.some(function(r){ return String(r[0]==null?'':r[0]).trim()===v; }); });
 }
 /* 필수 항목 검사. 어느 "칸"이 비었는지까지 같이 돌려줘야 편집기에서 그 칸을 짚어 줄 수 있다.
    col은 시트 헤더명이며, 노드 편집기의 각 필드에 붙여 둔 data-col 과 짝이 된다. */
@@ -4569,7 +4596,187 @@ function canvasNodeBadges(row, cmds){
   if(C['갈림길 그룹']!=null && String(row[C['갈림길 그룹']]||'').trim()) out.push('branch');
   return out;
 }
-function itemSelectField(label,value,onChange,required){ var w=document.createElement('div');w.className='field';var l=document.createElement('label');l.innerHTML=escapeHtml(label)+(required?'<span class="requiredMark">*</span>':'');w.appendChild(l);var sel=document.createElement('select');sel.style.cssText='border:1px solid var(--border-strong);border-radius:var(--radius-sm);padding:9px 11px;font-size:15px;background:var(--bg);font-family:var(--sans);width:100%;box-sizing:border-box;';var b=document.createElement('option');b.value='';b.textContent='선택하세요';sel.appendChild(b);var rows=(DATA.items.rows||[]).concat(DATA.keyItems.rows||[]).sort(function(a,b){return koCompare(a&&a[1],b&&b[1]);}),seen={};rows.forEach(function(r){var id=String(r[0]||'');if(!id||seen[id])return;seen[id]=1;var o=document.createElement('option');o.value=id;o.textContent='['+id+'] '+String(r[1]||'');if(String(value||'')===id)o.selected=true;sel.appendChild(o);});if(value&&!seen[String(value)]){var ox=document.createElement('option');ox.value=String(value);ox.textContent='['+value+'] (목록에 없음)';ox.selected=true;sel.appendChild(ox);}sel.addEventListener('change',function(){onChange(sel.value);markDirty();});w.appendChild(sel);return w;}
+/* ── 아이템 검색 선택 칸(파밍 아이템·교단원이 낼 아이템·키아이템 공용) ─────────────────────
+   예전엔 수백 개짜리 기본 드롭다운(검색 불가·하나만 선택)이거나 번호를 직접 치는 칸이라 등록이 번거로웠고,
+   이미 들어 있던 "870,871" 같은 여러 개 값은 "(목록에 없음)"으로 보였다. 봇은 세 칸 모두 쉼표 목록을 읽는다
+   (파밍=전부 지급, 키=1,2는 모두 필요·{1,2}는 하나만). → 이름·ID·초성으로 검색해 클릭/↑↓·Enter로 넣고,
+   여러 개는 칩으로 쌓는다. 키아이템은 2개 이상이면 AND/OR를 고른다. 없는 아이템은 그 자리에서 등록. */
+var ITEM_MRU_KEY = 'lumkingdom_item_mru_v1';
+var HANGUL_CHO = ['ㄱ','ㄲ','ㄴ','ㄷ','ㄸ','ㄹ','ㅁ','ㅂ','ㅃ','ㅅ','ㅆ','ㅇ','ㅈ','ㅉ','ㅊ','ㅋ','ㅌ','ㅍ','ㅎ'];
+function hangulChosung(s){ s=String(s==null?'':s); var out=''; for(var i=0;i<s.length;i++){ var c=s.charCodeAt(i)-0xAC00; out += (c>=0 && c<11172) ? HANGUL_CHO[Math.floor(c/588)] : s[i]; } return out; }
+// "1,2" / "{1,2}" → {ids:['1','2'], or:bool}. 봇 _parse_id_list와 같은 해석(중괄호=OR).
+function parseItemIdList(raw){
+  var s=String(raw==null?'':raw).trim(), or=/^\{[\s\S]*\}$/.test(s);
+  s=s.replace(/^\{|\}$/g,'');
+  var ids=[]; s.split(',').forEach(function(x){ x=x.trim(); if(x && ids.indexOf(x)===-1) ids.push(x); });
+  return { ids:ids, or:or };
+}
+function formatItemIdList(ids, or){ if(!ids.length) return ''; var t=ids.join(','); return (or && ids.length>1) ? '{'+t+'}' : t; }
+function itemMruGet(){ try{ var a=JSON.parse(localStorage.getItem(ITEM_MRU_KEY)||'[]'); return Array.isArray(a)?a.map(String):[]; }catch(e){ return []; } }
+function itemMruPush(id){ try{ var a=itemMruGet().filter(function(x){ return x!==String(id); }); a.unshift(String(id)); localStorage.setItem(ITEM_MRU_KEY, JSON.stringify(a.slice(0,10))); }catch(e){} }
+// 검색 대상: [{id,name,cat,isKey}] — 키아이템 칸이면 키아이템을 앞에, 각 묶음은 이름순
+function itemCatalog(preferKey){
+  var seen={}, items=[], keys=[];
+  function add(arr, r, isKey){ var id=String(r&&r[0]!=null?r[0]:'').trim(); if(!id || seen[id]) return; seen[id]=1; arr.push({ id:id, name:String(r[1]==null?'':r[1]), cat:isKey?'키아이템':String(r[2]==null?'':r[2]), isKey:isKey }); }
+  (DATA.keyItems.rows||[]).forEach(function(r){ add(keys, r, true); });
+  (DATA.items.rows||[]).forEach(function(r){ add(items, r, false); });
+  var byName=function(a,b){ return koCompare(a.name,b.name); };
+  keys.sort(byName); items.sort(byName);
+  return preferKey ? keys.concat(items) : items.concat(keys);
+}
+// 순위: ID 일치 > ID 앞부분 > 이름 앞부분 > 이름 포함 > 공백 무시 포함 > 초성(ㄹㅂ → 루비)
+function itemSearch(list, q){
+  q=String(q||'').trim(); if(!q) return list.slice();
+  var ql=q.toLowerCase(), qn=ql.replace(/\s/g,''), qc=/^[ㄱ-ㅎ\s]+$/.test(q) ? q.replace(/\s/g,'') : null, out=[];
+  list.forEach(function(it){
+    var n=it.name.toLowerCase(), s=-1;
+    if(it.id===q) s=0; else if(it.id.indexOf(q)===0) s=1;
+    else if(n.indexOf(ql)===0) s=2; else if(n.indexOf(ql)!==-1) s=3;
+    else if(qn && n.replace(/\s/g,'').indexOf(qn)!==-1) s=4;
+    else if(qc && hangulChosung(it.name).replace(/\s/g,'').indexOf(qc)!==-1) s=5;
+    if(s>=0) out.push({ it:it, s:s });
+  });
+  out.sort(function(a,b){ return a.s-b.s || koCompare(a.it.name,b.it.name); });
+  return out.map(function(x){ return x.it; });
+}
+// 편집기 아이템 표에 새 아이템 등록(분류에 맞는 다음 ID). 반환: 새 ID 문자열
+function quickCreateItem(name, cat){
+  var id, row;
+  if(cat==='키아이템'){ id=nextKeyItemId(); row=blankRow(DATA.keyItems.headers, [id, name, '개방 조건 없음', '획득처 미정', '']); DATA.keyItems.rows.push(row); }
+  else { id=nextItemId(cat); row=blankRow(DATA.items.headers, [id, name, cat, '획득처 미정', '']); DATA.items.rows.push(row); }
+  rebuildItemIndex();
+  return String(id);
+}
+function itemPickerField(label, value, onChange, opts){
+  opts=opts||{};
+  var w=document.createElement('div'); w.className='field itemPicker';
+  var l=document.createElement('label'); l.innerHTML=escapeHtml(label)+(opts.required?'<span class="requiredMark">*</span>':''); w.appendChild(l);
+  var parsed=parseItemIdList(value), ids=parsed.ids, orMode=parsed.or;
+  var box=document.createElement('div'); box.className='ipBox';
+  var chips=document.createElement('div'); chips.className='ipChips';
+  var input=document.createElement('input'); input.type='text'; input.className='ipInput'; input.autocomplete='off'; input.spellcheck=false;
+  input.placeholder=opts.placeholder||'이름·ID·초성으로 검색 (예: 루비, 2040, ㄹㅂ)';
+  input.setAttribute('aria-label', label+' 검색');
+  var menu=document.createElement('div'); menu.className='ipMenu'; menu.setAttribute('role','listbox'); menu.style.display='none';
+  box.appendChild(chips); box.appendChild(input); w.appendChild(box); w.appendChild(menu);
+  var modeRow=document.createElement('div'); modeRow.className='ipMode'; modeRow.style.display='none'; w.appendChild(modeRow);
+  var warnRow=document.createElement('div'); warnRow.className='ipWarn'; warnRow.style.display='none'; w.appendChild(warnRow);
+  box.addEventListener('mousedown', function(e){ if(e.target===box){ e.preventDefault(); input.focus(); } });
+  var shown=[], active=-1;
+
+  function commit(){ onChange(formatItemIdList(ids, orMode)); markDirty(); renderChips(); renderMode(); }
+  function renderChips(){
+    chips.innerHTML='';
+    ids.forEach(function(id, i){
+      var r=itemById[id], chip=document.createElement('span');
+      chip.className='ipChip'+(r?'':' missing');
+      chip.title=r ? ('['+id+'] '+(r[1]||'')) : ('['+id+'] 편집기 아이템 목록에 없는 ID');
+      var t=document.createElement('span'); t.className='ipChipText'; t.textContent='['+id+'] '+(r?String(r[1]||''):'목록에 없음'); chip.appendChild(t);
+      var x=document.createElement('button'); x.type='button'; x.textContent='×'; x.title='빼기'; x.setAttribute('aria-label', id+' 빼기');
+      x.addEventListener('mousedown', function(e){ e.preventDefault(); });
+      x.addEventListener('click', function(){ ids.splice(i,1); commit(); input.focus(); });
+      chip.appendChild(x); chips.appendChild(chip);
+    });
+    input.placeholder = ids.length ? '더 추가하려면 검색…' : (opts.placeholder||'이름·ID·초성으로 검색 (예: 루비, 2040, ㄹㅂ)');
+    if(opts.afterChange) opts.afterChange(ids, warnRow);
+  }
+  // 키아이템 2개 이상: 모두 필요(AND, "1,2") / 하나만 있으면 됨(OR, "{1,2}") — 봇 key_id 규칙
+  function renderMode(){
+    if(!opts.keyMode || ids.length<2){ modeRow.style.display='none'; return; }
+    modeRow.style.display=''; modeRow.innerHTML='';
+    var cap=document.createElement('span'); cap.textContent='여러 키를'; modeRow.appendChild(cap);
+    [[false,'모두 가져야 통과 (AND)'],[true,'하나만 있으면 통과 (OR)']].forEach(function(p){
+      var b=document.createElement('button'); b.type='button'; b.className='ghost'+(orMode===p[0]?' on':''); b.textContent=p[1];
+      b.addEventListener('click', function(){ if(orMode!==p[0]){ orMode=p[0]; commit(); } });
+      modeRow.appendChild(b);
+    });
+  }
+  function pick(id){
+    id=String(id); if(ids.indexOf(id)===-1) ids.push(id);
+    itemMruPush(id); input.value=''; commit(); close(); input.focus();
+  }
+  function section(text){ var s=document.createElement('div'); s.className='ipSection'; s.textContent=text; menu.appendChild(s); }
+  function hl(text, q){
+    var t=String(text), i=q ? t.toLowerCase().indexOf(q.toLowerCase()) : -1;
+    if(i<0) return escapeHtml(t);
+    return escapeHtml(t.slice(0,i))+'<mark>'+escapeHtml(t.slice(i,i+q.length))+'</mark>'+escapeHtml(t.slice(i+q.length));
+  }
+  function addOpt(html, onPick){
+    var o=document.createElement('div'); o.className='ipOpt'; o.setAttribute('role','option'); o.innerHTML=html;
+    o.addEventListener('mousedown', function(e){ e.preventDefault(); });   // 입력칸 포커스 유지
+    o.addEventListener('click', onPick);
+    o.addEventListener('mousemove', function(){ var k=shown.indexOf(entry); if(k!==active){ active=k; highlight(); } });
+    var entry={ el:o, pick:onPick }; shown.push(entry); menu.appendChild(o);
+  }
+  function itemOpt(it, q){
+    addOpt('<span class="ipId">'+hl(it.id, q)+'</span><span class="ipName">'+hl(it.name, q)+'</span><span class="ipCat">'+escapeHtml(it.cat)+'</span>', function(){ pick(it.id); });
+  }
+  function render(){
+    var q=input.value.trim(), all=itemCatalog(opts.keyMode), avail=all.filter(function(it){ return ids.indexOf(it.id)===-1; });
+    menu.innerHTML=''; shown=[];
+    if(!q){
+      var mru=[]; itemMruGet().forEach(function(id){ for(var i=0;i<avail.length;i++) if(avail[i].id===id){ mru.push(avail[i]); return; } });
+      if(mru.length){ section('최근 사용'); mru.forEach(function(it){ itemOpt(it,''); }); }
+      section((opts.keyMode?'키아이템 → 아이템':'전체 아이템')+' '+avail.length+'개 · 입력하면 좁혀져요');
+      avail.forEach(function(it){ if(mru.indexOf(it)===-1) itemOpt(it,''); });
+    } else {
+      var res=itemSearch(avail, q);
+      if(!res.length){ var e=document.createElement('div'); e.className='ipEmpty'; e.textContent='"'+q+'"에 맞는 아이템이 없어요'; menu.appendChild(e); }
+      res.slice(0,80).forEach(function(it){ itemOpt(it, q); });
+      if(res.length>80){ var more=document.createElement('div'); more.className='ipEmpty'; more.textContent='… '+(res.length-80)+'개 더 — 더 입력해 좁혀 보세요'; menu.appendChild(more); }
+      // 숫자만 입력했고 목록에 없는 ID → 그대로 넣기(봇 DB에만 있는 아이템 등)
+      if(/^\d+$/.test(q) && !all.some(function(it){ return it.id===q; }) && ids.indexOf(q)===-1)
+        addOpt('<span class="ipId">'+escapeHtml(q)+'</span><span class="ipName">ID 그대로 넣기</span><span class="ipCat">편집기 목록에 없음</span>', function(){ pick(q); });
+      // 새 아이템 등록: 맞는 게 없으면 바로 등록 줄, 비슷한 게 있으면(중복 등록 방지) 작은 링크를 눌러야 펼친다
+      if(!/^\d+$/.test(q) && !all.some(function(it){ return it.name===q; })){
+        if(!res.length) createRow(q);
+        else {
+          var lk=document.createElement('div'); lk.className='ipCreate'; lk.style.cursor='pointer'; lk.style.color='var(--text-dim)';
+          lk.innerHTML='＋ 위에 없으면 <b>'+escapeHtml(q)+'</b> 이름으로 새 아이템 등록…';
+          lk.addEventListener('mousedown', function(e){ e.preventDefault(); });
+          lk.addEventListener('click', function(){ lk.remove(); createRow(q); });
+          menu.appendChild(lk);
+        }
+      }
+    }
+    active = shown.length ? 0 : -1; highlight();
+  }
+  function createRow(name){
+    var row=document.createElement('div'); row.className='ipCreate';
+    var cap=document.createElement('span'); cap.innerHTML='＋ <b>'+escapeHtml(name)+'</b> 새 아이템으로 등록 · 분류'; row.appendChild(cap);
+    var sel=document.createElement('select');
+    ['재료','레시피','소모품(완제)','키아이템'].forEach(function(c){ var o=document.createElement('option'); o.value=c; o.textContent=c; sel.appendChild(o); });
+    sel.value = opts.keyMode ? '키아이템' : '재료';
+    var b=document.createElement('button'); b.type='button'; b.className='primary'; b.textContent='등록하고 넣기';
+    b.addEventListener('mousedown', function(e){ e.preventDefault(); });
+    b.addEventListener('click', function(){
+      var id=quickCreateItem(name, sel.value);
+      toast('새 아이템 ['+id+'] '+name+' ('+sel.value+')을 등록했어요 — 아이템 탭에서 설명을 채울 수 있어요');
+      pick(id);
+    });
+    row.appendChild(sel); row.appendChild(b); menu.appendChild(row);
+  }
+  function highlight(){
+    shown.forEach(function(s,i){ s.el.classList.toggle('active', i===active); });
+    if(active>=0 && shown[active]) shown[active].el.scrollIntoView({ block:'nearest' });
+  }
+  function open(){ render(); menu.style.display=''; }
+  function close(){ menu.style.display='none'; active=-1; }
+  input.addEventListener('focus', open);
+  input.addEventListener('input', open);
+  input.addEventListener('keydown', function(e){
+    var isOpen=menu.style.display!=='none';
+    if(e.key==='ArrowDown'){ e.preventDefault(); if(!isOpen) open(); else if(shown.length){ active=(active+1)%shown.length; highlight(); } }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); if(isOpen && shown.length){ active=(active-1+shown.length)%shown.length; highlight(); } }
+    else if(e.key==='Enter'){ if(isOpen && active>=0 && shown[active]){ e.preventDefault(); shown[active].pick(); } }
+    else if(e.key==='Escape'){ if(isOpen){ e.preventDefault(); close(); } }
+    else if(e.key==='Backspace' && !input.value && ids.length){ ids.pop(); commit(); if(isOpen) render(); }
+  });
+  // 칸 밖으로 포커스가 나가면 닫는다(새 아이템 분류 select 등 칸 안 이동은 유지)
+  w.addEventListener('focusout', function(){ setTimeout(function(){ if(!w.contains(document.activeElement)) close(); }, 120); });
+  renderChips(); renderMode();
+  return w;
+}
 function firstExplorationField(row){
   var w=document.createElement('div');w.className='field';
   var l=document.createElement('label');l.textContent='최초 탐사 여부';w.appendChild(l);
@@ -5205,13 +5412,13 @@ function renderNodePanel(topId, rowId){
   body.appendChild(scriptFieldEditor('실패 스크립트', topId, r, '실패 스크립트'));
 
   var farmRow1=document.createElement('div');farmRow1.className='fieldRow';
-  farmRow1.appendChild(markFieldCol(itemSelectField('파밍 아이템',r[C['파밍 아이템 ID']],function(v){r[C['파밍 아이템 ID']]=v;refreshNodeEditorTags(r);},is04II(r[C['종류 코드']])), '파밍 아이템 ID'));
+  farmRow1.appendChild(markFieldCol(itemPickerField('파밍 아이템',r[C['파밍 아이템 ID']],function(v){r[C['파밍 아이템 ID']]=v;refreshNodeEditorTags(r);},{required:is04II(r[C['종류 코드']])}), '파밍 아이템 ID'));
   farmRow1.appendChild(fieldInput('파밍 아이템 수',r[C['파밍 아이템 수']],function(v){r[C['파밍 아이템 수']]=v;}));body.appendChild(farmRow1);
   var farmRow2=document.createElement('div');farmRow2.className='fieldRow2';
   farmRow2.appendChild(fieldInput('파밍 골드',r[C['파밍 골드']],function(v){r[C['파밍 골드']]=v;}));
   farmRow2.appendChild(fieldInput('파밍 경험치',r[C['파밍 경험치']],function(v){r[C['파밍 경험치']]=v;}));body.appendChild(farmRow2);
   var tradeRow=document.createElement('div');tradeRow.className='fieldRow';
-  tradeRow.appendChild(markFieldCol(itemSelectField('지역거래 시, 교단원이 낼 아이템',r[C['지역거래 시, 교단원이 낼 아이템ID']],function(v){r[C['지역거래 시, 교단원이 낼 아이템ID']]=v;refreshNodeEditorTags(r);},is04II(r[C['종류 코드']])), '지역거래 시, 교단원이 낼 아이템ID'));
+  tradeRow.appendChild(markFieldCol(itemPickerField('지역거래 시, 교단원이 낼 아이템',r[C['지역거래 시, 교단원이 낼 아이템ID']],function(v){r[C['지역거래 시, 교단원이 낼 아이템ID']]=v;refreshNodeEditorTags(r);},{required:is04II(r[C['종류 코드']])}), '지역거래 시, 교단원이 낼 아이템ID'));
   tradeRow.appendChild(markFieldCol(fieldInput('지역거래 시, 교단원이 낼 골드 상한가',r[C['지역거래 시, 교단원이 낼 골드 상한가']],function(v){r[C['지역거래 시, 교단원이 낼 골드 상한가']]=v;refreshNodeEditorTags(r);}), '지역거래 시, 교단원이 낼 골드 상한가'));body.appendChild(tradeRow);
   var tradeHint=document.createElement('div');tradeHint.id='npTradeHint';tradeHint.style.cssText='display:none;font-size:12.5px;line-height:1.7;color:var(--text-dim);background:var(--accent-soft);border:1px solid var(--accent-soft-border);border-radius:6px;padding:8px 10px;margin-top:4px;white-space:pre-line;';body.appendChild(tradeHint);
 
@@ -5224,8 +5431,22 @@ function renderNodePanel(topId, rowId){
   body.appendChild(markFieldCol(fieldTextarea('종족이 아닐 때 스크립트'+(raceCode(r)?' *':''), r[C['종족이 아닐 때 스크립트']], function(v){ r[C['종족이 아닐 때 스크립트']]=v; refreshNodeEditorTags(r); }, 3), '종족이 아닐 때 스크립트'));
 
   var keyRow = document.createElement('div'); keyRow.className='fieldRow';
-  keyRow.appendChild(ynSelectField('키아이템 필요 여부', r[C['키아이템 필요 여부']], function(v){ r[C['키아이템 필요 여부']]=v; }, 'N — 필요 없음', 'Y — 필요'));
-  keyRow.appendChild(fieldInput('키아이템 ID', r[C['키아이템 ID']], function(v){ r[C['키아이템 ID']]=v; }));
+  // 키아이템: 검색해 고르는 칸 + 키를 넣었는데 필요 여부가 Y가 아니면(봇이 검사하지 않음) 바로 고칠 수 있게 안내
+  var keyWarnRow=null;
+  function refreshKeyWarn(){
+    if(!keyWarnRow) return;
+    var hasKey=String(r[C['키아이템 ID']]||'').trim()!=='', yn=String(r[C['키아이템 필요 여부']]||'').trim().toUpperCase();
+    keyWarnRow.innerHTML=''; keyWarnRow.style.display=(hasKey && yn!=='Y')?'':'none';
+    if(hasKey && yn!=='Y'){
+      var t=document.createElement('span'); t.textContent='⚠ 키아이템 필요 여부가 '+(yn||'빈칸')+'이라 봇이 이 키를 검사하지 않아요'; keyWarnRow.appendChild(t);
+      var b=document.createElement('button'); b.type='button'; b.className='ghost'; b.textContent='필요 여부를 Y로';
+      b.addEventListener('click', function(){ r[C['키아이템 필요 여부']]='Y'; var s=keyYnField.querySelector('select'); if(s) s.value='Y'; markDirty(); refreshNodeEditorTags(r); refreshKeyWarn(); });
+      keyWarnRow.appendChild(b);
+    }
+  }
+  var keyYnField = ynSelectField('키아이템 필요 여부', r[C['키아이템 필요 여부']], function(v){ r[C['키아이템 필요 여부']]=v; refreshKeyWarn(); }, 'N — 필요 없음', 'Y — 필요');
+  keyRow.appendChild(keyYnField);
+  keyRow.appendChild(markFieldCol(itemPickerField('키아이템', r[C['키아이템 ID']], function(v){ r[C['키아이템 ID']]=v; refreshNodeEditorTags(r); }, { keyMode:true, afterChange:function(_ids, warnRow){ keyWarnRow=warnRow; refreshKeyWarn(); } }), '키아이템 ID'));
   keyRow.appendChild(ynSelectField('키아이템 전원 소모 여부', r[C['키아이템 전원 소모 여부']], function(v){ r[C['키아이템 전원 소모 여부']]=v; }, 'N — 대표 1인만', 'Y — 전원 검사·소모(기본)', 'Y'));
   body.appendChild(keyRow);
   var openRow = document.createElement('div'); openRow.className='fieldRow';

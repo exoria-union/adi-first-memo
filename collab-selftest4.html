@@ -218,6 +218,58 @@ function blurAll(n) { const a = W(n).document.activeElement; if (a && a.blur) a.
     ok('6) SQL 창에 포커스가 있어도 원격 편집 반영', await until(() => rowOf('B', Z)[C['지역명']] === 'E2E-창열린채', 6000));
     bd.getElementById('btnSqlClose').click(); blurAll('B');
 
+    // ── 7. 아이템 검색 선택 칸(파밍·키아이템): 검색→Enter/클릭, 초성, 여러 개, AND/OR, 새 아이템 등록, ID 그대로 ──
+    await wait(500);
+    E('B').open(topId, X);
+    const pd = W('B').document, KEv = W('B').KeyboardEvent, IEv = W('B').Event;
+    const pick = (col) => pd.querySelector('#nodePanel .field[data-col="' + col + '"]');
+    const typeQ = (inp, q) => { inp.focus(); inp.value = q; inp.dispatchEvent(new IEv('input', { bubbles: true })); };
+    const key = (inp, k) => inp.dispatchEvent(new KEv('keydown', { key: k, bubbles: true }));
+    const farmF = pick('파밍 아이템 ID'), farmIn = farmF.querySelector('.ipInput');
+    while (farmF.querySelector('.ipChip button')) farmF.querySelector('.ipChip button').click();   // 기존 값 비우기
+    const items = E('B').data().items.rows.filter(r => r[0] != null && String(r[1] || '').length >= 2);
+    const it1 = items[0], it2 = items.find(r => r !== it1 && String(r[1]) !== String(it1[1]));
+    typeQ(farmIn, String(it1[1]).slice(0, 2));
+    ok('7) 이름 검색 결과에 해당 아이템', [...farmF.querySelectorAll('.ipOpt')].some(o => o.textContent.indexOf(String(it1[1])) !== -1));
+    typeQ(farmIn, String(it1[0])); key(farmIn, 'Enter');
+    ok('7) ID 입력 + Enter로 추가', String(rowOf('B', X)[C['파밍 아이템 ID']]) === String(it1[0]), JSON.stringify(rowOf('B', X)[C['파밍 아이템 ID']]));
+    const CHO = 'ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ';
+    const cho = [...String(it2[1])].map(ch => { const c = ch.charCodeAt(0) - 0xAC00; return c >= 0 && c < 11172 ? CHO[Math.floor(c / 588)] : ''; }).join('').slice(0, 4);
+    typeQ(farmIn, cho);
+    const choOpt = [...farmF.querySelectorAll('.ipOpt')].find(o => o.textContent.indexOf(String(it2[1])) !== -1);
+    ok('7) 초성 검색(' + cho + ')으로 찾기', !!choOpt);
+    if (choOpt) choOpt.click();
+    ok('7) 클릭으로 두 번째 추가 → 쉼표 목록', String(rowOf('B', X)[C['파밍 아이템 ID']]) === it1[0] + ',' + it2[0], JSON.stringify(rowOf('B', X)[C['파밍 아이템 ID']]));
+    ok('7) 칩 2개 표시', farmF.querySelectorAll('.ipChip').length === 2);
+    typeQ(farmIn, '98765'); key(farmIn, 'Enter');
+    ok('7) 목록에 없는 숫자 ID 그대로 넣기(빨간 칩)', String(rowOf('B', X)[C['파밍 아이템 ID']]).endsWith(',98765') && !!farmF.querySelector('.ipChip.missing'));
+    key(farmIn, 'Backspace');
+    ok('7) 빈 칸에서 Backspace로 마지막 칩 빼기', String(rowOf('B', X)[C['파밍 아이템 ID']]) === it1[0] + ',' + it2[0]);
+    typeQ(farmIn, 'E2E신규아이템');
+    const createBtn = farmF.querySelector('.ipCreate button');
+    ok('7) 없는 이름이면 새 아이템 등록 줄', !!createBtn);
+    if (createBtn) createBtn.click();
+    const newIt = E('B').data().items.rows.find(r => r[1] === 'E2E신규아이템');
+    ok('7) 새 아이템이 아이템 표에 등록되고 바로 들어감', !!newIt && String(rowOf('B', X)[C['파밍 아이템 ID']]).split(',').indexOf(String(newIt[0])) !== -1);
+    // 키아이템: 2개 → AND/OR 선택, 필요 여부 안내
+    const keyF = pick('키아이템 ID'), keyIn = keyF.querySelector('.ipInput');
+    while (keyF.querySelector('.ipChip button')) keyF.querySelector('.ipChip button').click();
+    const ynSel = [...pd.querySelectorAll('#nodePanel .field')].find(f => ((f.querySelector('label') || {}).textContent || '').indexOf('키아이템 필요 여부') === 0).querySelector('select');
+    ynSel.value = 'N'; ynSel.dispatchEvent(new IEv('change', { bubbles: true }));
+    typeQ(keyIn, String(it1[0])); key(keyIn, 'Enter');
+    typeQ(keyIn, String(it2[0])); key(keyIn, 'Enter');
+    ok('7) 키 2개 → 기본 AND("a,b")', String(rowOf('B', X)[C['키아이템 ID']]) === it1[0] + ',' + it2[0]);
+    const orBtn = [...keyF.querySelectorAll('.ipMode button')].find(b => b.textContent.indexOf('OR') !== -1);
+    ok('7) 키 2개면 AND/OR 선택 표시', !!orBtn);
+    if (orBtn) orBtn.click();
+    ok('7) OR 선택 → "{a,b}"', String(rowOf('B', X)[C['키아이템 ID']]) === '{' + it1[0] + ',' + it2[0] + '}');
+    const warn = keyF.querySelector('.ipWarn');
+    ok('7) 필요 여부 N이면 경고', warn && warn.style.display !== 'none' && warn.textContent.indexOf('검사하지 않아요') !== -1);
+    const fixBtn = warn && warn.querySelector('button'); if (fixBtn) fixBtn.click();
+    ok('7) "필요 여부를 Y로" 한 번에 고침', String(rowOf('B', X)[C['키아이템 필요 여부']]) === 'Y' && ynSel.value === 'Y' && warn.style.display === 'none');
+    blurAll('B'); E('B').close();
+    ok('7) 상대(A)에도 전파(파밍·키)', await until(() => String(yRowOf('A', X)[C['키아이템 ID']]) === '{' + it1[0] + ',' + it2[0] + '}' && String(yRowOf('A', X)[C['파밍 아이템 ID']]).split(',').length === 3, 5000));
+
     ok('앱 오류 없음', !errors.A.length && !errors.B.length, JSON.stringify(errors));
   } catch (e) { log('ERROR: ' + (e && e.stack || e), 'f'); fail++; }
   log('\n=== ' + pass + ' passed, ' + fail + ' failed ===', fail ? 'f' : 'p');
